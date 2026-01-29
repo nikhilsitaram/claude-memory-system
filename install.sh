@@ -67,6 +67,12 @@ hooks_to_add = {
                 "type": "command",
                 "command": "bash ~/.claude/scripts/save-session.sh"
             }]
+        }],
+        "PreCompact": [{
+            "hooks": [{
+                "type": "command",
+                "command": "bash ~/.claude/scripts/save-session.sh"
+            }]
         }]
     }
 }

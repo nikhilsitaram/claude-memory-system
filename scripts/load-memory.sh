@@ -7,12 +7,21 @@ bash ~/.claude/scripts/recover-transcripts.sh >> ~/.claude/memory/recovery.log 2
 
 echo "<memory>"
 
-# Check for pending transcripts
+# Check for pending transcripts and auto-synthesize
 PENDING_COUNT=$(find "$MEMORY_DIR/transcripts" -name "*.jsonl" 2>/dev/null | wc -l)
 if [ "$PENDING_COUNT" -gt 0 ]; then
-    echo "## Pending Synthesis"
+    echo "## AUTO-SYNTHESIZE REQUIRED"
     echo "There are $PENDING_COUNT unprocessed session transcripts."
-    echo "Run /synthesize to process them into daily summaries."
+    echo "**IMPORTANT**: Before responding to the user, you MUST:"
+    echo "1. Read the transcript content below"
+    echo "2. Create/update daily summaries in ~/.claude/memory/daily/YYYY-MM-DD.md"
+    echo "3. Update ~/.claude/memory/LONG_TERM.md if there are significant patterns"
+    echo "4. Delete the processed transcript files"
+    echo ""
+    echo "### Transcript Content to Process"
+    echo '```'
+    python3 ~/.claude/skills/synthesize/extract_transcripts.py 2>/dev/null || echo "(extraction failed - check ~/.claude/skills/synthesize/extract_transcripts.py)"
+    echo '```'
     echo ""
 fi
 
@@ -40,4 +49,13 @@ for i in $(seq 0 6); do
     fi
 done
 
-echo "</memory>"
+## Proactive Memory Recall
+**IMPORTANT**: When the user asks questions that might benefit from historical context, PROACTIVELY use the `/recall` skill to search older memory WITHOUT being asked. Trigger recall when:
+- User asks about past decisions, discussions, or work ("what did we decide about X?")
+- User references something from more than a week ago
+- User asks "when did we...", "did we ever...", "have we talked about..."
+- A topic comes up that likely has relevant history (projects, patterns, bugs fixed)
+- User seems to expect you to remember something not in the loaded context
+
+Don't wait to be prompted - search first, then answer with full context.
+</memory>

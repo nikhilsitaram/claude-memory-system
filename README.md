@@ -4,7 +4,8 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 
 ## Features
 
-- **Auto-capture**: Full transcripts saved on every session end
+- **Auto-capture**: Full transcripts saved on session end and before compaction
+- **Proactive recall**: Claude automatically searches older memory when historical context would help
 - **Recovery**: Orphaned transcripts from ungraceful exits are recovered via cron job
 - **Auto-synthesize prompt**: Unprocessed transcripts trigger reminder at session start
 - **Manual notes**: `/remember` for specific highlights
@@ -54,9 +55,10 @@ sudo service cron start 2>/dev/null
 ### Session Lifecycle
 
 1. **Session Start**: Loads long-term memory and last 7 days of daily summaries
-2. **During Session**: Use `/remember` to capture important notes
-3. **Session End**: Transcript automatically saved to `~/.claude/memory/transcripts/`
-4. **Recovery**: Hourly cron job recovers any missed transcripts from ungraceful exits
+2. **During Session**: Use `/remember` to capture important notes; Claude proactively uses `/recall` when historical context would help
+3. **Before Compaction**: Transcript saved (both manual `/compact` and automatic compaction)
+4. **Session End**: Transcript automatically saved to `~/.claude/memory/transcripts/`
+5. **Recovery**: Hourly cron job recovers any missed transcripts from ungraceful exits
 
 ### Memory Structure
 
@@ -67,7 +69,7 @@ sudo service cron start 2>/dev/null
 │   └── YYYY-MM-DD.md         # Summarized daily entries
 ├── transcripts/
 │   └── YYYY-MM-DD/
-│       └── HH-MM-SS.jsonl    # Raw session transcripts
+│       └── {session_id}.jsonl  # Raw session transcripts (deduplicated by session ID)
 └── .captured                 # Tracks which sessions were already captured
 ```
 
