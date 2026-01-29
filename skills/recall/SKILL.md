@@ -1,0 +1,49 @@
+---
+name: recall
+description: Search through all historical daily memory files to find information from the past. Use when user asks about something from more than a week ago.
+user-invocable: true
+---
+
+# Recall Skill
+
+Search through all historical daily memory files.
+
+## Instructions
+
+1. Get the search query from the user
+2. List all files in `~/.claude/memory/daily/`
+3. Read through each file searching for relevant content
+4. Return matching excerpts with their dates
+5. Summarize findings if there are many matches
+
+## Example Usage
+
+- `/recall authentication` → Search all daily files for authentication mentions
+- `/recall what was I working on in December?` → Read December files, summarize work
+
+## Search Strategy
+
+1. For specific topics: search files for keywords
+2. For time-based queries: read files from the specified time period
+3. Always include date context when returning results
+
+## Implementation
+
+Use grep to find matches across all daily files:
+
+```bash
+# Search for a term across all daily files
+grep -r -l "search_term" ~/.claude/memory/daily/
+
+# Search with context
+grep -r -B2 -A2 "search_term" ~/.claude/memory/daily/
+```
+
+For time-based queries, list and read files from the relevant date range:
+
+```bash
+# List all daily files from December
+ls ~/.claude/memory/daily/2024-12-*.md
+```
+
+Always provide the date with each result so the user knows when something happened.
