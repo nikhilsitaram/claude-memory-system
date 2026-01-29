@@ -49,13 +49,4 @@ for i in $(seq 0 6); do
     fi
 done
 
-## Proactive Memory Recall
-**IMPORTANT**: When the user asks questions that might benefit from historical context, PROACTIVELY use the `/recall` skill to search older memory WITHOUT being asked. Trigger recall when:
-- User asks about past decisions, discussions, or work ("what did we decide about X?")
-- User references something from more than a week ago
-- User asks "when did we...", "did we ever...", "have we talked about..."
-- A topic comes up that likely has relevant history (projects, patterns, bugs fixed)
-- User seems to expect you to remember something not in the loaded context
-
-Don't wait to be prompted - search first, then answer with full context.
-</memory>
+echo "</memory>"
