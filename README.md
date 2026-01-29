@@ -22,6 +22,8 @@ cd claude-memory-system
 
 Start a new Claude Code session to activate the memory system.
 
+The installer automatically adds a `Read(~/.claude/**)` permission so Claude can access memory files without prompting.
+
 ## Requirements
 
 - Claude Code CLI installed and run at least once (`~/.claude` must exist)
@@ -49,6 +51,9 @@ sudo service cron start 2>/dev/null
 | `/remember [note]` | Save a note to today's daily log |
 | `/synthesize` | Process transcripts into daily summaries and update long-term memory |
 | `/recall [query]` | Search through all historical daily memory files |
+| `/reload` | Synthesize pending transcripts and reload memory (use after `/clear`) |
+
+**Note**: `/clear` does not trigger hooks ([GitHub #21578](https://github.com/anthropics/claude-code/issues/21578)), so use `/reload` afterward to restore memory context.
 
 ## How It Works
 
@@ -91,7 +96,7 @@ This removes the cron job and hooks but preserves your memory data. To fully rem
 
 ```bash
 rm -rf ~/.claude/memory
-rm -rf ~/.claude/skills/{remember,synthesize,recall}
+rm -rf ~/.claude/skills/{remember,synthesize,recall,reload}
 rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts}.sh
 ```
 
