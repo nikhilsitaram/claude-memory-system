@@ -52,18 +52,30 @@ Each line is a JSON object with conversation data.
 - [Any decisions or conclusions]
 ```
 
-## JSONL Parsing Notes
+## Extraction Script
 
-Each line in a transcript file is a JSON object. Use tools like `jq` or read line-by-line:
+Use the included extraction script to parse transcripts:
 
 ```bash
-# Count messages in a transcript
-wc -l < transcript.jsonl
+# Extract all days
+python3 ~/.claude/skills/synthesize/extract_transcripts.py
 
-# Extract all messages
-while IFS= read -r line; do
-    echo "$line" | jq -r '.content // empty'
-done < transcript.jsonl
+# Extract specific day
+python3 ~/.claude/skills/synthesize/extract_transcripts.py 2026-01-22
+
+# Save to file for review
+python3 ~/.claude/skills/synthesize/extract_transcripts.py --output /tmp/transcripts.txt
 ```
 
-The JSON structure typically contains conversation turns with role and content fields.
+The script handles:
+- JSONL format parsing (one JSON object per line)
+- Both user and assistant messages (for full context)
+- Top-level type field ("user" or "assistant", not "message")
+- Nested content arrays with text blocks
+
+## JSONL Structure
+
+Each line is a JSON object with:
+- `type`: "user" or "assistant"
+- `message.role`: "user" or "assistant"
+- `message.content`: string or array of `{type: "text", text: "..."}` objects
