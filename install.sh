@@ -20,7 +20,7 @@ fi
 # Create directory structure
 mkdir -p ~/.claude/memory/{daily,transcripts}
 mkdir -p ~/.claude/scripts
-mkdir -p ~/.claude/skills/{remember,synthesize,recall}
+mkdir -p ~/.claude/skills/{remember,synthesize,recall,reload}
 
 # Copy scripts
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -30,7 +30,9 @@ chmod +x ~/.claude/scripts/*.sh
 # Copy skills
 cp "$SCRIPT_DIR/skills/remember/SKILL.md" ~/.claude/skills/remember/
 cp "$SCRIPT_DIR/skills/synthesize/SKILL.md" ~/.claude/skills/synthesize/
+cp "$SCRIPT_DIR/skills/synthesize/extract_transcripts.py" ~/.claude/skills/synthesize/
 cp "$SCRIPT_DIR/skills/recall/SKILL.md" ~/.claude/skills/recall/
+cp "$SCRIPT_DIR/skills/reload/SKILL.md" ~/.claude/skills/reload/
 
 # Initialize LONG_TERM.md if it doesn't exist
 if [ ! -f ~/.claude/memory/LONG_TERM.md ]; then
@@ -132,6 +134,7 @@ echo "Available commands:"
 echo "  /remember   - Save notes to daily log"
 echo "  /synthesize - Process transcripts & update long-term memory"
 echo "  /recall     - Search historical memory"
+echo "  /reload     - Synthesize + load memory (use after /clear)"
 echo ""
 echo "Memory location: ~/.claude/memory/"
 echo ""
