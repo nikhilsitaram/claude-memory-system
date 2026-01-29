@@ -24,7 +24,7 @@ except (json.JSONDecodeError, IOError):
 
 if "hooks" in settings:
     # Remove memory system hooks
-    for event in ["SessionStart", "SessionEnd"]:
+    for event in ["SessionStart", "SessionEnd", "PreCompact"]:
         if event in settings["hooks"]:
             settings["hooks"][event] = [
                 h for h in settings["hooks"][event]
@@ -53,5 +53,5 @@ echo ""
 echo "Memory data preserved at ~/.claude/memory/"
 echo "To fully remove, run:"
 echo "  rm -rf ~/.claude/memory"
-echo "  rm -rf ~/.claude/skills/{remember,synthesize,recall}"
+echo "  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload}"
 echo "  rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts}.sh"
