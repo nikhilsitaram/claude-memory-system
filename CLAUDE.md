@@ -36,7 +36,11 @@ claude-memory-system/
 The install script also:
 - Creates `~/.claude/memory/{daily,transcripts}/` directories
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
-- Adds `Read(~/.claude/**)` permission to settings.json
+- Adds permissions to settings.json:
+  - `Read(~/.claude/**)` - Read memory files
+  - `Edit(~/.claude/memory/**)` - Edit daily summaries
+  - `Write(~/.claude/memory/**)` - Create new summaries
+  - `Bash(rm -rf ~/.claude/memory/transcripts/*)` - Delete processed transcripts
 - Sets up hourly cron job for transcript recovery
 
 ## Making Changes

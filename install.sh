@@ -102,15 +102,23 @@ for event, config in hooks_to_add["hooks"].items():
         # Append to existing hooks for this event
         settings["hooks"][event].extend(config)
 
-# Add Read permission for memory files
-permission = "Read(~/.claude/**)"
+# Add permissions for memory system operations
+permissions_to_add = [
+    "Read(~/.claude/**)",                           # Read memory files
+    "Edit(~/.claude/memory/**)",                    # Edit daily summaries and LONG_TERM.md
+    "Write(~/.claude/memory/**)",                   # Write new daily summaries
+    "Bash(rm -rf ~/.claude/memory/transcripts/*)",  # Delete processed transcripts
+]
+
 if "permissions" not in settings:
     settings["permissions"] = {}
 if "allow" not in settings["permissions"]:
     settings["permissions"]["allow"] = []
-if permission not in settings["permissions"]["allow"]:
-    settings["permissions"]["allow"].append(permission)
-    print(f"Added permission: {permission}")
+
+for permission in permissions_to_add:
+    if permission not in settings["permissions"]["allow"]:
+        settings["permissions"]["allow"].append(permission)
+        print(f"Added permission: {permission}")
 
 with open(settings_file, 'w') as f:
     json.dump(settings, f, indent=2)

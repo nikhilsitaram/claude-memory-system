@@ -42,10 +42,31 @@ if "hooks" in settings:
     if not settings["hooks"]:
         del settings["hooks"]
 
+# Remove memory system permissions
+permissions_to_remove = [
+    "Read(~/.claude/**)",
+    "Edit(~/.claude/memory/**)",
+    "Write(~/.claude/memory/**)",
+    "Bash(rm -rf ~/.claude/memory/transcripts/*)",
+]
+
+if "permissions" in settings and "allow" in settings["permissions"]:
+    settings["permissions"]["allow"] = [
+        p for p in settings["permissions"]["allow"]
+        if p not in permissions_to_remove
+    ]
+    # Remove empty allow array
+    if not settings["permissions"]["allow"]:
+        del settings["permissions"]["allow"]
+    # Remove empty permissions object
+    if not settings["permissions"]:
+        del settings["permissions"]
+    print("Removed memory system permissions")
+
 with open(settings_file, 'w') as f:
     json.dump(settings, f, indent=2)
 
-print(f"Removed hooks from {settings_file}")
+print(f"Updated {settings_file}")
 PYTHON
 fi
 

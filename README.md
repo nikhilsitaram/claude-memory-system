@@ -22,7 +22,12 @@ cd claude-memory-system
 
 Start a new Claude Code session to activate the memory system.
 
-The installer automatically adds a `Read(~/.claude/**)` permission so Claude can access memory files without prompting.
+The installer automatically adds these permissions so Claude can manage memory files without prompting:
+
+- `Read(~/.claude/**)` - Read memory files
+- `Edit(~/.claude/memory/**)` - Edit daily summaries and long-term memory
+- `Write(~/.claude/memory/**)` - Create new daily summaries
+- `Bash(rm -rf ~/.claude/memory/transcripts/*)` - Delete processed transcripts
 
 ## Requirements
 
