@@ -27,7 +27,7 @@ Save a note to today's daily memory log at `~/.claude/memory/daily/YYYY-MM-DD.md
 
 User: `/remember The API rate limit is 100 requests per minute`
 
-Result: Appends to `~/.claude/memory/daily/2025-01-29.md`:
+Result: Appends to `~/.claude/memory/daily/2026-01-29.md`:
 
 ```markdown
 ## 14:32 - User Note
