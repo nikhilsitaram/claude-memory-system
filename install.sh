@@ -69,23 +69,17 @@ settings_file = os.path.expanduser("~/.claude/settings.json")
 hooks_to_add = {
     "hooks": {
         "SessionStart": [
-            {"matcher": "startup", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
-            {"matcher": "resume", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
-            {"matcher": "clear", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
-            {"matcher": "compact", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
+            {"matcher": "startup", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/load-memory.sh", "timeout": 30}]},
+            {"matcher": "resume", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/load-memory.sh", "timeout": 30}]},
+            {"matcher": "clear", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/load-memory.sh", "timeout": 30}]},
+            {"matcher": "compact", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/load-memory.sh", "timeout": 30}]},
         ],
-        "SessionEnd": [{
-            "hooks": [{
-                "type": "command",
-                "command": "bash ~/.claude/scripts/save-session.sh"
-            }]
-        }],
-        "PreCompact": [{
-            "hooks": [
-                {"type": "command", "command": "bash ~/.claude/scripts/save-session.sh"},
-                {"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}
-            ]
-        }]
+        "SessionEnd": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/save-session.sh", "timeout": 30}]}
+        ],
+        "PreCompact": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": "bash $HOME/.claude/scripts/save-session.sh", "timeout": 30}]}
+        ]
     }
 }
 
