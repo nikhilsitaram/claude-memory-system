@@ -42,6 +42,7 @@ The install script also:
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
 - Adds permissions to settings.json (uses absolute paths for subagent compatibility):
   - `Read($HOME/.claude/**)` - Read memory files
+  - `Read($HOME/.claude/projects/**)` - Read project transcript paths (orphan recovery)
   - `Edit($HOME/.claude/memory/**)` - Edit files recursively
   - `Edit($HOME/.claude/memory/*)` - Edit files directly in memory/
   - `Edit($HOME/.claude/memory/daily/*)` - Edit daily summaries explicitly
@@ -51,6 +52,13 @@ The install script also:
   - `Write($HOME/.claude/memory/daily/*)` - Write daily summaries explicitly
   - `Write($HOME/.claude/memory/project-memory/*)` - Write project memory files
   - `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
+  - `Bash(ls $HOME/.claude/*)` - List .claude directory contents
+  - `Bash(ls -* $HOME/.claude/*)` - List with any flags
+  - `Bash(find $HOME/.claude/ *)` - Find files in .claude
+  - `Bash(grep * $HOME/.claude/memory/*)` - Search in memory files
+  - `Bash(ls $HOME/claude-memory-system/*)` - List repo directory (development)
+  - `Bash(ls -* $HOME/claude-memory-system/*)` - List repo with flags
+  - `Bash(find $HOME/claude-memory-system/ *)` - Find files in repo
 - Builds initial project index (`~/.claude/memory/projects-index.json`)
 - Auto-migrates `LONG_TERM.md` → `global-long-term-memory.md` if needed
 - Removes old bash hooks and cron job (if migrating from bash version)

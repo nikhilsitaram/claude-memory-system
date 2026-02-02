@@ -111,8 +111,10 @@ def remove_permissions(settings: dict) -> dict:
     permission_patterns = [
         "/.claude/**",
         "/.claude/memory",
+        "/.claude/projects",
         "~/.claude/memory",
         "rm -rf",
+        "claude-memory-system",  # Repo directory permissions
     ]
 
     original_count = len(settings["permissions"]["allow"])

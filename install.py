@@ -361,6 +361,7 @@ def merge_permissions(settings: dict) -> dict:
 
     # Use absolute paths for subagent compatibility
     permissions_to_add = [
+        # Read/Edit/Write for memory files
         f"Read({home}/.claude/**)",
         f"Edit({home}/.claude/memory/**)",
         f"Edit({home}/.claude/memory/*)",
@@ -370,8 +371,21 @@ def merge_permissions(settings: dict) -> dict:
         f"Write({home}/.claude/memory/*)",
         f"Write({home}/.claude/memory/daily/*)",
         f"Write({home}/.claude/memory/project-memory/*)",
+        # Transcript deletion
         f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",
         "Bash(rm -rf ~/.claude/memory/transcripts/*)",  # Tilde fallback
+        # Read-only Bash exploration - .claude directory
+        # Note: "Bash(cmd *)" uses space before * (modern format)
+        f"Bash(ls {home}/.claude/*)",
+        f"Bash(ls -* {home}/.claude/*)",  # ls with any flags
+        f"Bash(find {home}/.claude/ *)",  # find with any args
+        f"Bash(grep * {home}/.claude/memory/*)",  # grep in memory only
+        # Read-only Bash exploration - repo directory (for development)
+        f"Bash(ls {home}/claude-memory-system/*)",
+        f"Bash(ls -* {home}/claude-memory-system/*)",
+        f"Bash(find {home}/claude-memory-system/ *)",
+        # Projects directory access (orphan recovery reads transcript paths)
+        f"Read({home}/.claude/projects/**)",
     ]
 
     if "permissions" not in settings:
