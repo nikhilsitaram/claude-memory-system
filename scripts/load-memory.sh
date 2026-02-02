@@ -22,20 +22,19 @@ fi
 
 echo "<memory>"
 
-# Check for pending transcripts and auto-synthesize
+# Check for pending transcripts - signal only, don't inline content
 PENDING_COUNT=$(find "$MEMORY_DIR/transcripts" -name "*.jsonl" 2>/dev/null | wc -l)
 if [ "$PENDING_COUNT" -gt 0 ]; then
     echo "## AUTO-SYNTHESIZE REQUIRED"
     echo "There are $PENDING_COUNT unprocessed session transcripts."
-    echo "**IMPORTANT**: Before responding to the user, you MUST:"
-    echo "1. Read the transcript content below"
-    echo "2. Create/update daily summaries in ~/.claude/memory/daily/YYYY-MM-DD.md"
-    echo "3. Update ~/.claude/memory/LONG_TERM.md if there are significant patterns"
-    echo "4. Delete the processed transcript files"
     echo ""
-    echo "### Transcript Content to Process"
+    echo "**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts:"
     echo '```'
-    python3 ~/.claude/skills/synthesize/extract_transcripts.py 2>/dev/null || echo "(extraction failed - check ~/.claude/skills/synthesize/extract_transcripts.py)"
+    echo 'Use the Task tool with subagent_type="general-purpose" and this prompt:'
+    echo '"Process pending memory transcripts using the /synthesize skill instructions.'
+    echo 'Read ~/.claude/skills/synthesize/SKILL.md for the full process.'
+    echo 'Extract transcripts, create daily summaries, update LONG_TERM.md if needed,'
+    echo 'and delete processed transcript files. Return a brief summary of what was processed."'
     echo '```'
     echo ""
 fi

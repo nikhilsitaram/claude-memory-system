@@ -6,7 +6,18 @@ user-invocable: true
 
 # Synthesize Skill
 
-Process memory in three phases:
+Process memory transcripts into compact daily summaries. This skill is designed to run autonomously as a subagent.
+
+## Quick Start (for subagent execution)
+
+1. Run extraction: `python3 ~/.claude/skills/synthesize/extract_transcripts.py`
+2. For each day in output, create/update `~/.claude/memory/daily/YYYY-MM-DD.md`
+3. Delete processed transcripts: `rm ~/.claude/memory/transcripts/*.jsonl`
+4. Return summary: "Processed N transcripts into daily summaries for [dates]"
+
+---
+
+## Detailed Process (three phases):
 
 ## Phase 0: Update Project Index
 

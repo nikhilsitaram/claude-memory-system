@@ -10,22 +10,29 @@ Synthesize transcripts then load memory into the current conversation. Use after
 
 ## Instructions
 
-### Step 1: Synthesize Pending Transcripts
+### Step 1: Check for Pending Transcripts
 
-1. Check for unprocessed transcripts in `~/.claude/memory/transcripts/`
-2. For each day with transcripts:
-   - Use the extraction script to parse JSONL files
-   - Create/update daily summary in `~/.claude/memory/daily/YYYY-MM-DD.md`
-   - Delete processed transcript files
-3. Update `~/.claude/memory/LONG_TERM.md` if patterns emerge
-
-**Extraction script**:
 ```bash
-python3 ~/.claude/skills/synthesize/extract_transcripts.py
+ls ~/.claude/memory/transcripts/*.jsonl 2>/dev/null | wc -l
 ```
 
-### Step 2: Load Memory
+### Step 2: Synthesize (if transcripts exist)
 
+**Spawn a subagent** to process transcripts without bloating main context:
+
+```
+Use the Task tool with subagent_type="general-purpose" and prompt:
+"Process pending memory transcripts using the /synthesize skill instructions.
+Read ~/.claude/skills/synthesize/SKILL.md for the full process.
+Extract transcripts, create daily summaries, update LONG_TERM.md if needed,
+and delete processed transcript files. Return a brief summary of what was processed."
+```
+
+Wait for subagent to complete before proceeding.
+
+### Step 3: Load Memory
+
+After synthesis completes:
 1. Read and output `~/.claude/memory/LONG_TERM.md`
 2. Read and output last 7 days from `~/.claude/memory/daily/`
 
@@ -33,14 +40,14 @@ python3 ~/.claude/skills/synthesize/extract_transcripts.py
 
 ```
 ## Synthesis Results
-Processed X transcript(s) from [dates]
+[Subagent summary: "Processed X transcript(s) from [dates]"]
 
 ## Long-Term Memory
 [contents of LONG_TERM.md]
 
 ## Recent Daily Summaries
 
-### 2026-01-29
+### 2026-02-02
 [contents]
 ...
 ```
@@ -52,8 +59,11 @@ Processed X transcript(s) from [dates]
 
 **Not needed for**: Compaction (PreCompact hook handles it), session start (SessionStart hook handles it)
 
+## Why Subagent?
+
+Raw transcripts can be 30k+ tokens. Processing them in the main conversation would bloat context permanently. The subagent processes transcripts in isolation and returns only a brief summary, keeping the main conversation lean.
+
 ## Notes
 
-- If no transcripts to process, skips straight to loading
-- Combines `/synthesize` + load in one step
+- If no transcripts to process, skip straight to loading
 - Safe to run multiple times (idempotent)
