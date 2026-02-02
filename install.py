@@ -360,9 +360,11 @@ def merge_permissions(settings: dict) -> dict:
     home = str(Path.home())
 
     # Use absolute paths for subagent compatibility
+    # Include tilde variant for Read (subagent bootstrap - reading SKILL.md)
     permissions_to_add = [
-        # Read/Edit/Write for memory files
+        # Read for memory/skill files (absolute + tilde for subagent bootstrap)
         f"Read({home}/.claude/**)",
+        "Read(~/.claude/**)",
         f"Edit({home}/.claude/memory/**)",
         f"Edit({home}/.claude/memory/*)",
         f"Edit({home}/.claude/memory/daily/*)",
@@ -371,25 +373,6 @@ def merge_permissions(settings: dict) -> dict:
         f"Write({home}/.claude/memory/*)",
         f"Write({home}/.claude/memory/daily/*)",
         f"Write({home}/.claude/memory/project-memory/*)",
-        # Transcript deletion (** for recursive, absolute/$HOME/~ variants)
-        f"Bash(rm -rf {home}/.claude/memory/transcripts/**)",
-        f"Bash(rm {home}/.claude/memory/transcripts/**)",
-        "Bash(rm -rf $HOME/.claude/memory/transcripts/**)",
-        "Bash(rm $HOME/.claude/memory/transcripts/**)",
-        "Bash(rm -rf ~/.claude/memory/transcripts/**)",
-        "Bash(rm ~/.claude/memory/transcripts/**)",
-        # Read-only Bash exploration - .claude directory
-        # Use ** for deep path matching, include $HOME variant for subagents
-        f"Bash(ls {home}/.claude/**)",
-        f"Bash(ls -* {home}/.claude/**)",
-        "Bash(ls $HOME/.claude/**)",
-        "Bash(ls -* $HOME/.claude/**)",
-        f"Bash(find {home}/.claude/ *)",
-        f"Bash(grep * {home}/.claude/memory/*)",
-        # Read-only Bash exploration - repo directory (for development)
-        f"Bash(ls {home}/claude-memory-system/*)",
-        f"Bash(ls -* {home}/claude-memory-system/*)",
-        f"Bash(find {home}/claude-memory-system/ *)",
         # Projects directory access (orphan recovery reads transcript paths)
         f"Read({home}/.claude/projects/**)",
     ]

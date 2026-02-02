@@ -5,6 +5,7 @@ Indexing utilities for Claude Code Memory System.
 Provides:
 1. Transcript extraction (JSONL parsing for synthesis)
 2. Project index building (maps projects to their work days)
+3. Transcript deletion (cross-platform, no bash required)
 
 This module is called by the /synthesize skill to process transcripts
 and maintain the project index.
@@ -19,11 +20,16 @@ Usage:
     # Build/rebuild project index
     python indexing.py build-index
 
+    # Delete processed transcripts (cross-platform)
+    python indexing.py delete 2026-02-02
+    python indexing.py delete 2026-02-01 2026-02-02
+
 Requirements: Python 3.9+
 """
 
 import argparse
 import json
+import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -190,6 +196,39 @@ def list_pending_days() -> list[str]:
             days.append(day_dir.name)
 
     return days
+
+
+def delete_transcripts(day: str) -> tuple[bool, str]:
+    """
+    Delete transcript directory for a specific day.
+
+    Cross-platform implementation using shutil.rmtree().
+
+    Args:
+        day: Date string in YYYY-MM-DD format
+
+    Returns:
+        Tuple of (success, message)
+    """
+    transcripts_dir = get_transcripts_dir()
+    day_dir = transcripts_dir / day
+
+    if not day_dir.exists():
+        return False, f"Transcript directory not found: {day_dir}"
+
+    if not day_dir.is_dir():
+        return False, f"Not a directory: {day_dir}"
+
+    # Count files before deletion for reporting
+    file_count = len(list(day_dir.glob("*.jsonl")))
+    total_size = sum(f.stat().st_size for f in day_dir.glob("*") if f.is_file())
+
+    try:
+        shutil.rmtree(day_dir)
+        size_kb = total_size / 1024
+        return True, f"Deleted {day}: {file_count} files ({size_kb:.1f} KB)"
+    except OSError as e:
+        return False, f"Failed to delete {day_dir}: {e}"
 
 
 # =============================================================================
@@ -370,6 +409,22 @@ def cmd_list_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_delete(args: argparse.Namespace) -> int:
+    """Handle delete command."""
+    if not args.days:
+        print("Error: At least one day (YYYY-MM-DD) is required.", file=sys.stderr)
+        return 1
+
+    all_success = True
+    for day in args.days:
+        success, message = delete_transcripts(day)
+        print(message)
+        if not success:
+            all_success = False
+
+    return 0 if all_success else 1
+
+
 def main() -> int:
     """Main entry point."""
     check_python_version()
@@ -399,6 +454,15 @@ def main() -> int:
         "list-pending", help="List days with pending transcripts"
     )
     list_parser.set_defaults(func=cmd_list_pending)
+
+    # Delete command
+    delete_parser = subparsers.add_parser(
+        "delete", help="Delete processed transcript directories (cross-platform)"
+    )
+    delete_parser.add_argument(
+        "days", nargs="+", help="Days to delete (YYYY-MM-DD format)"
+    )
+    delete_parser.set_defaults(func=cmd_delete)
 
     args = parser.parse_args()
 

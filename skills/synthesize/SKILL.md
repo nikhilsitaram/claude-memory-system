@@ -8,12 +8,37 @@ user-invocable: true
 
 Process memory transcripts into compact daily summaries and route learnings to appropriate long-term memory files. This skill is designed to run autonomously as a subagent.
 
+## Tool & Command Guidelines (IMPORTANT)
+
+**Use the Read tool for ALL file reading** - no bash needed, no permissions required:
+- Daily summaries: `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
+- Long-term memory: `Read(~/.claude/memory/global-long-term-memory.md)`
+- Project index: `Read(~/.claude/memory/projects-index.json)`
+
+**Use Glob tool for listing files** - no bash needed:
+- Daily files: `Glob(pattern="*.md", path="~/.claude/memory/daily")`
+- Transcript dirs: `Glob(pattern="*", path="~/.claude/memory/transcripts")`
+
+**Use indexing.py for all transcript operations** (cross-platform, no bash rm needed):
+```bash
+python3 $HOME/.claude/scripts/indexing.py list-pending
+python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD
+python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD
+python3 $HOME/.claude/scripts/indexing.py build-index
+```
+
+**Do NOT use:**
+- `rm` commands - use `indexing.py delete` instead
+- Tilde (`~`) in bash - use `$HOME` instead
+- Pipes (`cmd | cmd`) or operators (`||`, `&&`)
+- Redirects (`2>/dev/null`)
+
 ## Quick Start (for subagent execution)
 
-1. Run extraction: `python3 ~/.claude/scripts/indexing.py extract`
-2. For each day in output, create/update `~/.claude/memory/daily/YYYY-MM-DD.md` (include `## Learnings` section)
+1. Run extraction: `python3 $HOME/.claude/scripts/indexing.py extract`
+2. Use Read/Edit tools to create/update `~/.claude/memory/daily/YYYY-MM-DD.md` (include `## Learnings` section)
 3. Route learnings to long-term memory (see Phase 2)
-4. Delete processed transcripts: `rm -rf $HOME/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved permission - must use $HOME, not ~)
+4. Delete processed transcripts: `python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD`
 5. Return summary: "Processed N transcripts into daily summaries for [dates]. Routed X learnings to global memory, Y learnings to project memory."
 
 ---
@@ -25,7 +50,7 @@ Process memory transcripts into compact daily summaries and route learnings to a
 Before processing transcripts, rebuild the project-to-work-days index:
 
 ```bash
-python3 ~/.claude/scripts/indexing.py build-index
+python3 $HOME/.claude/scripts/indexing.py build-index
 ```
 
 This enables project-aware memory loading by scanning `sessions-index.json` files
@@ -36,15 +61,15 @@ and mapping projects to their work days.
 **Important**: Transcript files are JSONL format (one JSON object per line).
 Each line is a JSON object with conversation data.
 
-1. List pending days: `python3 ~/.claude/scripts/indexing.py list-pending`
+1. List pending days: `python3 $HOME/.claude/scripts/indexing.py list-pending`
 2. For each day with transcript files (.jsonl):
-   - Extract transcripts: `python3 ~/.claude/scripts/indexing.py extract YYYY-MM-DD`
-   - Create a summary in `~/.claude/memory/daily/YYYY-MM-DD.md`
+   - Extract transcripts: `python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD`
+   - Use Edit tool to create summary in `~/.claude/memory/daily/YYYY-MM-DD.md`
    - Include: topics discussed, decisions made, problems solved, key learnings
    - Preserve any existing user notes (## HH:MM - User Note sections)
    - **Add project tags** (see below)
    - **Extract learnings** (see Learning Extraction below)
-3. After summarizing each day, delete using: `rm -rf $HOME/.claude/memory/transcripts/YYYY-MM-DD/` (must use $HOME, not ~ - this exact format is pre-approved)
+3. After summarizing each day, delete: `python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD`
 
 ### Project Tags
 
@@ -214,23 +239,23 @@ In addition to routing tagged learnings, continue updating global-long-term-memo
 
 ## Extraction Commands
 
-Use the indexing script to parse transcripts:
+Use the indexing script to parse transcripts (use `$HOME`, not `~`):
 
 ```bash
 # List days with pending transcripts
-python3 ~/.claude/scripts/indexing.py list-pending
+python3 $HOME/.claude/scripts/indexing.py list-pending
 
 # Extract all pending days
-python3 ~/.claude/scripts/indexing.py extract
+python3 $HOME/.claude/scripts/indexing.py extract
 
 # Extract specific day
-python3 ~/.claude/scripts/indexing.py extract 2026-01-22
+python3 $HOME/.claude/scripts/indexing.py extract 2026-01-22
 
 # Save to file for review
-python3 ~/.claude/scripts/indexing.py extract --output /tmp/transcripts.txt
+python3 $HOME/.claude/scripts/indexing.py extract --output /tmp/transcripts.txt
 
 # Output as JSON (for programmatic use)
-python3 ~/.claude/scripts/indexing.py extract --json
+python3 $HOME/.claude/scripts/indexing.py extract --json
 ```
 
 The script handles:
@@ -252,13 +277,13 @@ To load project history for any project (regardless of current directory):
 
 ```bash
 # List all known projects
-python3 ~/.claude/scripts/load-project-memory.py --list
+python3 $HOME/.claude/scripts/load-project-memory.py --list
 
 # Load memory for a specific project
-python3 ~/.claude/scripts/load-project-memory.py ~/personal/cartwheel
+python3 $HOME/.claude/scripts/load-project-memory.py $HOME/personal/cartwheel
 
 # Load more/fewer work days (default is from settings)
-python3 ~/.claude/scripts/load-project-memory.py ~/projects/granada --days 7
+python3 $HOME/.claude/scripts/load-project-memory.py $HOME/projects/granada --days 7
 ```
 
 ## Directory Structure

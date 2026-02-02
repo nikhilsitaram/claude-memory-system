@@ -40,28 +40,15 @@ claude-memory-system/
 The install script also:
 - Creates `~/.claude/memory/{daily,transcripts,project-memory}/` directories
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
-- Adds permissions to settings.json (uses absolute paths for subagent compatibility):
-  - `Read($HOME/.claude/**)` - Read memory files
-  - `Read($HOME/.claude/projects/**)` - Read project transcript paths (orphan recovery)
-  - `Edit($HOME/.claude/memory/**)` - Edit files recursively
-  - `Edit($HOME/.claude/memory/*)` - Edit files directly in memory/
-  - `Edit($HOME/.claude/memory/daily/*)` - Edit daily summaries explicitly
-  - `Edit($HOME/.claude/memory/project-memory/*)` - Edit project memory files
-  - `Write($HOME/.claude/memory/**)` - Write files recursively
-  - `Write($HOME/.claude/memory/*)` - Write files directly in memory/
-  - `Write($HOME/.claude/memory/daily/*)` - Write daily summaries explicitly
-  - `Write($HOME/.claude/memory/project-memory/*)` - Write project memory files
-  - `Bash(rm -rf $HOME/.claude/memory/transcripts/**)` - Delete transcripts ($HOME)
-  - `Bash(rm $HOME/.claude/memory/transcripts/**)` - Delete transcripts ($HOME, no -rf)
-  - `Bash(rm -rf ~/.claude/memory/transcripts/**)` - Delete transcripts (tilde)
-  - `Bash(rm ~/.claude/memory/transcripts/**)` - Delete transcripts (tilde, no -rf)
-  - `Bash(ls $HOME/.claude/**)` - List .claude recursively ($HOME)
-  - `Bash(ls -* $HOME/.claude/**)` - List with flags ($HOME)
-  - `Bash(find $HOME/.claude/ *)` - Find files in .claude
-  - `Bash(grep * $HOME/.claude/memory/*)` - Search in memory files
-  - `Bash(ls $HOME/claude-memory-system/*)` - List repo directory (development)
-  - `Bash(ls -* $HOME/claude-memory-system/*)` - List repo with flags
-  - `Bash(find $HOME/claude-memory-system/ *)` - Find files in repo
+- Adds permissions to settings.json:
+  - `Read({home}/.claude/**)` - Read memory/skill files (absolute path)
+  - `Read(~/.claude/**)` - Read memory/skill files (tilde for subagent bootstrap)
+  - `Edit({home}/.claude/memory/**)` - Edit memory files (with variants for subdirs)
+  - `Write({home}/.claude/memory/**)` - Write memory files (with variants for subdirs)
+  - `Read({home}/.claude/projects/**)` - Read project transcript paths (orphan recovery)
+
+  **Note**: Subagents use Read/Glob/Grep tools for file access, and `indexing.py delete`
+  for transcript deletion. No bash permissions needed - fully cross-platform.
 - Builds initial project index (`~/.claude/memory/projects-index.json`)
 - Auto-migrates `LONG_TERM.md` → `global-long-term-memory.md` if needed
 - Removes old bash hooks and cron job (if migrating from bash version)
