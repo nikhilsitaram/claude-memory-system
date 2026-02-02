@@ -27,11 +27,13 @@ python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD
 python3 $HOME/.claude/scripts/indexing.py build-index
 ```
 
-**Do NOT use:**
+**Bash restrictions (do NOT use):**
 - `rm` commands - use `indexing.py delete` instead
-- Tilde (`~`) in bash - use `$HOME` instead
+- Tilde (`~`) in bash commands - use `$HOME` instead
 - Pipes (`cmd | cmd`) or operators (`||`, `&&`)
 - Redirects (`2>/dev/null`)
+
+**Edit/Read/Write tools:** Use `~/.claude/memory/...` paths (NOT `$HOME`)
 
 ## Quick Start (for subagent execution)
 
