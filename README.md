@@ -5,6 +5,8 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 ## Features
 
 - **Auto-capture**: Full transcripts saved on session end and before compaction
+- **Two-tier memory**: Global patterns (always loaded) + project-specific learnings (loaded when in project)
+- **Self-improvement loop**: Errors, best practices, and decisions are automatically extracted and routed to long-term memory
 - **Project-aware loading**: Automatically loads project-specific history (configurable days) when working in a known project directory
 - **Configurable settings**: Token budgets, working days, and subdirectory matching via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
@@ -27,8 +29,8 @@ Start a new Claude Code session to activate the memory system.
 The installer automatically adds these permissions so Claude can manage memory files without prompting:
 
 - `Read($HOME/.claude/**)` - Read memory files
-- `Edit($HOME/.claude/memory/**)`, `Edit($HOME/.claude/memory/*)`, `Edit($HOME/.claude/memory/daily/*)` - Edit memory files
-- `Write($HOME/.claude/memory/**)`, `Write($HOME/.claude/memory/*)`, `Write($HOME/.claude/memory/daily/*)` - Write memory files
+- `Edit($HOME/.claude/memory/**)`, `Edit($HOME/.claude/memory/*)`, `Edit($HOME/.claude/memory/daily/*)`, `Edit($HOME/.claude/memory/project-memory/*)` - Edit memory files
+- `Write($HOME/.claude/memory/**)`, `Write($HOME/.claude/memory/*)`, `Write($HOME/.claude/memory/daily/*)`, `Write($HOME/.claude/memory/project-memory/*)` - Write memory files
 - `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
 
 **Why so many patterns?** Permissions use absolute paths (not `~`) and include both recursive (`**`) and direct (`*`) patterns for subagent compatibility. Subagents spawned via the Task tool have stricter permission matching.
@@ -100,16 +102,20 @@ python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load speci
 
 ```
 ~/.claude/memory/
-├── LONG_TERM.md              # Synthesized knowledge about you
-├── settings.json             # Memory system configuration
-├── projects-index.json       # Project-to-work-days mapping
+├── global-long-term-memory.md  # Global patterns, user profile (always loaded)
+├── settings.json               # Memory system configuration
+├── projects-index.json         # Project-to-work-days mapping
 ├── daily/
-│   └── YYYY-MM-DD.md         # Summarized daily entries
+│   └── YYYY-MM-DD.md           # Summarized daily entries with learnings
+├── project-memory/
+│   └── {project}-long-term-memory.md  # Project-specific learnings (loaded when in project)
 ├── transcripts/
 │   └── YYYY-MM-DD/
 │       └── {session_id}.jsonl  # Raw session transcripts (deduplicated by session ID)
-└── .captured                 # Tracks which sessions were already captured
+└── .captured                   # Tracks which sessions were already captured
 ```
+
+**Two-tier memory**: Global memory contains user profile, patterns, and project-agnostic learnings. Project memory contains project-specific errors, data quirks, and decisions. Both are updated during `/synthesize`.
 
 ### Settings
 
@@ -147,8 +153,12 @@ Token limits are soft warnings, not hard caps. Use `/settings usage` to check cu
 Run `/synthesize` periodically (weekly recommended) to:
 
 1. **Phase 0**: Update project index (maps projects to work days)
-2. **Phase 1**: Convert raw transcripts into daily summaries (with project tags)
-3. **Phase 2**: Update long-term memory with patterns and insights
+2. **Phase 1**: Convert raw transcripts into daily summaries with tagged learnings (`[scope/type]`)
+3. **Phase 2**: Route learnings to appropriate long-term memory:
+   - `[global/*]` → `global-long-term-memory.md`
+   - `[{project}/*]` → `project-memory/{project}-long-term-memory.md`
+
+**Learning types**: `error`, `best-practice`, `data-quirk`, `decision`, `command`
 
 **Auto-synthesis**: At session start, if unprocessed transcripts exist, Claude spawns a background subagent to process them. This keeps the main conversation context lean while handling potentially large transcript files.
 

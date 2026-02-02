@@ -18,7 +18,7 @@ if [ ! -d ~/.claude ]; then
 fi
 
 # Create directory structure
-mkdir -p ~/.claude/memory/{daily,transcripts}
+mkdir -p ~/.claude/memory/{daily,transcripts,project-memory}
 mkdir -p ~/.claude/scripts
 mkdir -p ~/.claude/skills/{remember,synthesize,recall,reload,settings}
 
@@ -38,9 +38,15 @@ cp "$SCRIPT_DIR/skills/recall/SKILL.md" ~/.claude/skills/recall/
 cp "$SCRIPT_DIR/skills/reload/SKILL.md" ~/.claude/skills/reload/
 cp "$SCRIPT_DIR/skills/settings/SKILL.md" ~/.claude/skills/settings/
 
-# Initialize LONG_TERM.md if it doesn't exist
-if [ ! -f ~/.claude/memory/LONG_TERM.md ]; then
-    cp "$SCRIPT_DIR/templates/LONG_TERM.md" ~/.claude/memory/
+# Migrate LONG_TERM.md → global-long-term-memory.md if needed
+if [ -f ~/.claude/memory/LONG_TERM.md ] && [ ! -f ~/.claude/memory/global-long-term-memory.md ]; then
+    echo "Migrating LONG_TERM.md → global-long-term-memory.md..."
+    mv ~/.claude/memory/LONG_TERM.md ~/.claude/memory/global-long-term-memory.md
+fi
+
+# Initialize global-long-term-memory.md if neither exists
+if [ ! -f ~/.claude/memory/global-long-term-memory.md ] && [ ! -f ~/.claude/memory/LONG_TERM.md ]; then
+    cp "$SCRIPT_DIR/templates/global-long-term-memory.md" ~/.claude/memory/
 fi
 
 # Initialize settings.json if it doesn't exist
@@ -123,9 +129,11 @@ permissions_to_add = [
     f"Edit({home}/.claude/memory/**)",                    # Edit files recursively
     f"Edit({home}/.claude/memory/*)",                     # Edit files directly in memory/
     f"Edit({home}/.claude/memory/daily/*)",               # Edit daily summaries explicitly
+    f"Edit({home}/.claude/memory/project-memory/*)",      # Edit project memory files
     f"Write({home}/.claude/memory/**)",                   # Write files recursively
     f"Write({home}/.claude/memory/*)",                    # Write files directly in memory/
     f"Write({home}/.claude/memory/daily/*)",              # Write daily summaries explicitly
+    f"Write({home}/.claude/memory/project-memory/*)",     # Write project memory files
     f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",  # Delete processed transcripts (absolute path)
     "Bash(rm -rf ~/.claude/memory/transcripts/*)",         # Delete processed transcripts (tilde fallback)
 ]
@@ -180,6 +188,9 @@ echo "  /reload     - Synthesize + load memory (use after /clear)"
 echo "  /settings   - View/modify memory settings & token usage"
 echo ""
 echo "Memory location: ~/.claude/memory/"
+echo "  - global-long-term-memory.md  (loaded every session)"
+echo "  - project-memory/             (loaded when in matching project)"
+echo "  - daily/                      (recent session summaries)"
 echo "Settings file:   ~/.claude/memory/settings.json"
 echo ""
 echo "Start a new Claude Code session to activate the memory system."

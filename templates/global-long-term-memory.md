@@ -15,5 +15,11 @@
 ## Key Learnings
 <!-- Important discoveries, solutions, insights worth preserving -->
 
+## Error Patterns to Avoid
+<!-- Global mistakes and how to prevent them -->
+
+## Best Practices
+<!-- Patterns that work well across projects -->
+
 ---
 *Last synthesized: never*

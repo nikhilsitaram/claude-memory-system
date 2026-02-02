@@ -3,6 +3,7 @@
 MEMORY_DIR="$HOME/.claude/memory"
 PROJECTS_INDEX="$MEMORY_DIR/projects-index.json"
 SETTINGS_FILE="$MEMORY_DIR/settings.json"
+PROJECT_MEMORY_DIR="$MEMORY_DIR/project-memory"
 
 # First, recover any orphaned transcripts (runs silently in background)
 bash ~/.claude/scripts/recover-transcripts.sh >> ~/.claude/memory/recovery.log 2>&1 &
@@ -33,17 +34,83 @@ if [ "$PENDING_COUNT" -gt 0 ]; then
     echo 'Use the Task tool with subagent_type="general-purpose" and this prompt:'
     echo '"Process pending memory transcripts using the /synthesize skill instructions.'
     echo 'Read ~/.claude/skills/synthesize/SKILL.md for the full process.'
-    echo 'Extract transcripts, create daily summaries, update LONG_TERM.md if needed,'
+    echo 'Extract transcripts, create daily summaries, update long-term memory files,'
     echo 'and delete processed transcript files. Return a brief summary of what was processed."'
     echo '```'
     echo ""
 fi
 
-# Long-term memory
-if [ -f "$MEMORY_DIR/LONG_TERM.md" ]; then
+# Global long-term memory (check both old and new locations)
+GLOBAL_MEMORY=""
+if [ -f "$MEMORY_DIR/global-long-term-memory.md" ]; then
+    GLOBAL_MEMORY="$MEMORY_DIR/global-long-term-memory.md"
+elif [ -f "$MEMORY_DIR/LONG_TERM.md" ]; then
+    GLOBAL_MEMORY="$MEMORY_DIR/LONG_TERM.md"
+fi
+
+if [ -n "$GLOBAL_MEMORY" ]; then
     echo "## Long-Term Memory"
-    cat "$MEMORY_DIR/LONG_TERM.md"
+    cat "$GLOBAL_MEMORY"
     echo ""
+fi
+
+# ===== Project-specific long-term memory =====
+# Detect current project and load its long-term memory
+PROJECT_NAME=""
+if [ -f "$PROJECTS_INDEX" ]; then
+    PROJECT_NAME=$(python3 - "$PWD" "$PROJECTS_INDEX" "$INCLUDE_SUBDIRS" <<'PYEOF'
+import sys
+import json
+
+def main():
+    if len(sys.argv) < 3:
+        return
+
+    pwd = sys.argv[1]
+    index_path = sys.argv[2]
+    include_subdirs = sys.argv[3].lower() == "true" if len(sys.argv) > 3 else False
+
+    try:
+        with open(index_path) as f:
+            index = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return
+
+    projects = index.get("projects", {})
+    pwd_lower = pwd.lower()
+
+    # Project matching logic
+    if include_subdirs:
+        # Match if PWD starts with any known project path (longest match wins)
+        matching_project = None
+        for path_key, proj in projects.items():
+            if pwd_lower.startswith(path_key) or pwd_lower == path_key:
+                if matching_project is None or len(path_key) > len(matching_project[0]):
+                    matching_project = (path_key, proj)
+        if matching_project:
+            print(matching_project[1].get("name", ""))
+    else:
+        # Exact match only (default behavior)
+        if pwd_lower in projects:
+            print(projects[pwd_lower].get("name", ""))
+
+if __name__ == "__main__":
+    main()
+PYEOF
+    )
+fi
+
+# Load project-specific long-term memory if it exists
+if [ -n "$PROJECT_NAME" ] && [ -d "$PROJECT_MEMORY_DIR" ]; then
+    # Convert project name to lowercase-kebab for filename
+    PROJECT_FILE_NAME=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    PROJECT_MEMORY_FILE="$PROJECT_MEMORY_DIR/${PROJECT_FILE_NAME}-long-term-memory.md"
+
+    if [ -f "$PROJECT_MEMORY_FILE" ]; then
+        echo "## Project Long-Term Memory: $PROJECT_NAME"
+        cat "$PROJECT_MEMORY_FILE"
+        echo ""
+    fi
 fi
 
 # Recent daily summaries (last N WORKING days - days with actual files)
@@ -182,9 +249,18 @@ echo "</memory>"
 # Estimate: 1 token ≈ 4 characters (bytes)
 TOTAL_BYTES=0
 
-# Count LONG_TERM.md
-if [ -f "$MEMORY_DIR/LONG_TERM.md" ]; then
-    TOTAL_BYTES=$((TOTAL_BYTES + $(wc -c < "$MEMORY_DIR/LONG_TERM.md")))
+# Count global long-term memory
+if [ -n "$GLOBAL_MEMORY" ]; then
+    TOTAL_BYTES=$((TOTAL_BYTES + $(wc -c < "$GLOBAL_MEMORY")))
+fi
+
+# Count project long-term memory
+if [ -n "$PROJECT_NAME" ] && [ -d "$PROJECT_MEMORY_DIR" ]; then
+    PROJECT_FILE_NAME=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    PROJECT_MEMORY_FILE="$PROJECT_MEMORY_DIR/${PROJECT_FILE_NAME}-long-term-memory.md"
+    if [ -f "$PROJECT_MEMORY_FILE" ]; then
+        TOTAL_BYTES=$((TOTAL_BYTES + $(wc -c < "$PROJECT_MEMORY_FILE")))
+    fi
 fi
 
 # Count loaded daily files
