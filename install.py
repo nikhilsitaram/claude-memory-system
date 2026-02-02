@@ -360,19 +360,29 @@ def merge_permissions(settings: dict) -> dict:
     home = str(Path.home())
 
     # Use absolute paths for subagent compatibility
-    # Include tilde variant for Read (subagent bootstrap - reading SKILL.md)
+    # Include tilde variants for subagents (Claude Code does literal string matching)
     permissions_to_add = [
         # Read for memory/skill files (absolute + tilde for subagent bootstrap)
         f"Read({home}/.claude/**)",
         "Read(~/.claude/**)",
+        # Edit for memory files (absolute + tilde for subagents)
         f"Edit({home}/.claude/memory/**)",
         f"Edit({home}/.claude/memory/*)",
         f"Edit({home}/.claude/memory/daily/*)",
         f"Edit({home}/.claude/memory/project-memory/*)",
+        "Edit(~/.claude/memory/**)",
+        "Edit(~/.claude/memory/*)",
+        "Edit(~/.claude/memory/daily/*)",
+        "Edit(~/.claude/memory/project-memory/*)",
+        # Write for memory files (absolute + tilde for subagents)
         f"Write({home}/.claude/memory/**)",
         f"Write({home}/.claude/memory/*)",
         f"Write({home}/.claude/memory/daily/*)",
         f"Write({home}/.claude/memory/project-memory/*)",
+        "Write(~/.claude/memory/**)",
+        "Write(~/.claude/memory/*)",
+        "Write(~/.claude/memory/daily/*)",
+        "Write(~/.claude/memory/project-memory/*)",
         # Projects directory access (orphan recovery reads transcript paths)
         f"Read({home}/.claude/projects/**)",
     ]
