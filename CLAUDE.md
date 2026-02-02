@@ -41,11 +41,14 @@ The install script also:
 - Creates `~/.claude/memory/{daily,transcripts,project-memory}/` directories
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
 - Adds permissions to settings.json:
-  - `Read({home}/.claude/**)` - Read memory/skill files (absolute path)
-  - `Read(~/.claude/**)` - Read memory/skill files (tilde for subagent bootstrap)
-  - `Edit({home}/.claude/memory/**)` - Edit memory files (with variants for subdirs)
-  - `Write({home}/.claude/memory/**)` - Write memory files (with variants for subdirs)
-  - `Read({home}/.claude/projects/**)` - Read project transcript paths (orphan recovery)
+  - `Read(//{home}/.claude/**)` - Read memory/skill files (double-slash = absolute path)
+  - `Read(~/.claude/**)` - Read memory/skill files (tilde expansion)
+  - `Edit(//{home}/.claude/memory/**)` - Edit memory files (with variants for subdirs)
+  - `Write(//{home}/.claude/memory/**)` - Write memory files (with variants for subdirs)
+  - `Read(//{home}/.claude/projects/**)` - Read project transcript paths (orphan recovery)
+
+  **Important**: Permission paths use `//` prefix for absolute paths per [GitHub #6881](https://github.com/anthropics/claude-code/issues/6881).
+  Single-slash `/path` is interpreted as **relative** from settings file, not absolute!
 
   **Note**: Subagents use Read/Glob/Grep tools for file access, and `indexing.py delete`
   for transcript deletion. No bash permissions needed - fully cross-platform.
@@ -245,6 +248,20 @@ Delete transcripts: `rm file.jsonl && rmdir dir/`
 2. Spawn a subagent via Task tool to run /synthesize
 3. Watch for permission prompts - if prompted, the pattern doesn't match
 4. Adjust permissions or skill instructions accordingly
+
+## Permission Path Formats
+
+Claude Code permission patterns have specific path format requirements ([GitHub #6881](https://github.com/anthropics/claude-code/issues/6881)):
+
+| Format | Interpretation | Example |
+|--------|----------------|---------|
+| `//path/...` | Absolute filesystem path | `Edit(//home/user/.claude/**)` |
+| `~/path/...` | Home directory expansion | `Edit(~/.claude/memory/**)` |
+| `/path/...` | **Relative** from settings file! | ❌ Don't use for absolute paths |
+
+The installer uses `f"Edit(/{home}/.claude/...)"` which produces `Edit(//home/user/...)` (double-slash).
+
+Both `//` and `~` variants are included for robustness with subagents.
 
 ## Cross-Platform Notes
 
