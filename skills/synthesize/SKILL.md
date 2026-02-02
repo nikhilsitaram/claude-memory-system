@@ -6,7 +6,18 @@ user-invocable: true
 
 # Synthesize Skill
 
-Process memory in two phases:
+Process memory in three phases:
+
+## Phase 0: Update Project Index
+
+Before processing transcripts, rebuild the project-to-work-days index:
+
+```bash
+python3 ~/.claude/skills/synthesize/build_projects_index.py
+```
+
+This enables project-aware memory loading by scanning `sessions-index.json` files
+and mapping projects to their work days.
 
 ## Phase 1: Transcripts → Daily Summaries
 
@@ -20,7 +31,28 @@ Each line is a JSON object with conversation data.
    - Create a summary in `~/.claude/memory/daily/YYYY-MM-DD.md`
    - Include: topics discussed, decisions made, problems solved, key learnings
    - Preserve any existing user notes (## HH:MM - User Note sections)
+   - **Add project tags** (see below)
 3. After summarizing each day, delete the transcript files for that day
+
+### Project Tags
+
+Add an HTML comment after the H1 heading to indicate which projects had work that day:
+
+```markdown
+# 2026-01-25
+
+<!-- projects: personal-shopper, granada -->
+
+## Sessions Summary
+...
+```
+
+To determine which projects to tag:
+- Check `~/.claude/memory/projects-index.json`
+- Look for projects that have this date in their `workDays` array
+- List project names (comma-separated) in the HTML comment
+
+This enables future filtering/searching by project.
 
 ## Phase 2: Daily Summaries → Long-Term Memory
 
@@ -37,6 +69,8 @@ Each line is a JSON object with conversation data.
 
 ```markdown
 # YYYY-MM-DD
+
+<!-- projects: project-name-1, project-name-2 -->
 
 ## Sessions Summary
 [Brief overview of what was discussed across sessions]
@@ -79,3 +113,18 @@ Each line is a JSON object with:
 - `type`: "user" or "assistant"
 - `message.role`: "user" or "assistant"
 - `message.content`: string or array of `{type: "text", text: "..."}` objects
+
+## Manual Project Memory Loading
+
+To load project history for any project (regardless of current directory):
+
+```bash
+# List all known projects
+python3 ~/.claude/scripts/load-project-memory.py --list
+
+# Load memory for a specific project
+python3 ~/.claude/scripts/load-project-memory.py ~/personal/personal-shopper
+
+# Load more/fewer work days (default is 14)
+python3 ~/.claude/scripts/load-project-memory.py ~/claude-code/projects/granada --days 7
+```

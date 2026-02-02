@@ -1,0 +1,8 @@
+# Local Claude/editor artifacts
+.claude/
+.agents/
+.opencode/
+
+# OS files
+.DS_Store
+Thumbs.db

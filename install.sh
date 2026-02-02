@@ -25,12 +25,15 @@ mkdir -p ~/.claude/skills/{remember,synthesize,recall,reload}
 # Copy scripts
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/scripts/"*.sh ~/.claude/scripts/
+cp "$SCRIPT_DIR/scripts/"*.py ~/.claude/scripts/
 chmod +x ~/.claude/scripts/*.sh
+chmod +x ~/.claude/scripts/*.py
 
 # Copy skills
 cp "$SCRIPT_DIR/skills/remember/SKILL.md" ~/.claude/skills/remember/
 cp "$SCRIPT_DIR/skills/synthesize/SKILL.md" ~/.claude/skills/synthesize/
 cp "$SCRIPT_DIR/skills/synthesize/extract_transcripts.py" ~/.claude/skills/synthesize/
+cp "$SCRIPT_DIR/skills/synthesize/build_projects_index.py" ~/.claude/skills/synthesize/
 cp "$SCRIPT_DIR/skills/recall/SKILL.md" ~/.claude/skills/recall/
 cp "$SCRIPT_DIR/skills/reload/SKILL.md" ~/.claude/skills/reload/
 
@@ -144,6 +147,10 @@ if [[ "$(uname -r)" == *"WSL"* ]] || [[ "$(uname -r)" == *"microsoft"* ]]; then
         echo "To auto-start, add to ~/.bashrc: sudo service cron start 2>/dev/null"
     fi
 fi
+
+# Build initial project index
+echo "Building project index..."
+python3 ~/.claude/skills/synthesize/build_projects_index.py 2>/dev/null || echo "Note: Project index will be built on first /synthesize"
 
 echo ""
 echo "Memory system installed!"

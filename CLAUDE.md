@@ -11,14 +11,16 @@ claude-memory-system/
 ├── install.sh              # Installs everything to ~/.claude/
 ├── uninstall.sh            # Removes hooks and cron job
 ├── scripts/
-│   ├── load-memory.sh      # SessionStart hook - loads memory
+│   ├── load-memory.sh      # SessionStart hook - loads memory + project history
+│   ├── load-project-memory.py  # Manual project memory loader
 │   ├── save-session.sh     # SessionEnd/PreCompact hook - saves transcript
 │   └── recover-transcripts.sh  # Cron job - recovers orphaned transcripts
 ├── skills/
 │   ├── remember/SKILL.md   # /remember - save notes
 │   ├── synthesize/         # /synthesize - process transcripts
 │   │   ├── SKILL.md
-│   │   └── extract_transcripts.py
+│   │   ├── extract_transcripts.py
+│   │   └── build_projects_index.py  # Builds project-to-work-days index
 │   ├── recall/SKILL.md     # /recall - search history
 │   └── reload/SKILL.md     # /reload - synthesize + load after /clear
 └── templates/
@@ -30,6 +32,7 @@ claude-memory-system/
 | Repo Path | Installs To |
 |-----------|-------------|
 | `scripts/*.sh` | `~/.claude/scripts/` |
+| `scripts/*.py` | `~/.claude/scripts/` |
 | `skills/*/` | `~/.claude/skills/` |
 | `templates/LONG_TERM.md` | `~/.claude/memory/` (if not exists) |
 
@@ -42,6 +45,7 @@ The install script also:
   - `Write(~/.claude/memory/**)` - Create new summaries
   - `Bash(rm -rf ~/.claude/memory/transcripts/*)` - Delete processed transcripts
 - Sets up hourly cron job for transcript recovery
+- Builds initial project index (`~/.claude/memory/projects-index.json`)
 
 ## Making Changes
 
@@ -92,6 +96,17 @@ crontab -l | grep recover-transcripts
 
 - **settings.json**: User's Claude Code settings (hooks, permissions)
 - **LONG_TERM.md**: Synthesized user profile and patterns
-- **daily/YYYY-MM-DD.md**: Daily session summaries
+- **projects-index.json**: Maps project paths to their work days (for project-aware loading)
+- **daily/YYYY-MM-DD.md**: Daily session summaries (may include `<!-- projects: ... -->` tags)
 - **transcripts/{session_id}.jsonl**: Raw session data (JSONL format)
 - **.captured**: Tracks which session IDs have been saved (prevents duplicates)
+
+## Project-Aware Loading
+
+The `load-memory.sh` script loads project-specific history when:
+1. The project index (`projects-index.json`) exists
+2. `$PWD` **exactly** matches a known project path (case-insensitive)
+
+This loads the last 14 "project days" (days with actual work in that project), separate from the 7 calendar days loaded for all projects.
+
+**Note**: Subdirectories do NOT inherit project context. If working in `/project/backend/`, it won't match `/project/`.
