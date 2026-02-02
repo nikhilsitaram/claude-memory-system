@@ -50,7 +50,6 @@ The install script also:
   inherit permissions (GitHub issues #10906, #11934, #18172, #18950).
 - Builds initial project index (`~/.claude/memory/projects-index.json`)
 - Auto-migrates `LONG_TERM.md` → `global-long-term-memory.md` if needed
-- Removes old bash hooks and cron job (if migrating from bash version)
 
 ## Two-Tier Memory Architecture
 

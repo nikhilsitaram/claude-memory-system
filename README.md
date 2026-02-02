@@ -161,15 +161,8 @@ Run `/synthesize` periodically (weekly recommended) to:
 
 ```bash
 cd claude-memory-system
-python3 uninstall.py    # or: python uninstall.py
-```
-
-This removes hooks and permissions but preserves your memory data and settings. To fully remove:
-
-```bash
-rm -rf ~/.claude/memory
-rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}
-rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py
+python3 uninstall.py           # Remove hooks/permissions, keep memory data
+python3 uninstall.py --purge   # Remove everything including memory data
 ```
 
 ## Updates

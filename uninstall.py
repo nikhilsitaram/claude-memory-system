@@ -3,27 +3,20 @@
 Cross-platform uninstaller for Claude Code Memory System.
 
 This script:
-1. Removes memory system hooks from settings.json (both bash and Python)
+1. Removes memory system hooks from settings.json
 2. Removes memory system permissions from settings.json
-3. Removes old cron job if it exists
-4. Preserves memory data (doesn't delete ~/.claude/memory/)
+3. Optionally deletes all memory data with --purge flag
 
 Usage:
-    python3 uninstall.py
-    python uninstall.py
-
-The script will NOT delete your memory data. To fully remove:
-    rm -rf ~/.claude/memory
-    rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}
-    rm -f ~/.claude/hooks/pretooluse-allow-memory.sh
-    rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py
+    python3 uninstall.py           # Remove hooks/permissions, keep data
+    python3 uninstall.py --purge   # Remove everything including memory data
 
 Requirements: Python 3.9+
 """
 
+import argparse
 import json
-import os
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -56,11 +49,8 @@ def remove_hooks(settings: dict) -> dict:
     if "hooks" not in settings:
         return settings
 
-    # Patterns that identify memory system hooks (both bash and Python versions)
+    # Patterns that identify memory system hooks
     memory_patterns = [
-        "load-memory.sh",
-        "save-session.sh",
-        "recover-transcripts.sh",
         "load_memory.py",
         "save_session.py",
         "pretooluse-allow-memory.sh",
@@ -108,24 +98,19 @@ def remove_permissions(settings: dict) -> dict:
 
     home = str(Path.home())
 
-    # Patterns that identify memory system permissions
-    # Match both absolute paths and tilde paths
-    permission_patterns = [
-        "/.claude/**",
-        "/.claude/memory",
-        "/.claude/projects",
-        "~/.claude/memory",
-        "rm -rf",
-        "claude-memory-system",  # Repo directory permissions
+    # Exact permission strings installed by the memory system
+    permissions_to_remove = [
+        "Read(~/.claude/**)",
+        f"Read(/{home}/.claude/projects/**)",
     ]
 
     original_count = len(settings["permissions"]["allow"])
 
-    # Filter out memory system permissions
+    # Filter out memory system permissions (exact match)
     settings["permissions"]["allow"] = [
         p
         for p in settings["permissions"]["allow"]
-        if not any(pattern in p for pattern in permission_patterns)
+        if p not in permissions_to_remove
     ]
 
     removed_count = original_count - len(settings["permissions"]["allow"])
@@ -144,42 +129,49 @@ def remove_permissions(settings: dict) -> dict:
     return settings
 
 
-def remove_cron_job() -> None:
-    """Remove memory system cron job if it exists."""
-    if os.name == "nt":
-        # Windows doesn't have cron
-        return
+def purge_memory_data() -> None:
+    """Delete all memory system files (scripts, skills, hooks, data)."""
+    claude_dir = get_claude_dir()
 
-    try:
-        # Get current crontab
-        result = subprocess.run(
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+    # Files and directories to remove
+    items_to_remove = [
+        # Memory data
+        claude_dir / "memory",
+        # Skills
+        claude_dir / "skills" / "remember",
+        claude_dir / "skills" / "synthesize",
+        claude_dir / "skills" / "recall",
+        claude_dir / "skills" / "reload",
+        claude_dir / "skills" / "settings",
+        # Hook scripts
+        claude_dir / "hooks" / "pretooluse-allow-memory.sh",
+        # Scripts
+        claude_dir / "scripts" / "memory_utils.py",
+        claude_dir / "scripts" / "load_memory.py",
+        claude_dir / "scripts" / "save_session.py",
+        claude_dir / "scripts" / "indexing.py",
+        claude_dir / "scripts" / "load-project-memory.py",
+    ]
 
-        if result.returncode == 0 and "recover-transcripts.sh" in result.stdout:
-            # Remove the memory system cron job
-            new_crontab = "\n".join(
-                line
-                for line in result.stdout.splitlines()
-                if "recover-transcripts.sh" not in line
-            )
+    removed = []
+    for item in items_to_remove:
+        if item.exists():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            removed.append(str(item.relative_to(Path.home())))
 
-            # Update crontab
-            proc = subprocess.Popen(
-                ["crontab", "-"],
-                stdin=subprocess.PIPE,
-                text=True,
-            )
-            proc.communicate(input=new_crontab)
+    # Clean up empty parent directories
+    for parent in [claude_dir / "hooks", claude_dir / "scripts", claude_dir / "skills"]:
+        if parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+            removed.append(str(parent.relative_to(Path.home())))
 
-            print("Removed cron job")
-
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # crontab not available
-        pass
+    if removed:
+        print(f"Removed {len(removed)} items:")
+        for item in removed:
+            print(f"  ~/{item}")
 
 
 def print_cleanup_instructions() -> None:
@@ -190,68 +182,64 @@ def print_cleanup_instructions() -> None:
     print("=" * 60)
     print()
     print("Memory data preserved at: ~/.claude/memory/")
-    print("Memory settings preserved at: ~/.claude/memory/settings.json")
     print()
     print("To fully remove all files, run:")
+    print("  python3 uninstall.py --purge")
+    print()
+    print("Or manually:")
     print()
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}")
-    print("  rm -f ~/.claude/hooks/pretooluse-allow-memory.sh")
-    print("  rm ~/.claude/scripts/memory_utils.py")
-    print("  rm ~/.claude/scripts/load_memory.py")
-    print("  rm ~/.claude/scripts/save_session.py")
-    print("  rm ~/.claude/scripts/indexing.py")
-    print("  rm ~/.claude/scripts/load-project-memory.py")
-    print()
-    print("Or on Windows PowerShell:")
-    print()
-    print("  Remove-Item -Recurse ~/.claude/memory")
-    print("  Remove-Item -Recurse ~/.claude/skills/remember,")
-    print("                       ~/.claude/skills/synthesize,")
-    print("                       ~/.claude/skills/recall,")
-    print("                       ~/.claude/skills/reload,")
-    print("                       ~/.claude/skills/settings")
-    print("  Remove-Item ~/.claude/scripts/memory_utils.py,")
-    print("              ~/.claude/scripts/load_memory.py,")
-    print("              ~/.claude/scripts/save_session.py,")
-    print("              ~/.claude/scripts/indexing.py,")
-    print("              ~/.claude/scripts/load-project-memory.py")
+    print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py")
 
 
 def main() -> int:
     """Main uninstallation routine."""
+    parser = argparse.ArgumentParser(
+        description="Uninstall Claude Code Memory System"
+    )
+    parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="Delete all memory data, scripts, skills, and hooks",
+    )
+    args = parser.parse_args()
+
     print("Uninstalling Claude Code Memory System...")
     print()
 
     # Check if settings file exists
     settings_file = get_claude_dir() / "settings.json"
 
-    if not settings_file.exists():
-        print("No settings.json found, nothing to uninstall.")
-        return 0
+    if settings_file.exists():
+        # Load settings
+        settings = load_json_file(settings_file)
 
-    # Load settings
-    settings = load_json_file(settings_file)
+        if settings:
+            # Remove hooks
+            settings = remove_hooks(settings)
 
-    if not settings:
-        print("Could not read settings.json, skipping hook removal.")
-        return 0
+            # Remove permissions
+            settings = remove_permissions(settings)
 
-    # Remove hooks
-    settings = remove_hooks(settings)
+            # Save updated settings
+            save_json_file(settings_file, settings)
+            print(f"Updated {settings_file}")
+    else:
+        print("No settings.json found, skipping hook/permission removal.")
 
-    # Remove permissions
-    settings = remove_permissions(settings)
-
-    # Save updated settings
-    save_json_file(settings_file, settings)
-    print(f"Updated {settings_file}")
-
-    # Remove cron job
-    remove_cron_job()
-
-    # Print cleanup instructions
-    print_cleanup_instructions()
+    # Purge data if requested
+    if args.purge:
+        print()
+        purge_memory_data()
+        print()
+        print("=" * 60)
+        print("Memory system completely removed.")
+        print("=" * 60)
+    else:
+        # Print cleanup instructions
+        print_cleanup_instructions()
 
     return 0
 

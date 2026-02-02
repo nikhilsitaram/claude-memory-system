@@ -6,13 +6,11 @@ This script:
 1. Checks Python version (requires 3.9+)
 2. Detects available Python command (python3 vs python)
 3. Backs up existing settings.json
-4. Removes old bash hooks (for migration)
-5. Creates directory structure
-6. Copies scripts and skills
-7. Merges hooks into settings.json (with absolute paths)
-8. Adds permissions
-9. Removes cron job if exists (replaced by inline recovery)
-10. Validates installation
+4. Creates directory structure
+5. Copies scripts and skills
+6. Merges hooks into settings.json (with absolute paths)
+7. Adds permissions
+8. Builds project index
 
 Usage:
     python3 install.py
@@ -216,19 +214,12 @@ def copy_templates(script_dir: Path) -> None:
     """Copy template files if they don't exist."""
     memory_dir = get_memory_dir()
 
-    # Migrate LONG_TERM.md → global-long-term-memory.md if needed
-    old_file = memory_dir / "LONG_TERM.md"
-    new_file = memory_dir / "global-long-term-memory.md"
-
-    if old_file.exists() and not new_file.exists():
-        print("Migrating LONG_TERM.md → global-long-term-memory.md...")
-        shutil.move(old_file, new_file)
-
-    # Copy global-long-term-memory.md template if neither exists
-    if not new_file.exists() and not old_file.exists():
+    # Copy global-long-term-memory.md template if it doesn't exist
+    long_term_file = memory_dir / "global-long-term-memory.md"
+    if not long_term_file.exists():
         src = script_dir / "templates" / "global-long-term-memory.md"
         if src.exists():
-            shutil.copy2(src, new_file)
+            shutil.copy2(src, long_term_file)
             print("Created default global-long-term-memory.md")
 
     # Copy settings.json template if it doesn't exist
@@ -243,40 +234,6 @@ def copy_templates(script_dir: Path) -> None:
     captured_file = memory_dir / ".captured"
     if not captured_file.exists():
         captured_file.touch()
-
-
-def remove_old_bash_hooks(settings: dict) -> dict:
-    """Remove old bash-based hooks (for migration from bash to Python)."""
-    if "hooks" not in settings:
-        return settings
-
-    old_patterns = [
-        "load-memory.sh",
-        "save-session.sh",
-        "recover-transcripts.sh",
-    ]
-
-    for event in ["SessionStart", "SessionEnd", "PreCompact"]:
-        if event in settings["hooks"]:
-            # Filter out old bash hooks
-            settings["hooks"][event] = [
-                entry
-                for entry in settings["hooks"][event]
-                if not any(
-                    pattern in hook.get("command", "")
-                    for hook in entry.get("hooks", [])
-                    for pattern in old_patterns
-                )
-            ]
-            # Remove empty arrays
-            if not settings["hooks"][event]:
-                del settings["hooks"][event]
-
-    # Remove empty hooks object
-    if "hooks" in settings and not settings["hooks"]:
-        del settings["hooks"]
-
-    return settings
 
 
 def hook_entry_key(entry: dict) -> tuple:
@@ -430,44 +387,6 @@ def merge_permissions(settings: dict) -> dict:
     return settings
 
 
-def remove_cron_job() -> None:
-    """Remove old cron job if it exists."""
-    if os.name == "nt":
-        # Windows doesn't have cron
-        return
-
-    try:
-        # Get current crontab
-        result = subprocess.run(
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        if result.returncode == 0 and "recover-transcripts.sh" in result.stdout:
-            # Remove the memory system cron job
-            new_crontab = "\n".join(
-                line
-                for line in result.stdout.splitlines()
-                if "recover-transcripts.sh" not in line
-            )
-
-            # Update crontab
-            proc = subprocess.Popen(
-                ["crontab", "-"],
-                stdin=subprocess.PIPE,
-                text=True,
-            )
-            proc.communicate(input=new_crontab)
-
-            print("Removed old cron job (recovery now runs on SessionStart)")
-
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # crontab not available
-        pass
-
-
 def build_project_index(python_cmd: str) -> None:
     """Build initial project index."""
     scripts_dir = get_claude_dir() / "scripts"
@@ -554,10 +473,7 @@ def main() -> int:
 
     settings = load_json_file(settings_file)
 
-    # Remove old bash hooks (migration)
-    settings = remove_old_bash_hooks(settings)
-
-    # Add new Python hooks
+    # Add hooks
     settings = merge_hooks(settings, python_cmd)
 
     # Add permissions
@@ -566,9 +482,6 @@ def main() -> int:
     # Save updated settings
     save_json_file(settings_file, settings)
     print(f"Updated {settings_file}")
-
-    # Remove old cron job
-    remove_cron_job()
 
     # Build project index
     print()

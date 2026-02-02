@@ -75,16 +75,8 @@ def get_projects_index_file() -> Path:
 
 
 def get_global_memory_file() -> Path:
-    """Get the global long-term memory file, checking both new and legacy locations."""
-    memory_dir = get_memory_dir()
-    new_location = memory_dir / "global-long-term-memory.md"
-    legacy_location = memory_dir / "LONG_TERM.md"
-
-    if new_location.exists():
-        return new_location
-    elif legacy_location.exists():
-        return legacy_location
-    return new_location  # Default to new location
+    """Get the global long-term memory file."""
+    return get_memory_dir() / "global-long-term-memory.md"
 
 
 def get_captured_file() -> Path:
