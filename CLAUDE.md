@@ -44,8 +44,12 @@ The install script also:
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
 - Adds permissions to settings.json (uses absolute paths for subagent compatibility):
   - `Read($HOME/.claude/**)` - Read memory files
-  - `Edit($HOME/.claude/memory/**)` - Edit daily summaries
-  - `Write($HOME/.claude/memory/**)` - Create new summaries
+  - `Edit($HOME/.claude/memory/**)` - Edit files recursively
+  - `Edit($HOME/.claude/memory/*)` - Edit files directly in memory/
+  - `Edit($HOME/.claude/memory/daily/*)` - Edit daily summaries explicitly
+  - `Write($HOME/.claude/memory/**)` - Write files recursively
+  - `Write($HOME/.claude/memory/*)` - Write files directly in memory/
+  - `Write($HOME/.claude/memory/daily/*)` - Write daily summaries explicitly
   - `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
 - Sets up hourly cron job for transcript recovery
 - Builds initial project index (`~/.claude/memory/projects-index.json`)
@@ -131,3 +135,28 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 ```
 
 Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to check consumption.
+
+## Subagent Considerations
+
+The `/synthesize` skill runs via a background subagent (Task tool) to avoid bloating the main conversation context. Key learnings:
+
+### Permission Patterns
+- **Use absolute paths**: Subagents don't expand `~` the same way as the parent session. Use `$HOME` or full paths.
+- **Include explicit patterns**: Both `**` (recursive) and `*` (direct) patterns for reliability. Claude Code's glob matching can be strict.
+- **Avoid chained commands**: Permissions like `Bash(rm file && rmdir dir)` don't match. Use single commands like `rm -rf dir/`.
+
+### SKILL.md Instructions
+When updating skills that run as subagents, be explicit about command formats:
+```markdown
+# Good - matches permission pattern
+Delete transcripts: `rm -rf ~/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved)
+
+# Bad - chained command won't match permissions
+Delete transcripts: `rm file.jsonl && rmdir dir/`
+```
+
+### Testing Subagent Permissions
+1. Create a test transcript in `~/.claude/memory/transcripts/`
+2. Spawn a subagent via Task tool to run /synthesize
+3. Watch for permission prompts - if prompted, the pattern doesn't match
+4. Adjust permissions or skill instructions accordingly

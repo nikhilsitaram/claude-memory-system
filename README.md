@@ -27,11 +27,11 @@ Start a new Claude Code session to activate the memory system.
 The installer automatically adds these permissions so Claude can manage memory files without prompting:
 
 - `Read($HOME/.claude/**)` - Read memory files
-- `Edit($HOME/.claude/memory/**)` - Edit daily summaries and long-term memory
-- `Write($HOME/.claude/memory/**)` - Create new daily summaries
+- `Edit($HOME/.claude/memory/**)`, `Edit($HOME/.claude/memory/*)`, `Edit($HOME/.claude/memory/daily/*)` - Edit memory files
+- `Write($HOME/.claude/memory/**)`, `Write($HOME/.claude/memory/*)`, `Write($HOME/.claude/memory/daily/*)` - Write memory files
 - `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
 
-Note: Permissions use absolute paths (not `~`) for subagent compatibility. Subagents spawned via the Task tool don't expand `~` the same way as the parent session.
+**Why so many patterns?** Permissions use absolute paths (not `~`) and include both recursive (`**`) and direct (`*`) patterns for subagent compatibility. Subagents spawned via the Task tool have stricter permission matching.
 
 ## Requirements
 
@@ -149,6 +149,8 @@ Run `/synthesize` periodically (weekly recommended) to:
 1. **Phase 0**: Update project index (maps projects to work days)
 2. **Phase 1**: Convert raw transcripts into daily summaries (with project tags)
 3. **Phase 2**: Update long-term memory with patterns and insights
+
+**Auto-synthesis**: At session start, if unprocessed transcripts exist, Claude spawns a background subagent to process them. This keeps the main conversation context lean while handling potentially large transcript files.
 
 ## Uninstallation
 
