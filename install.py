@@ -371,15 +371,21 @@ def merge_permissions(settings: dict) -> dict:
         f"Write({home}/.claude/memory/*)",
         f"Write({home}/.claude/memory/daily/*)",
         f"Write({home}/.claude/memory/project-memory/*)",
-        # Transcript deletion
-        f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",
-        "Bash(rm -rf ~/.claude/memory/transcripts/*)",  # Tilde fallback
+        # Transcript deletion (** for recursive, absolute/$HOME/~ variants)
+        f"Bash(rm -rf {home}/.claude/memory/transcripts/**)",
+        f"Bash(rm {home}/.claude/memory/transcripts/**)",
+        "Bash(rm -rf $HOME/.claude/memory/transcripts/**)",
+        "Bash(rm $HOME/.claude/memory/transcripts/**)",
+        "Bash(rm -rf ~/.claude/memory/transcripts/**)",
+        "Bash(rm ~/.claude/memory/transcripts/**)",
         # Read-only Bash exploration - .claude directory
-        # Note: "Bash(cmd *)" uses space before * (modern format)
-        f"Bash(ls {home}/.claude/*)",
-        f"Bash(ls -* {home}/.claude/*)",  # ls with any flags
-        f"Bash(find {home}/.claude/ *)",  # find with any args
-        f"Bash(grep * {home}/.claude/memory/*)",  # grep in memory only
+        # Use ** for deep path matching, include $HOME variant for subagents
+        f"Bash(ls {home}/.claude/**)",
+        f"Bash(ls -* {home}/.claude/**)",
+        "Bash(ls $HOME/.claude/**)",
+        "Bash(ls -* $HOME/.claude/**)",
+        f"Bash(find {home}/.claude/ *)",
+        f"Bash(grep * {home}/.claude/memory/*)",
         # Read-only Bash exploration - repo directory (for development)
         f"Bash(ls {home}/claude-memory-system/*)",
         f"Bash(ls -* {home}/claude-memory-system/*)",

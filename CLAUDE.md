@@ -51,9 +51,12 @@ The install script also:
   - `Write($HOME/.claude/memory/*)` - Write files directly in memory/
   - `Write($HOME/.claude/memory/daily/*)` - Write daily summaries explicitly
   - `Write($HOME/.claude/memory/project-memory/*)` - Write project memory files
-  - `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
-  - `Bash(ls $HOME/.claude/*)` - List .claude directory contents
-  - `Bash(ls -* $HOME/.claude/*)` - List with any flags
+  - `Bash(rm -rf $HOME/.claude/memory/transcripts/**)` - Delete transcripts ($HOME)
+  - `Bash(rm $HOME/.claude/memory/transcripts/**)` - Delete transcripts ($HOME, no -rf)
+  - `Bash(rm -rf ~/.claude/memory/transcripts/**)` - Delete transcripts (tilde)
+  - `Bash(rm ~/.claude/memory/transcripts/**)` - Delete transcripts (tilde, no -rf)
+  - `Bash(ls $HOME/.claude/**)` - List .claude recursively ($HOME)
+  - `Bash(ls -* $HOME/.claude/**)` - List with flags ($HOME)
   - `Bash(find $HOME/.claude/ *)` - Find files in .claude
   - `Bash(grep * $HOME/.claude/memory/*)` - Search in memory files
   - `Bash(ls $HOME/claude-memory-system/*)` - List repo directory (development)
