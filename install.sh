@@ -126,7 +126,8 @@ permissions_to_add = [
     f"Write({home}/.claude/memory/**)",                   # Write files recursively
     f"Write({home}/.claude/memory/*)",                    # Write files directly in memory/
     f"Write({home}/.claude/memory/daily/*)",              # Write daily summaries explicitly
-    f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",  # Delete processed transcripts
+    f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",  # Delete processed transcripts (absolute path)
+    "Bash(rm -rf ~/.claude/memory/transcripts/*)",         # Delete processed transcripts (tilde fallback)
 ]
 
 if "permissions" not in settings:

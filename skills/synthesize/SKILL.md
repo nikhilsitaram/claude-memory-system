@@ -12,7 +12,7 @@ Process memory transcripts into compact daily summaries. This skill is designed 
 
 1. Run extraction: `python3 ~/.claude/skills/synthesize/extract_transcripts.py`
 2. For each day in output, create/update `~/.claude/memory/daily/YYYY-MM-DD.md`
-3. Delete processed transcripts: `rm -rf ~/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved permission)
+3. Delete processed transcripts: `rm -rf $HOME/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved permission - must use $HOME, not ~)
 4. Return summary: "Processed N transcripts into daily summaries for [dates]"
 
 ---
@@ -43,7 +43,7 @@ Each line is a JSON object with conversation data.
    - Include: topics discussed, decisions made, problems solved, key learnings
    - Preserve any existing user notes (## HH:MM - User Note sections)
    - **Add project tags** (see below)
-3. After summarizing each day, delete using: `rm -rf ~/.claude/memory/transcripts/YYYY-MM-DD/` (this exact format is pre-approved)
+3. After summarizing each day, delete using: `rm -rf $HOME/.claude/memory/transcripts/YYYY-MM-DD/` (must use $HOME, not ~ - this exact format is pre-approved)
 
 ### Project Tags
 
