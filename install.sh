@@ -68,12 +68,12 @@ import os
 settings_file = os.path.expanduser("~/.claude/settings.json")
 hooks_to_add = {
     "hooks": {
-        "SessionStart": [{
-            "hooks": [{
-                "type": "command",
-                "command": "bash ~/.claude/scripts/load-memory.sh"
-            }]
-        }],
+        "SessionStart": [
+            {"matcher": "startup", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
+            {"matcher": "resume", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
+            {"matcher": "clear", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
+            {"matcher": "compact", "hooks": [{"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}]},
+        ],
         "SessionEnd": [{
             "hooks": [{
                 "type": "command",
@@ -81,10 +81,10 @@ hooks_to_add = {
             }]
         }],
         "PreCompact": [{
-            "hooks": [{
-                "type": "command",
-                "command": "bash ~/.claude/scripts/save-session.sh"
-            }]
+            "hooks": [
+                {"type": "command", "command": "bash ~/.claude/scripts/save-session.sh"},
+                {"type": "command", "command": "bash ~/.claude/scripts/load-memory.sh"}
+            ]
         }]
     }
 }
@@ -101,16 +101,25 @@ except (json.JSONDecodeError, IOError) as e:
     print("Creating new settings file")
     settings = {}
 
-# Merge hooks
+# Merge hooks (with deduplication)
 if "hooks" not in settings:
     settings["hooks"] = {}
 
-for event, config in hooks_to_add["hooks"].items():
+def hook_entry_key(entry):
+    """Generate a unique key for a hook entry based on matcher and commands."""
+    matcher = entry.get("matcher", "")
+    commands = tuple(h.get("command", "") for h in entry.get("hooks", []))
+    return (matcher, commands)
+
+for event, new_entries in hooks_to_add["hooks"].items():
     if event not in settings["hooks"]:
-        settings["hooks"][event] = config
+        settings["hooks"][event] = new_entries
     else:
-        # Append to existing hooks for this event
-        settings["hooks"][event].extend(config)
+        # Only add entries that don't already exist (by matcher + commands)
+        existing_keys = {hook_entry_key(e) for e in settings["hooks"][event]}
+        for entry in new_entries:
+            if hook_entry_key(entry) not in existing_keys:
+                settings["hooks"][event].append(entry)
 
 # Add permissions for memory system operations (use absolute paths for subagent compatibility)
 # Include both ** (recursive) and * (direct) patterns for robust matching
