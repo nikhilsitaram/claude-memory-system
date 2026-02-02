@@ -112,12 +112,13 @@ for event, config in hooks_to_add["hooks"].items():
         # Append to existing hooks for this event
         settings["hooks"][event].extend(config)
 
-# Add permissions for memory system operations
+# Add permissions for memory system operations (use absolute paths for subagent compatibility)
+home = os.path.expanduser("~")
 permissions_to_add = [
-    "Read(~/.claude/**)",                           # Read memory files
-    "Edit(~/.claude/memory/**)",                    # Edit daily summaries and LONG_TERM.md
-    "Write(~/.claude/memory/**)",                   # Write new daily summaries
-    "Bash(rm -rf ~/.claude/memory/transcripts/*)",  # Delete processed transcripts
+    f"Read({home}/.claude/**)",                           # Read memory files
+    f"Edit({home}/.claude/memory/**)",                    # Edit daily summaries and LONG_TERM.md
+    f"Write({home}/.claude/memory/**)",                   # Write new daily summaries
+    f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",  # Delete processed transcripts
 ]
 
 if "permissions" not in settings:
