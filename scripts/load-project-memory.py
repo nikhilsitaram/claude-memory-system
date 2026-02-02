@@ -56,7 +56,7 @@ def load_project_memory(project_path: str, max_days: int = None) -> str:
 
     # Check if index exists
     if not index_file.exists():
-        return f"Error: Project index not found at {index_file}\nRun: python3 ~/.claude/skills/synthesize/build_projects_index.py"
+        return f"Error: Project index not found at {index_file}\nRun: python3 $HOME/.claude/scripts/indexing.py build-index"
 
     # Load index
     try:
@@ -122,7 +122,7 @@ def list_projects() -> str:
     index_file = memory_dir / "projects-index.json"
 
     if not index_file.exists():
-        return f"Error: Project index not found at {index_file}\nRun: python3 ~/.claude/skills/synthesize/build_projects_index.py"
+        return f"Error: Project index not found at {index_file}\nRun: python3 $HOME/.claude/scripts/indexing.py build-index"
 
     try:
         with open(index_file) as f:
