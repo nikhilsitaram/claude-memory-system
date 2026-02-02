@@ -392,36 +392,22 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
 
 
 def merge_permissions(settings: dict) -> dict:
-    """Merge memory system permissions into settings."""
+    """Merge memory system permissions into settings.
+
+    Note: Edit/Write permissions are NOT included here because the PreToolUse hook
+    (pretooluse-allow-memory.sh) auto-approves all memory-related operations.
+    This works around a Claude Code bug where subagents don't inherit permissions
+    from settings.json (GitHub issues #10906, #11934, #18172, #18950).
+    """
     home = str(Path.home())
 
     # Permission path formats (per GitHub issue #6881):
     #   //path = absolute filesystem path (double slash)
     #   ~/path = home directory expansion
     #   /path  = RELATIVE from settings file (NOT what we want!)
-    # Include both // and ~ variants for robustness
     permissions_to_add = [
-        # Read for memory/skill files
-        f"Read(/{home}/.claude/**)",   # double-slash absolute
-        "Read(~/.claude/**)",           # tilde expansion
-        # Edit for memory files
-        f"Edit(/{home}/.claude/memory/**)",
-        f"Edit(/{home}/.claude/memory/*)",
-        f"Edit(/{home}/.claude/memory/daily/*)",
-        f"Edit(/{home}/.claude/memory/project-memory/*)",
-        "Edit(~/.claude/memory/**)",
-        "Edit(~/.claude/memory/*)",
-        "Edit(~/.claude/memory/daily/*)",
-        "Edit(~/.claude/memory/project-memory/*)",
-        # Write for memory files
-        f"Write(/{home}/.claude/memory/**)",
-        f"Write(/{home}/.claude/memory/*)",
-        f"Write(/{home}/.claude/memory/daily/*)",
-        f"Write(/{home}/.claude/memory/project-memory/*)",
-        "Write(~/.claude/memory/**)",
-        "Write(~/.claude/memory/*)",
-        "Write(~/.claude/memory/daily/*)",
-        "Write(~/.claude/memory/project-memory/*)",
+        # Read for memory/skill files (fallback for main agent)
+        "Read(~/.claude/**)",
         # Projects directory access (orphan recovery reads transcript paths)
         f"Read(/{home}/.claude/projects/**)",
     ]
@@ -440,17 +426,6 @@ def merge_permissions(settings: dict) -> dict:
     if added:
         print(f"Added {len(added)} permissions")
 
-    # Clean up old single-slash absolute path patterns (migration from pre-#6881 fix)
-    # Single-slash /path is interpreted as RELATIVE, not absolute!
-    old_patterns = [
-        p for p in settings["permissions"]["allow"]
-        if (p.startswith(f"Edit({home}") or p.startswith(f"Write({home}") or p.startswith(f"Read({home}"))
-        and not p.startswith(f"Edit(/{home}") and not p.startswith(f"Write(/{home}") and not p.startswith(f"Read(/{home}")
-    ]
-    for p in old_patterns:
-        settings["permissions"]["allow"].remove(p)
-    if old_patterns:
-        print(f"Removed {len(old_patterns)} old single-slash patterns (now using // for absolute paths)")
 
     return settings
 

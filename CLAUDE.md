@@ -39,19 +39,15 @@ claude-memory-system/
 
 The install script also:
 - Creates `~/.claude/memory/{daily,transcripts,project-memory}/` directories
-- Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact)
-- Adds permissions to settings.json:
-  - `Read(//{home}/.claude/**)` - Read memory/skill files (double-slash = absolute path)
+- Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact, PreToolUse)
+- Adds minimal permissions to settings.json:
   - `Read(~/.claude/**)` - Read memory/skill files (tilde expansion)
-  - `Edit(//{home}/.claude/memory/**)` - Edit memory files (with variants for subdirs)
-  - `Write(//{home}/.claude/memory/**)` - Write memory files (with variants for subdirs)
   - `Read(//{home}/.claude/projects/**)` - Read project transcript paths (orphan recovery)
 
-  **Important**: Permission paths use `//` prefix for absolute paths per [GitHub #6881](https://github.com/anthropics/claude-code/issues/6881).
-  Single-slash `/path` is interpreted as **relative** from settings file, not absolute!
-
-  **Note**: Subagents use Read/Glob/Grep tools for file access, and `indexing.py delete`
-  for transcript deletion. No bash permissions needed - fully cross-platform.
+  **Note on Edit/Write**: The PreToolUse hook (`pretooluse-allow-memory.sh`) auto-approves
+  all Edit/Write operations targeting `.claude/memory` paths. This replaces explicit
+  Edit/Write permissions and works around a Claude Code bug where subagents don't
+  inherit permissions (GitHub issues #10906, #11934, #18172, #18950).
 - Builds initial project index (`~/.claude/memory/projects-index.json`)
 - Auto-migrates `LONG_TERM.md` → `global-long-term-memory.md` if needed
 - Removes old bash hooks and cron job (if migrating from bash version)
@@ -151,6 +147,7 @@ Hooks are defined in `install.py` in the `merge_hooks()` function. Available eve
 - `SessionStart` - fires on startup, resume, clear, compact
 - `SessionEnd` - fires on session end
 - `PreCompact` - fires before context compaction
+- `PreToolUse` - fires before each tool call (used to auto-approve memory operations)
 
 Remember to update `uninstall.py` event list if adding new hook events.
 
@@ -266,13 +263,15 @@ Claude Code permission patterns have specific path format requirements ([GitHub 
 
 | Format | Interpretation | Example |
 |--------|----------------|---------|
-| `//path/...` | Absolute filesystem path | `Edit(//home/user/.claude/**)` |
-| `~/path/...` | Home directory expansion | `Edit(~/.claude/memory/**)` |
+| `//path/...` | Absolute filesystem path | `Read(//home/user/.claude/**)` |
+| `~/path/...` | Home directory expansion | `Read(~/.claude/**)` |
 | `/path/...` | **Relative** from settings file! | ❌ Don't use for absolute paths |
 
-The installer uses `f"Edit(/{home}/.claude/...)"` which produces `Edit(//home/user/...)` (double-slash).
-
-Both `//` and `~` variants are included for robustness with subagents.
+**Note**: This path format knowledge is only relevant for Read permissions now. The memory
+system uses a PreToolUse hook for Edit/Write operations, which bypasses the permission
+system entirely by returning `{"permissionDecision": "allow"}` before permissions are checked.
+The hook does simple string matching for `.claude/memory` in the input JSON, so path format
+doesn't matter for those operations.
 
 ## Cross-Platform Notes
 

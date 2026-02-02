@@ -2,14 +2,8 @@
 # PreToolUse hook that auto-allows memory-related operations
 # Checks tool name and input to determine if this is a memory system operation
 
-LOG_FILE="$HOME/.claude/memory/pretooluse-debug.log"
-
 # Read the JSON input
 input=$(cat)
-
-# Log the invocation
-echo "$(date '+%Y-%m-%d %H:%M:%S') PreToolUse hook called" >> "$LOG_FILE"
-echo "  Input: $input" >> "$LOG_FILE"
 
 # Extract tool name using grep/sed (avoid jq dependency)
 tool_name=$(echo "$input" | grep -o '"tool_name":"[^"]*"' | sed 's/"tool_name":"//;s/"//')
@@ -47,10 +41,6 @@ fi
 
 # Output decision
 if [ "$should_allow" = true ]; then
-    echo "  Decision: allow ($reason)" >> "$LOG_FILE"
     echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Memory system operation auto-approved"}}'
-else
-    echo "  Decision: ask (not a memory operation)" >> "$LOG_FILE"
-    # Don't output anything - let normal permission flow happen
-    # Outputting "ask" would override existing permissions
 fi
+# For non-memory operations, output nothing - let normal permission flow happen
