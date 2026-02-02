@@ -113,11 +113,16 @@ for event, config in hooks_to_add["hooks"].items():
         settings["hooks"][event].extend(config)
 
 # Add permissions for memory system operations (use absolute paths for subagent compatibility)
+# Include both ** (recursive) and * (direct) patterns for robust matching
 home = os.path.expanduser("~")
 permissions_to_add = [
     f"Read({home}/.claude/**)",                           # Read memory files
-    f"Edit({home}/.claude/memory/**)",                    # Edit daily summaries and LONG_TERM.md
-    f"Write({home}/.claude/memory/**)",                   # Write new daily summaries
+    f"Edit({home}/.claude/memory/**)",                    # Edit files recursively
+    f"Edit({home}/.claude/memory/*)",                     # Edit files directly in memory/
+    f"Edit({home}/.claude/memory/daily/*)",               # Edit daily summaries explicitly
+    f"Write({home}/.claude/memory/**)",                   # Write files recursively
+    f"Write({home}/.claude/memory/*)",                    # Write files directly in memory/
+    f"Write({home}/.claude/memory/daily/*)",              # Write daily summaries explicitly
     f"Bash(rm -rf {home}/.claude/memory/transcripts/*)",  # Delete processed transcripts
 ]
 
