@@ -5,7 +5,8 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 ## Features
 
 - **Auto-capture**: Full transcripts saved on session end and before compaction
-- **Project-aware loading**: Automatically loads last 14 "project days" when working in a known project directory
+- **Project-aware loading**: Automatically loads project-specific history (configurable days) when working in a known project directory
+- **Configurable settings**: Token budgets, working days, and subdirectory matching via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
 - **Recovery**: Orphaned transcripts from ungraceful exits are recovered via cron job
 - **Auto-synthesize prompt**: Unprocessed transcripts trigger reminder at session start
@@ -58,6 +59,7 @@ sudo service cron start 2>/dev/null
 | `/synthesize` | Process transcripts into daily summaries and update long-term memory |
 | `/recall [query]` | Search through all historical daily memory files |
 | `/reload` | Synthesize pending transcripts and reload memory (use after `/clear`) |
+| `/settings` | View/modify memory settings and check token usage |
 
 **Note**: `/clear` does not trigger hooks ([GitHub #21578](https://github.com/anthropics/claude-code/issues/21578)), so use `/reload` afterward to restore memory context.
 
@@ -75,14 +77,16 @@ sudo service cron start 2>/dev/null
 
 When you start a session in a project directory, the system automatically loads that project's historical context:
 
-| Context Type | Window |
-|--------------|--------|
-| All projects | Last 7 calendar days |
-| Current project | Last 14 "project days" (days with actual work) |
+| Context Type | Default | Description |
+|--------------|---------|-------------|
+| All projects | 7 working days | Days with actual session activity (not calendar days) |
+| Current project | 7 working days | Additional project-specific history |
 
-**Project detection**: Uses exact path match only (subdirectories don't inherit project context).
+**Working days vs calendar days**: The system scans for existing daily files rather than looping through calendar dates. If you work Mon-Thu but not Fri-Sun, you get 7 actual work days of context, not 7 calendar days with 3 empty.
 
-**Why "project days"?** If you work on a project sporadically (e.g., Jan 25, then Feb 15), all 14 project days of context come from meaningful work sessions - no wasted context on empty days.
+**Project detection**: By default, uses exact path match only. Enable `includeSubdirectories` in settings to match `/project/subdir` to `/project/`.
+
+**Why "project days"?** If you work on a project sporadically (e.g., Jan 25, then Feb 15), all project days of context come from meaningful work sessions - no wasted context on empty days.
 
 **Manual loading**: To load any project's history from anywhere:
 ```bash
@@ -95,6 +99,7 @@ python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load speci
 ```
 ~/.claude/memory/
 ├── LONG_TERM.md              # Synthesized knowledge about you
+├── settings.json             # Memory system configuration
 ├── projects-index.json       # Project-to-work-days mapping
 ├── daily/
 │   └── YYYY-MM-DD.md         # Summarized daily entries
@@ -103,6 +108,37 @@ python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load speci
 │       └── {session_id}.jsonl  # Raw session transcripts (deduplicated by session ID)
 └── .captured                 # Tracks which sessions were already captured
 ```
+
+### Settings
+
+Configure the memory system via `~/.claude/memory/settings.json`:
+
+```json
+{
+  "shortTermMemory": {
+    "workingDays": 7,
+    "tokenLimit": 15000
+  },
+  "projectMemory": {
+    "workingDays": 7,
+    "tokenLimit": 8000,
+    "includeSubdirectories": false
+  },
+  "longTermMemory": {
+    "tokenLimit": 7000
+  },
+  "totalTokenBudget": 30000
+}
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `shortTermMemory.workingDays` | 7 | Number of recent working days to load |
+| `projectMemory.workingDays` | 7 | Number of project-specific days to load |
+| `projectMemory.includeSubdirectories` | false | Match subdirs to parent project |
+| `totalTokenBudget` | 30000 | Overall memory token budget (informational) |
+
+Token limits are soft warnings, not hard caps. Use `/settings usage` to check current token consumption.
 
 ### Synthesis Workflow
 
@@ -119,12 +155,12 @@ cd claude-memory-system
 ./uninstall.sh
 ```
 
-This removes the cron job and hooks but preserves your memory data. To fully remove:
+This removes the cron job and hooks but preserves your memory data and settings. To fully remove:
 
 ```bash
 rm -rf ~/.claude/memory
-rm -rf ~/.claude/skills/{remember,synthesize,recall,reload}
-rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts,load-project-memory}.sh
+rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}
+rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts}.sh
 rm ~/.claude/scripts/load-project-memory.py
 ```
 
@@ -141,10 +177,11 @@ git pull
 | Component | Location |
 |-----------|----------|
 | Memory data | `~/.claude/memory/` |
+| Memory settings | `~/.claude/memory/settings.json` |
 | Project index | `~/.claude/memory/projects-index.json` |
 | Scripts | `~/.claude/scripts/` |
 | Skills | `~/.claude/skills/` |
-| Settings | `~/.claude/settings.json` |
+| Claude settings | `~/.claude/settings.json` |
 | Recovery log | `~/.claude/memory/recovery.log` |
 
 ## License

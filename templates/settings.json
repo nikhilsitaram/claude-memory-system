@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "shortTermMemory": {
+    "workingDays": 7,
+    "tokenLimit": 15000,
+    "_comment": "Load last N days that have session activity (not calendar days)"
+  },
+  "projectMemory": {
+    "workingDays": 7,
+    "tokenLimit": 8000,
+    "includeSubdirectories": false,
+    "_comment": "Project-specific history. Subdirectory option: if true, /project/subdir matches /project"
+  },
+  "longTermMemory": {
+    "tokenLimit": 7000,
+    "_comment": "LONG_TERM.md - user profile, patterns, preferences (~2-4 pages)"
+  },
+  "totalTokenBudget": 30000,
+  "_tokenGuidance": {
+    "estimation": "1 token ≈ 4 characters. File bytes / 4 = rough token count",
+    "longTerm": "5K-10K tokens: user profile, patterns, key learnings",
+    "shortTerm": "10K-20K tokens: recent working days (~1-2 pages/day)",
+    "project": "5K-10K tokens: project-specific context",
+    "total": "25K-40K tokens: ~30K is a good balance for context efficiency"
+  }
+}

@@ -72,8 +72,10 @@ fi
 
 echo ""
 echo "Memory data preserved at ~/.claude/memory/"
+echo "Settings preserved at ~/.claude/memory/settings.json"
+echo ""
 echo "To fully remove, run:"
 echo "  rm -rf ~/.claude/memory"
-echo "  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload}"
+echo "  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}"
 echo "  rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts}.sh"
 echo "  rm ~/.claude/scripts/load-project-memory.py"

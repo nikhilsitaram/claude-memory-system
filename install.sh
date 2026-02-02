@@ -20,7 +20,7 @@ fi
 # Create directory structure
 mkdir -p ~/.claude/memory/{daily,transcripts}
 mkdir -p ~/.claude/scripts
-mkdir -p ~/.claude/skills/{remember,synthesize,recall,reload}
+mkdir -p ~/.claude/skills/{remember,synthesize,recall,reload,settings}
 
 # Copy scripts
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,10 +36,17 @@ cp "$SCRIPT_DIR/skills/synthesize/extract_transcripts.py" ~/.claude/skills/synth
 cp "$SCRIPT_DIR/skills/synthesize/build_projects_index.py" ~/.claude/skills/synthesize/
 cp "$SCRIPT_DIR/skills/recall/SKILL.md" ~/.claude/skills/recall/
 cp "$SCRIPT_DIR/skills/reload/SKILL.md" ~/.claude/skills/reload/
+cp "$SCRIPT_DIR/skills/settings/SKILL.md" ~/.claude/skills/settings/
 
 # Initialize LONG_TERM.md if it doesn't exist
 if [ ! -f ~/.claude/memory/LONG_TERM.md ]; then
     cp "$SCRIPT_DIR/templates/LONG_TERM.md" ~/.claude/memory/
+fi
+
+# Initialize settings.json if it doesn't exist
+if [ ! -f ~/.claude/memory/settings.json ]; then
+    cp "$SCRIPT_DIR/templates/settings.json" ~/.claude/memory/
+    echo "Created default settings at ~/.claude/memory/settings.json"
 fi
 
 # Initialize .captured file
@@ -160,7 +167,9 @@ echo "  /remember   - Save notes to daily log"
 echo "  /synthesize - Process transcripts & update long-term memory"
 echo "  /recall     - Search historical memory"
 echo "  /reload     - Synthesize + load memory (use after /clear)"
+echo "  /settings   - View/modify memory settings & token usage"
 echo ""
 echo "Memory location: ~/.claude/memory/"
+echo "Settings file:   ~/.claude/memory/settings.json"
 echo ""
 echo "Start a new Claude Code session to activate the memory system."

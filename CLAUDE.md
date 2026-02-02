@@ -22,9 +22,11 @@ claude-memory-system/
 │   │   ├── extract_transcripts.py
 │   │   └── build_projects_index.py  # Builds project-to-work-days index
 │   ├── recall/SKILL.md     # /recall - search history
-│   └── reload/SKILL.md     # /reload - synthesize + load after /clear
+│   ├── reload/SKILL.md     # /reload - synthesize + load after /clear
+│   └── settings/SKILL.md   # /settings - view/modify memory config
 └── templates/
-    └── LONG_TERM.md        # Initial long-term memory template
+    ├── LONG_TERM.md        # Initial long-term memory template
+    └── settings.json       # Default memory settings
 ```
 
 ## Installation Locations
@@ -35,6 +37,7 @@ claude-memory-system/
 | `scripts/*.py` | `~/.claude/scripts/` |
 | `skills/*/` | `~/.claude/skills/` |
 | `templates/LONG_TERM.md` | `~/.claude/memory/` (if not exists) |
+| `templates/settings.json` | `~/.claude/memory/` (if not exists) |
 
 The install script also:
 - Creates `~/.claude/memory/{daily,transcripts}/` directories
@@ -94,7 +97,8 @@ crontab -l | grep recover-transcripts
 
 ## Key Files Reference
 
-- **settings.json**: User's Claude Code settings (hooks, permissions)
+- **~/.claude/settings.json**: User's Claude Code settings (hooks, permissions)
+- **~/.claude/memory/settings.json**: Memory system configuration (working days, token limits)
 - **LONG_TERM.md**: Synthesized user profile and patterns
 - **projects-index.json**: Maps project paths to their work days (for project-aware loading)
 - **daily/YYYY-MM-DD.md**: Daily session summaries (may include `<!-- projects: ... -->` tags)
@@ -105,8 +109,25 @@ crontab -l | grep recover-transcripts
 
 The `load-memory.sh` script loads project-specific history when:
 1. The project index (`projects-index.json`) exists
-2. `$PWD` **exactly** matches a known project path (case-insensitive)
+2. `$PWD` matches a known project path (exact match by default, or prefix match if `includeSubdirectories` is enabled)
 
-This loads the last 14 "project days" (days with actual work in that project), separate from the 7 calendar days loaded for all projects.
+This loads the last N "project days" (configurable in settings, default 7), separate from the N working days loaded for all projects.
 
-**Note**: Subdirectories do NOT inherit project context. If working in `/project/backend/`, it won't match `/project/`.
+**Working days vs calendar days**: The system scans existing daily files rather than looping through calendar dates. If you take days off, those empty days don't count against your quota.
+
+**Subdirectory matching**: By default disabled. Enable via `/settings set projectMemory.includeSubdirectories true` to match `/project/backend/` to `/project/`.
+
+## Settings Configuration
+
+Memory system settings are stored in `~/.claude/memory/settings.json`:
+
+```json
+{
+  "shortTermMemory": { "workingDays": 7, "tokenLimit": 15000 },
+  "projectMemory": { "workingDays": 7, "tokenLimit": 8000, "includeSubdirectories": false },
+  "longTermMemory": { "tokenLimit": 7000 },
+  "totalTokenBudget": 30000
+}
+```
+
+Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to check consumption.

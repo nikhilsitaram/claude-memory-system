@@ -14,7 +14,7 @@ Usage:
 The script will:
 1. Normalize the path (expand ~, resolve to absolute)
 2. Look up the project in projects-index.json (case-insensitive)
-3. Output daily summaries for the last 14 work days
+3. Output daily summaries for the last N work days (default from settings or 7)
 """
 
 import sys
@@ -22,11 +22,33 @@ import json
 from pathlib import Path
 
 
-def load_project_memory(project_path: str, max_days: int = 14) -> str:
+def get_default_days() -> int:
+    """Get default project days from settings, or 7 if not configured."""
+    settings_file = Path.home() / ".claude" / "memory" / "settings.json"
+    try:
+        if settings_file.exists():
+            with open(settings_file) as f:
+                settings = json.load(f)
+            return settings.get("projectMemory", {}).get("workingDays", 7)
+    except (json.JSONDecodeError, IOError):
+        pass
+    return 7
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate tokens from text (1 token ≈ 4 characters)."""
+    return len(text) // 4
+
+
+def load_project_memory(project_path: str, max_days: int = None) -> str:
     """Load project memory and return as formatted string."""
     memory_dir = Path.home() / ".claude" / "memory"
     index_file = memory_dir / "projects-index.json"
     daily_dir = memory_dir / "daily"
+
+    # Use settings default if not specified
+    if max_days is None:
+        max_days = get_default_days()
 
     # Normalize path
     project_path = Path(project_path).expanduser().resolve()
@@ -64,7 +86,8 @@ def load_project_memory(project_path: str, max_days: int = 14) -> str:
     # Get last N work days
     project_days = sorted(work_days, reverse=True)[:max_days]
 
-    # Build output
+    # Build output and track tokens
+    total_content = ""
     lines = [
         f"## Project Memory: {project_name}",
         f"**Path**: {project['originalPath']}",
@@ -76,13 +99,19 @@ def load_project_memory(project_path: str, max_days: int = 14) -> str:
     for date in sorted(project_days):
         daily_file = daily_dir / f"{date}.md"
         if daily_file.exists():
+            content = daily_file.read_text()
+            total_content += content
             lines.append(f"### {date}")
-            lines.append(daily_file.read_text())
+            lines.append(content)
             lines.append("")
         else:
             lines.append(f"### {date}")
             lines.append("(No daily summary found)")
             lines.append("")
+
+    # Add token estimate
+    estimated_tokens = estimate_tokens(total_content)
+    lines.insert(3, f"**Estimated Tokens**: ~{estimated_tokens:,}")
 
     return "\n".join(lines)
 
@@ -116,11 +145,13 @@ def list_projects() -> str:
 
 
 def main():
+    default_days = get_default_days()
+
     if len(sys.argv) < 2 or sys.argv[1] in ["-h", "--help"]:
         print(__doc__)
-        print("\nOptions:")
-        print("  --list    List all known projects")
-        print("  --days N  Load last N work days (default: 14)")
+        print(f"\nOptions:")
+        print(f"  --list    List all known projects")
+        print(f"  --days N  Load last N work days (default: {default_days} from settings)")
         sys.exit(0)
 
     # Handle --list flag
@@ -129,7 +160,7 @@ def main():
         sys.exit(0)
 
     # Parse optional --days argument
-    max_days = 14
+    max_days = None  # Will use settings default
     project_path = sys.argv[1]
 
     if len(sys.argv) >= 4 and sys.argv[2] == "--days":
