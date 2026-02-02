@@ -15,6 +15,7 @@ Usage:
 The script will NOT delete your memory data. To fully remove:
     rm -rf ~/.claude/memory
     rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}
+    rm -f ~/.claude/hooks/pretooluse-allow-memory.sh
     rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py
 
 Requirements: Python 3.9+
@@ -62,11 +63,12 @@ def remove_hooks(settings: dict) -> dict:
         "recover-transcripts.sh",
         "load_memory.py",
         "save_session.py",
+        "pretooluse-allow-memory.sh",
     ]
 
     removed_count = 0
 
-    for event in ["SessionStart", "SessionEnd", "PreCompact"]:
+    for event in ["SessionStart", "SessionEnd", "PreCompact", "PreToolUse"]:
         if event not in settings["hooks"]:
             continue
 
@@ -194,6 +196,7 @@ def print_cleanup_instructions() -> None:
     print()
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}")
+    print("  rm -f ~/.claude/hooks/pretooluse-allow-memory.sh")
     print("  rm ~/.claude/scripts/memory_utils.py")
     print("  rm ~/.claude/scripts/load_memory.py")
     print("  rm ~/.claude/scripts/save_session.py")

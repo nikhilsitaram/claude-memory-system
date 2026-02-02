@@ -226,28 +226,39 @@ The recovery checks for transcript files in `~/.claude/projects/` that are older
 
 ## Subagent Considerations
 
-The `/synthesize` skill runs via a background subagent (Task tool) to avoid bloating the main conversation context. Key learnings:
+The `/synthesize` skill runs via a background subagent (Task tool) to avoid bloating the main conversation context.
 
-### Permission Patterns
-- **Use absolute paths**: Subagents don't expand `~` the same way as the parent session. Use `$HOME` or full paths.
-- **Include explicit patterns**: Both `**` (recursive) and `*` (direct) patterns for reliability. Claude Code's glob matching can be strict.
-- **Avoid chained commands**: Permissions like `Bash(rm file && rmdir dir)` don't match. Use single commands like `rm -rf dir/`.
+### PreToolUse Hook for Auto-Approval
 
-### SKILL.md Instructions
-When updating skills that run as subagents, be explicit about command formats:
-```markdown
-# Good - matches permission pattern
-Delete transcripts: `rm -rf ~/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved)
+Built-in subagents don't inherit permissions from `settings.json` (GitHub issues #10906, #11934, #18172, #18950). The memory system works around this using a **PreToolUse hook** that auto-approves memory-related operations.
 
-# Bad - chained command won't match permissions
-Delete transcripts: `rm file.jsonl && rmdir dir/`
+The hook (`~/.claude/hooks/pretooluse-allow-memory.sh`) checks if the operation targets:
+- `.claude/memory` paths (Read/Edit/Write/Bash)
+- Memory system skills (synthesize, remember, recall, reload, settings)
+- Task tool with memory-related prompts
+- `indexing.py` script operations
+
+For these operations, it returns `{"permissionDecision": "allow"}` to bypass the permission prompt.
+
+### How It Works
+
+```
+Subagent calls Edit tool
+    ↓
+PreToolUse hook runs (matcher: "*")
+    ↓
+Hook checks if path contains .claude/memory
+    ↓
+If yes: returns {"permissionDecision": "allow"} → tool runs without prompt
+If no: returns nothing → normal permission flow (existing settings.json permissions apply)
 ```
 
-### Testing Subagent Permissions
-1. Create a test transcript in `~/.claude/memory/transcripts/`
-2. Spawn a subagent via Task tool to run /synthesize
-3. Watch for permission prompts - if prompted, the pattern doesn't match
-4. Adjust permissions or skill instructions accordingly
+### Key Learnings
+
+- **PermissionRequest hooks don't work for subagents** - they have the same inheritance bug
+- **PreToolUse hooks DO work** - they run before the tool executes and can override permission decisions
+- **Use `"allow"` not `"ask"`** - "ask" forwards to foreground but still prompts; "allow" auto-approves
+- **Hook must be in settings.json** - agent override files (`.claude/agents/`) don't reliably load for built-in agents
 
 ## Permission Path Formats
 

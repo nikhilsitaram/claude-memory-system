@@ -134,6 +134,7 @@ def create_directories() -> None:
         get_memory_dir() / "transcripts",
         get_memory_dir() / "project-memory",
         get_claude_dir() / "scripts",
+        get_claude_dir() / "hooks",
         get_claude_dir() / "skills" / "remember",
         get_claude_dir() / "skills" / "synthesize",
         get_claude_dir() / "skills" / "recall",
@@ -169,6 +170,26 @@ def copy_scripts(script_dir: Path) -> None:
                 dest.chmod(dest.stat().st_mode | 0o755)
 
     print("Copied scripts to ~/.claude/scripts/")
+
+
+def copy_hooks(script_dir: Path) -> None:
+    """Copy hook scripts to ~/.claude/hooks/."""
+    dest_dir = get_claude_dir() / "hooks"
+
+    hooks_to_copy = [
+        "pretooluse-allow-memory.sh",
+    ]
+
+    for hook_name in hooks_to_copy:
+        src = script_dir / "hooks" / hook_name
+        if src.exists():
+            dest = dest_dir / hook_name
+            shutil.copy2(src, dest)
+            # Make executable on Unix
+            if os.name != "nt":
+                dest.chmod(dest.stat().st_mode | 0o755)
+
+    print("Copied hooks to ~/.claude/hooks/")
 
 
 def copy_skills(script_dir: Path) -> None:
@@ -269,8 +290,23 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
     """Merge memory system hooks into settings."""
     home = str(Path.home())
     scripts_dir = f"{home}/.claude/scripts"
+    hooks_dir = f"{home}/.claude/hooks"
 
     hooks_to_add = {
+        # PreToolUse hook auto-allows memory operations for subagents
+        # This works around Claude Code bug where subagents don't inherit permissions
+        # (GitHub issues #10906, #11934, #18172, #18950)
+        "PreToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"bash {hooks_dir}/pretooluse-allow-memory.sh",
+                    }
+                ],
+            }
+        ],
         "SessionStart": [
             {
                 "matcher": "startup",
@@ -533,6 +569,7 @@ def main() -> int:
 
     # Copy files
     copy_scripts(script_dir)
+    copy_hooks(script_dir)
     copy_skills(script_dir)
     copy_templates(script_dir)
 
