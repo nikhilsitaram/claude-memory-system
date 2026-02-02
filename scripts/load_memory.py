@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""
+SessionStart hook - loads memory context for Claude Code.
+
+This script runs on: startup, resume, clear, compact
+
+It performs:
+1. Orphan transcript recovery (inline, replaces cron job)
+2. Loads global long-term memory
+3. Loads project-specific long-term memory (if applicable)
+4. Loads recent daily summaries (working days)
+5. Loads project history (days worked in this project)
+6. Checks for pending transcripts and prompts for synthesis
+
+Output is printed to stdout and injected into Claude Code's context.
+
+Requirements: Python 3.9+
+"""
+
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+# Add scripts directory to path for local imports
+script_dir = Path(__file__).parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+
+from memory_utils import (
+    check_python_version,
+    get_memory_dir,
+    get_daily_dir,
+    get_transcripts_dir,
+    get_project_memory_dir,
+    get_projects_dir,
+    get_global_memory_file,
+    get_projects_index_file,
+    get_captured_sessions,
+    add_captured_session,
+    load_settings,
+    load_json_file,
+    estimate_tokens,
+    estimate_file_tokens,
+    project_name_to_filename,
+    get_working_days,
+    FileLock,
+)
+
+# Minimum age for orphan transcripts (seconds) - 30 minutes
+ORPHAN_MIN_AGE = 30 * 60
+
+
+def recover_orphan_transcripts() -> int:
+    """
+    Recover orphaned transcripts from ungraceful session exits.
+
+    Scans ~/.claude/projects/ for transcript files older than 30 minutes
+    that haven't been captured yet.
+
+    Returns number of recovered transcripts.
+    """
+    projects_dir = get_projects_dir()
+    transcripts_dir = get_transcripts_dir()
+
+    if not projects_dir.exists():
+        return 0
+
+    captured = get_captured_sessions()
+    recovered_count = 0
+    current_time = time.time()
+
+    # Use lock to prevent race conditions with other recovery processes
+    lock_path = get_memory_dir() / ".recovery.lock"
+    try:
+        with FileLock(lock_path, timeout=5):
+            # Find all .jsonl files in projects directory
+            for jsonl_file in projects_dir.rglob("*.jsonl"):
+                # Skip subagent files
+                if "subagent" in str(jsonl_file).lower():
+                    continue
+
+                # Check file age
+                try:
+                    file_mtime = jsonl_file.stat().st_mtime
+                    file_age = current_time - file_mtime
+                    if file_age < ORPHAN_MIN_AGE:
+                        continue
+                except OSError:
+                    continue
+
+                # Extract session ID
+                session_id = jsonl_file.stem
+
+                # Skip if already captured
+                if session_id in captured:
+                    continue
+
+                # Determine date from file modification time
+                file_date = datetime.fromtimestamp(file_mtime).strftime("%Y-%m-%d")
+                file_time = datetime.fromtimestamp(file_mtime).strftime("%H-%M-%S")
+
+                # Create destination directory and copy
+                dest_dir = transcripts_dir / file_date
+                dest_dir.mkdir(parents=True, exist_ok=True)
+
+                dest_file = dest_dir / f"{file_time}_recovered.jsonl"
+
+                try:
+                    # Copy file content
+                    content = jsonl_file.read_bytes()
+                    dest_file.write_bytes(content)
+                    add_captured_session(session_id)
+                    recovered_count += 1
+                except IOError:
+                    continue
+
+    except TimeoutError:
+        # Another recovery process is running, skip
+        pass
+
+    return recovered_count
+
+
+def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
+    """
+    Find the project matching the current working directory.
+
+    Returns project dict with 'name', 'originalPath', 'workDays' or None.
+    """
+    projects = projects_index.get("projects", {})
+    pwd_lower = pwd.lower()
+
+    if include_subdirs:
+        # Match if PWD starts with any known project path (longest match wins)
+        best_match = None
+        best_length = 0
+
+        for path_key, project in projects.items():
+            if pwd_lower.startswith(path_key) or pwd_lower == path_key:
+                if len(path_key) > best_length:
+                    best_match = project
+                    best_length = len(path_key)
+
+        return best_match
+    else:
+        # Exact match only
+        return projects.get(pwd_lower)
+
+
+def load_global_memory() -> tuple[str, int]:
+    """Load global long-term memory file. Returns (content, bytes)."""
+    global_file = get_global_memory_file()
+    if not global_file.exists():
+        return "", 0
+
+    try:
+        content = global_file.read_text(encoding="utf-8")
+        return content, len(content.encode("utf-8"))
+    except IOError:
+        return "", 0
+
+
+def load_project_memory(project_name: str) -> tuple[str, int]:
+    """Load project-specific long-term memory. Returns (content, bytes)."""
+    project_memory_dir = get_project_memory_dir()
+    filename = project_name_to_filename(project_name)
+    project_file = project_memory_dir / filename
+
+    if not project_file.exists():
+        return "", 0
+
+    try:
+        content = project_file.read_text(encoding="utf-8")
+        return content, len(content.encode("utf-8"))
+    except IOError:
+        return "", 0
+
+
+def load_daily_summaries(days_limit: int) -> tuple[list[tuple[str, str]], int]:
+    """
+    Load recent daily summaries.
+
+    Returns (list of (date, content) tuples, total bytes).
+    """
+    daily_dir = get_daily_dir()
+    working_days = get_working_days(days_limit)
+    summaries = []
+    total_bytes = 0
+
+    for date in working_days:
+        daily_file = daily_dir / f"{date}.md"
+        if daily_file.exists():
+            try:
+                content = daily_file.read_text(encoding="utf-8")
+                summaries.append((date, content))
+                total_bytes += len(content.encode("utf-8"))
+            except IOError:
+                continue
+
+    return summaries, total_bytes
+
+
+def load_project_history(
+    project: dict, loaded_dates: set[str], days_limit: int
+) -> tuple[list[tuple[str, str]], int]:
+    """
+    Load project-specific work history (days worked in this project).
+
+    Excludes dates already loaded in daily summaries.
+    Returns (list of (date, content) tuples, total bytes).
+    """
+    daily_dir = get_daily_dir()
+    work_days = project.get("workDays", [])
+
+    if not work_days:
+        return [], 0
+
+    # Get project days not already loaded, most recent first, up to limit
+    project_days = [d for d in sorted(work_days, reverse=True) if d not in loaded_dates][:days_limit]
+
+    summaries = []
+    total_bytes = 0
+
+    # Output oldest first for chronological reading
+    for date in sorted(project_days):
+        daily_file = daily_dir / f"{date}.md"
+        if daily_file.exists():
+            try:
+                content = daily_file.read_text(encoding="utf-8")
+                summaries.append((date, content))
+                total_bytes += len(content.encode("utf-8"))
+            except IOError:
+                continue
+
+    return summaries, total_bytes
+
+
+def count_pending_transcripts() -> int:
+    """Count number of pending (unprocessed) transcript files."""
+    transcripts_dir = get_transcripts_dir()
+    if not transcripts_dir.exists():
+        return 0
+
+    count = 0
+    for jsonl_file in transcripts_dir.rglob("*.jsonl"):
+        count += 1
+
+    return count
+
+
+def main() -> None:
+    """Main entry point - outputs memory context to stdout."""
+    check_python_version()
+
+    # Run orphan recovery silently (errors logged to stderr only)
+    try:
+        recover_orphan_transcripts()
+    except Exception as e:
+        print(f"<!-- Recovery error: {e} -->", file=sys.stderr)
+
+    # Load settings
+    settings = load_settings()
+    short_term_days = settings["shortTermMemory"]["workingDays"]
+    project_days = settings["projectMemory"]["workingDays"]
+    include_subdirs = settings["projectMemory"]["includeSubdirectories"]
+    total_budget = settings["totalTokenBudget"]
+
+    # Track total bytes for token estimation
+    total_bytes = 0
+
+    # Start output
+    print("<memory>")
+
+    # Check for pending transcripts
+    pending_count = count_pending_transcripts()
+    if pending_count > 0:
+        print("## AUTO-SYNTHESIZE REQUIRED")
+        print(f"There are {pending_count} unprocessed session transcripts.")
+        print()
+        print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts:")
+        print("```")
+        print('Use the Task tool with subagent_type="general-purpose" and this prompt:')
+        print('"Process pending memory transcripts using the /synthesize skill instructions.')
+        print("Read ~/.claude/skills/synthesize/SKILL.md for the full process.")
+        print("Extract transcripts, create daily summaries, update long-term memory files,")
+        print('and delete processed transcript files. Return a brief summary of what was processed."')
+        print("```")
+        print()
+
+    # Load global long-term memory
+    global_content, global_bytes = load_global_memory()
+    total_bytes += global_bytes
+
+    if global_content:
+        print("## Long-Term Memory")
+        print(global_content)
+        print()
+
+    # Detect current project
+    pwd = os.getcwd()
+    projects_index = load_json_file(get_projects_index_file(), {})
+    current_project = find_current_project(projects_index, pwd, include_subdirs)
+
+    # Load project-specific long-term memory
+    if current_project:
+        project_name = current_project.get("name", "")
+        if project_name:
+            project_content, project_bytes = load_project_memory(project_name)
+            total_bytes += project_bytes
+
+            if project_content:
+                print(f"## Project Long-Term Memory: {project_name}")
+                print(project_content)
+                print()
+
+    # Load recent daily summaries
+    daily_summaries, daily_bytes = load_daily_summaries(short_term_days)
+    total_bytes += daily_bytes
+
+    # Track loaded dates for project history deduplication
+    loaded_dates = set(date for date, _ in daily_summaries)
+
+    print("## Recent Sessions")
+    for date, content in daily_summaries:
+        print(f"### {date}")
+        print(content)
+        print()
+
+    # Load project-specific history (additional days from this project)
+    if current_project:
+        project_name = current_project.get("name", "unknown")
+        project_history, history_bytes = load_project_history(
+            current_project, loaded_dates, project_days
+        )
+        total_bytes += history_bytes
+
+        if project_history:
+            print(f"## Project History: {project_name} (Last {project_days} Work Days)")
+            print()
+            for date, content in project_history:
+                print(f"### {date}")
+                print(content)
+                print()
+
+    print("</memory>")
+
+    # Token estimation (informational)
+    estimated_tokens = total_bytes // 4
+    if estimated_tokens > total_budget:
+        print(f"<!-- Memory usage: ~{estimated_tokens} tokens (budget: {total_budget}) -->")
+        print("<!-- Consider running /synthesize to consolidate older sessions -->")
+
+
+if __name__ == "__main__":
+    main()

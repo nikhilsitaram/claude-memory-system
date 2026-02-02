@@ -10,7 +10,7 @@ Process memory transcripts into compact daily summaries and route learnings to a
 
 ## Quick Start (for subagent execution)
 
-1. Run extraction: `python3 ~/.claude/skills/synthesize/extract_transcripts.py`
+1. Run extraction: `python3 ~/.claude/scripts/indexing.py extract`
 2. For each day in output, create/update `~/.claude/memory/daily/YYYY-MM-DD.md` (include `## Learnings` section)
 3. Route learnings to long-term memory (see Phase 2)
 4. Delete processed transcripts: `rm -rf $HOME/.claude/memory/transcripts/YYYY-MM-DD/` (pre-approved permission - must use $HOME, not ~)
@@ -25,7 +25,7 @@ Process memory transcripts into compact daily summaries and route learnings to a
 Before processing transcripts, rebuild the project-to-work-days index:
 
 ```bash
-python3 ~/.claude/skills/synthesize/build_projects_index.py
+python3 ~/.claude/scripts/indexing.py build-index
 ```
 
 This enables project-aware memory loading by scanning `sessions-index.json` files
@@ -36,10 +36,9 @@ and mapping projects to their work days.
 **Important**: Transcript files are JSONL format (one JSON object per line).
 Each line is a JSON object with conversation data.
 
-1. List all directories in `~/.claude/memory/transcripts/`
+1. List pending days: `python3 ~/.claude/scripts/indexing.py list-pending`
 2. For each day with transcript files (.jsonl):
-   - Read and parse the JSONL files (each line is a JSON object)
-   - Extract the conversation content from the JSON
+   - Extract transcripts: `python3 ~/.claude/scripts/indexing.py extract YYYY-MM-DD`
    - Create a summary in `~/.claude/memory/daily/YYYY-MM-DD.md`
    - Include: topics discussed, decisions made, problems solved, key learnings
    - Preserve any existing user notes (## HH:MM - User Note sections)
@@ -176,7 +175,7 @@ After creating/updating daily summaries, route learnings to appropriate files:
 
 ### Also Update User Profile Sections
 
-In addition to routing tagged learnings, continue updating LONG_TERM.md/global-long-term-memory.md sections:
+In addition to routing tagged learnings, continue updating global-long-term-memory.md sections:
 - `## About Me` - User preferences, communication style
 - `## Current Projects` - Active work with context
 - `## Technical Environment` - Tools, systems, workflows
@@ -213,19 +212,25 @@ In addition to routing tagged learnings, continue updating LONG_TERM.md/global-l
 - [Any notable files created or modified]
 ```
 
-## Extraction Script
+## Extraction Commands
 
-Use the included extraction script to parse transcripts:
+Use the indexing script to parse transcripts:
 
 ```bash
-# Extract all days
-python3 ~/.claude/skills/synthesize/extract_transcripts.py
+# List days with pending transcripts
+python3 ~/.claude/scripts/indexing.py list-pending
+
+# Extract all pending days
+python3 ~/.claude/scripts/indexing.py extract
 
 # Extract specific day
-python3 ~/.claude/skills/synthesize/extract_transcripts.py 2026-01-22
+python3 ~/.claude/scripts/indexing.py extract 2026-01-22
 
 # Save to file for review
-python3 ~/.claude/skills/synthesize/extract_transcripts.py --output /tmp/transcripts.txt
+python3 ~/.claude/scripts/indexing.py extract --output /tmp/transcripts.txt
+
+# Output as JSON (for programmatic use)
+python3 ~/.claude/scripts/indexing.py extract --json
 ```
 
 The script handles:
@@ -250,10 +255,10 @@ To load project history for any project (regardless of current directory):
 python3 ~/.claude/scripts/load-project-memory.py --list
 
 # Load memory for a specific project
-python3 ~/.claude/scripts/load-project-memory.py ~/personal/personal-shopper
+python3 ~/.claude/scripts/load-project-memory.py ~/personal/cartwheel
 
-# Load more/fewer work days (default is 14)
-python3 ~/.claude/scripts/load-project-memory.py ~/claude-code/projects/granada --days 7
+# Load more/fewer work days (default is from settings)
+python3 ~/.claude/scripts/load-project-memory.py ~/projects/granada --days 7
 ```
 
 ## Directory Structure

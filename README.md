@@ -10,10 +10,11 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 - **Project-aware loading**: Automatically loads project-specific history (configurable days) when working in a known project directory
 - **Configurable settings**: Token budgets, working days, and subdirectory matching via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
-- **Recovery**: Orphaned transcripts from ungraceful exits are recovered via cron job
+- **Recovery**: Orphaned transcripts from ungraceful exits are recovered automatically on session start
 - **Auto-synthesize prompt**: Unprocessed transcripts trigger reminder at session start
 - **Manual notes**: `/remember` for specific highlights
 - **Historical search**: `/recall` for searching older memory
+- **Cross-platform**: Works on Windows, macOS, and Linux (Python 3.9+ required)
 - **Shareable**: One-command installation for teammates
 
 ## Installation
@@ -21,7 +22,7 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 ```bash
 git clone https://github.com/nikhilsitaram/claude-memory-system.git
 cd claude-memory-system
-./install.sh
+python3 install.py    # or: python install.py
 ```
 
 Start a new Claude Code session to activate the memory system.
@@ -37,23 +38,18 @@ The installer automatically adds these permissions so Claude can manage memory f
 
 ## Requirements
 
-- Claude Code CLI installed and run at least once (`~/.claude` must exist)
-- `jq` command-line JSON processor
-- cron daemon (for recovery of ungraceful exits)
+- **Python 3.9+** - Required for all platforms
+- **Claude Code CLI** - Must be installed and run at least once (`~/.claude` must exist)
 
-### WSL Users
+### Platform Notes
 
-The cron daemon may not be running by default. To start it:
+| Platform | Notes |
+|----------|-------|
+| **Linux** | Fully supported. Use `python3 install.py`. |
+| **macOS** | Fully supported. Use `python3 install.py`. |
+| **Windows** | Best-effort support. Use `python install.py`. Recommended: Use WSL for guaranteed compatibility. |
 
-```bash
-sudo service cron start
-```
-
-To auto-start cron, add to your `~/.bashrc`:
-
-```bash
-sudo service cron start 2>/dev/null
-```
+The installer automatically detects your Python command (`python3` vs `python`) and configures hooks with absolute paths for cross-platform compatibility.
 
 ## Commands
 
@@ -71,11 +67,10 @@ sudo service cron start 2>/dev/null
 
 ### Session Lifecycle
 
-1. **Session Start**: Loads long-term memory, last 7 days of daily summaries, and project-specific history
+1. **Session Start**: Loads long-term memory, last 7 days of daily summaries, and project-specific history. Also recovers any orphaned transcripts from previous ungraceful exits.
 2. **During Session**: Use `/remember` to capture important notes; Claude proactively uses `/recall` when historical context would help
 3. **Before Compaction**: Transcript saved (both manual `/compact` and automatic compaction)
 4. **Session End**: Transcript automatically saved to `~/.claude/memory/transcripts/`
-5. **Recovery**: Hourly cron job recovers any missed transcripts from ungraceful exits
 
 ### Project-Aware Memory Loading
 
@@ -166,16 +161,15 @@ Run `/synthesize` periodically (weekly recommended) to:
 
 ```bash
 cd claude-memory-system
-./uninstall.sh
+python3 uninstall.py    # or: python uninstall.py
 ```
 
-This removes the cron job and hooks but preserves your memory data and settings. To fully remove:
+This removes hooks and permissions but preserves your memory data and settings. To fully remove:
 
 ```bash
 rm -rf ~/.claude/memory
 rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}
-rm ~/.claude/scripts/{load-memory,save-session,recover-transcripts}.sh
-rm ~/.claude/scripts/load-project-memory.py
+rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py
 ```
 
 ## Updates
@@ -183,8 +177,10 @@ rm ~/.claude/scripts/load-project-memory.py
 ```bash
 cd claude-memory-system
 git pull
-./install.sh
+python3 install.py    # or: python install.py
 ```
+
+The installer is idempotent and handles migrations from previous versions (including the bash-based version).
 
 ## File Locations
 
@@ -196,7 +192,15 @@ git pull
 | Scripts | `~/.claude/scripts/` |
 | Skills | `~/.claude/skills/` |
 | Claude settings | `~/.claude/settings.json` |
-| Recovery log | `~/.claude/memory/recovery.log` |
+
+## Migration from Bash Version
+
+If you previously installed the bash-based version (install.sh), the Python installer will:
+
+1. Remove old bash hooks (load-memory.sh, save-session.sh)
+2. Remove the cron job (recovery now runs on SessionStart)
+3. Add new Python hooks
+4. Preserve all your memory data
 
 ## License
 

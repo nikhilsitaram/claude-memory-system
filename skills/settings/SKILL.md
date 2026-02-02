@@ -35,7 +35,7 @@ When the user invokes this skill:
 | Project working days | 7 | Project-specific history days |
 | Project token limit | 8,000 | Soft limit for project memory |
 | Include subdirectories | false | Match subdirs to parent project |
-| Long-term token limit | 7,000 | Soft limit for LONG_TERM.md |
+| Long-term token limit | 7,000 | Soft limit for global-long-term-memory.md |
 | Total token budget | 30,000 | Overall memory budget |
 
 Settings file: `~/.claude/memory/settings.json`
@@ -45,9 +45,9 @@ Settings file: `~/.claude/memory/settings.json`
 
 1. Read the settings file for limits
 2. Calculate actual token usage:
-   - LONG_TERM.md: `wc -c` / 4
-   - Daily files (last N working days): sum of `wc -c` / 4
-   - Project files (if applicable): sum of `wc -c` / 4
+   - global-long-term-memory.md: `wc -c` / 4
+   - Daily files (last N working days): sum of file sizes / 4
+   - Project files (if applicable): sum of file sizes / 4
 3. Display usage report:
 
 ```
@@ -63,16 +63,23 @@ Settings file: `~/.claude/memory/settings.json`
 ✓ = Within limit, ⚠ = Over limit (soft warning)
 ```
 
-Use this bash command to get file sizes:
-```bash
+Use Python for file size calculation:
+```python
+import os
+from pathlib import Path
+
+memory_dir = Path.home() / ".claude" / "memory"
+
 # Long-term
-wc -c ~/.claude/memory/LONG_TERM.md
+global_memory = memory_dir / "global-long-term-memory.md"
+if global_memory.exists():
+    long_term_tokens = global_memory.stat().st_size // 4
 
-# Daily files (most recent N)
-ls -1 ~/.claude/memory/daily/*.md | sort -r | head -n 7 | xargs wc -c
-
-# Total daily directory
-du -sb ~/.claude/memory/daily/
+# Daily files (list, sort, take latest N)
+daily_dir = memory_dir / "daily"
+if daily_dir.exists():
+    daily_files = sorted(daily_dir.glob("*.md"), reverse=True)[:7]
+    short_term_tokens = sum(f.stat().st_size for f in daily_files) // 4
 ```
 
 ### For `/settings set <path> <value>`:
