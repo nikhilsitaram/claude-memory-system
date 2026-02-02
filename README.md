@@ -26,10 +26,12 @@ Start a new Claude Code session to activate the memory system.
 
 The installer automatically adds these permissions so Claude can manage memory files without prompting:
 
-- `Read(~/.claude/**)` - Read memory files
-- `Edit(~/.claude/memory/**)` - Edit daily summaries and long-term memory
-- `Write(~/.claude/memory/**)` - Create new daily summaries
-- `Bash(rm -rf ~/.claude/memory/transcripts/*)` - Delete processed transcripts
+- `Read($HOME/.claude/**)` - Read memory files
+- `Edit($HOME/.claude/memory/**)` - Edit daily summaries and long-term memory
+- `Write($HOME/.claude/memory/**)` - Create new daily summaries
+- `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
+
+Note: Permissions use absolute paths (not `~`) for subagent compatibility. Subagents spawned via the Task tool don't expand `~` the same way as the parent session.
 
 ## Requirements
 
