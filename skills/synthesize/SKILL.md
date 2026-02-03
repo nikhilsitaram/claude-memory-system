@@ -45,6 +45,51 @@ python3 $HOME/.claude/scripts/indexing.py build-index
 
 ---
 
+## Compactness Guidelines (CRITICAL)
+
+Daily summaries should be **1-4 KB** (250-1000 tokens). Apply these rules:
+
+### 1. Final Solutions Only
+- **DO NOT** document debugging iterations, failed approaches, or troubleshooting steps
+- **DO** document the final working solution and the key insight that led to it
+- If debugging revealed an important lesson, distill it to one learning entry
+
+**Bad** (too detailed):
+```
+First tried PermissionRequest hooks - patterns didn't match.
+Then tried Python script for PermissionRequest - hooks not triggered.
+Then tried agent override files - not picked up by subagents.
+Finally PreToolUse hooks worked because they run before permission check.
+```
+
+**Good** (distilled):
+```
+PreToolUse hooks work for subagent permissions (unlike PermissionRequest hooks)
+```
+
+### 2. Significant Commits Only
+- Include only the **final commit** for each feature/fix
+- Omit intermediate commits, fixups, and iterations
+- One commit hash per logical change is sufficient
+
+**Bad**: `Commits: baaab70, 7c1d8cc, f3b1eb2, 6791763, ea83b7f`
+**Good**: `Commit: ea83b7f - "fix: Simplify PreCompact hook"`
+
+### 3. Consolidate Redundant Content
+- If the same concept appears multiple times in transcripts, write it **once**
+- Merge related topics into single sections
+- Don't repeat information that's already in long-term memory
+
+### 4. Learnings: One Per Concept
+- Each learning should capture a **unique** insight
+- If two learnings teach the same lesson, keep only the clearer one
+- Learnings should be actionable, not narrative
+
+### 5. Omit Routine Details
+- Don't list every file modified (unless significant)
+- Don't document standard workflows (git commands, tool usage)
+- Don't include conversation back-and-forth
+
 ## Detailed Process (three phases):
 
 ## Phase 0: Update Project Index
@@ -210,34 +255,37 @@ In addition to routing tagged learnings, continue updating global-long-term-memo
 
 ## Output Format for Daily Summary
 
+**Target size: 1-4 KB** (250-1000 tokens). Most days should be under 2 KB.
+
 ```markdown
 # YYYY-MM-DD
 
 <!-- projects: project-name-1, project-name-2 -->
 
 ## Sessions Summary
-[Brief overview of what was discussed across sessions]
+[1-2 sentences: what was accomplished]
 
 ## Topics
 - [Topic 1]
 - [Topic 2]
 
 ## Key Points
-- [Important insights]
-
-## Decisions Made
-- [Any decisions or conclusions]
+[Only decisions, outcomes, and insights - not process details]
 
 ## Learnings
-- **[Title]** [scope/type]: [What happened]
-  - Lesson: [What to remember]
-
-## Technical Details
-- [Specific technical information worth preserving]
-
-## Files Created
-- [Any notable files created or modified]
+- **[Title]** [scope/type]: [Brief description]
+  - Lesson: [Actionable takeaway]
 ```
+
+**Optional sections** (include only if relevant):
+- `## Commits` - Only significant commits (1-3 max per topic)
+- `## Files Created` - Only if notable new files were created
+
+**Omit these sections** (they add bulk without value):
+- Detailed technical steps (belongs in docs, not daily summary)
+- Debugging narratives
+- File modification lists
+- Conversation summaries
 
 ## Extraction Commands
 
