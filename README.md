@@ -27,14 +27,29 @@ python3 install.py    # or: python install.py
 
 Start a new Claude Code session to activate the memory system.
 
-The installer automatically adds these permissions so Claude can manage memory files without prompting:
+## Permissions
 
-- `Read($HOME/.claude/**)` - Read memory files
-- `Edit($HOME/.claude/memory/**)`, `Edit($HOME/.claude/memory/*)`, `Edit($HOME/.claude/memory/daily/*)`, `Edit($HOME/.claude/memory/project-memory/*)` - Edit memory files
-- `Write($HOME/.claude/memory/**)`, `Write($HOME/.claude/memory/*)`, `Write($HOME/.claude/memory/daily/*)`, `Write($HOME/.claude/memory/project-memory/*)` - Write memory files
-- `Bash(rm -rf $HOME/.claude/memory/transcripts/*)` - Delete processed transcripts
+The memory system uses a **PreToolUse hook** to auto-approve memory operations without prompting. This approach works around a Claude Code limitation where subagents don't inherit permissions from `settings.json` ([GitHub #10906](https://github.com/anthropics/claude-code/issues/10906)).
 
-**Why so many patterns?** Permissions use absolute paths (not `~`) and include both recursive (`**`) and direct (`*`) patterns for subagent compatibility. Subagents spawned via the Task tool have stricter permission matching.
+### How It Works
+
+When Claude (or a subagent) calls a tool that targets memory files:
+
+1. The PreToolUse hook (`~/.claude/hooks/pretooluse-allow-memory.sh`) runs before the tool executes
+2. The hook checks if the operation targets `.claude/memory` paths
+3. If yes, it returns `{"permissionDecision": "allow"}` to auto-approve
+4. If no, normal permission flow applies
+
+### What's Auto-Approved
+
+- **Read/Edit/Write** operations on `~/.claude/memory/**`
+- **Skill invocations** for memory skills (synthesize, remember, recall, reload, settings)
+- **Task tool** calls with memory-related prompts
+- **Python operations** using `indexing.py`
+
+The installer also adds minimal Read permissions for fallback:
+- `Read(~/.claude/**)` - Read memory and skill files
+- `Read(//{home}/.claude/projects/**)` - Read project transcripts for orphan recovery
 
 ## Requirements
 
@@ -119,12 +134,13 @@ Configure the memory system via `~/.claude/memory/settings.json`:
 ```json
 {
   "shortTermMemory": {
-    "workingDays": 7,
+    "calendarDays": 7,
     "tokenLimit": 15000
   },
   "projectMemory": {
     "workingDays": 7,
-    "tokenLimit": 8000,
+    "dailyTokenLimit": 5000,
+    "longTermTokenLimit": 3000,
     "includeSubdirectories": false
   },
   "longTermMemory": {
@@ -136,9 +152,12 @@ Configure the memory system via `~/.claude/memory/settings.json`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `shortTermMemory.workingDays` | 7 | Number of recent working days to load |
-| `projectMemory.workingDays` | 7 | Number of project-specific days to load |
+| `shortTermMemory.calendarDays` | 7 | Recent calendar days of daily summaries to load |
+| `projectMemory.workingDays` | 7 | Project-specific days to load (only days with activity) |
 | `projectMemory.includeSubdirectories` | false | Match subdirs to parent project |
+| `projectMemory.dailyTokenLimit` | 5000 | Token limit for project daily history |
+| `projectMemory.longTermTokenLimit` | 3000 | Token limit for project long-term memory |
+| `longTermMemory.tokenLimit` | 7000 | Token limit for global long-term memory |
 | `totalTokenBudget` | 30000 | Overall memory token budget (informational) |
 
 Token limits are soft warnings, not hard caps. Use `/settings usage` to check current token consumption.

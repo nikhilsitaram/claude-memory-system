@@ -193,7 +193,7 @@ This loads:
 
 **Working days vs calendar days**: The system scans existing daily files rather than looping through calendar dates. If you take days off, those empty days don't count against your quota.
 
-**Subdirectory matching**: By default disabled. Enable via `/settings set projectMemory.includeSubdirectories true` to match `/project/backend/` to `/project/`.
+**Subdirectory matching**: By default disabled. Enable via `/settings set projectSettings.includeSubdirectories true` to match `/project/backend/` to `/project/`.
 
 ## Settings Configuration
 
@@ -201,9 +201,11 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 
 ```json
 {
-  "shortTermMemory": { "workingDays": 7, "tokenLimit": 15000 },
-  "projectMemory": { "workingDays": 7, "tokenLimit": 8000, "includeSubdirectories": false },
-  "longTermMemory": { "tokenLimit": 7000 },
+  "globalShortTerm": { "workingDays": 7, "tokenLimit": 15000 },
+  "globalLongTerm": { "tokenLimit": 7000 },
+  "projectShortTerm": { "workingDays": 7, "tokenLimit": 5000 },
+  "projectLongTerm": { "tokenLimit": 3000 },
+  "projectSettings": { "includeSubdirectories": false },
   "totalTokenBudget": 30000
 }
 ```

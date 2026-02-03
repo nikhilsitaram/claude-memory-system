@@ -29,7 +29,7 @@ def get_default_days() -> int:
         if settings_file.exists():
             with open(settings_file) as f:
                 settings = json.load(f)
-            return settings.get("projectMemory", {}).get("workingDays", 7)
+            return settings.get("projectShortTerm", {}).get("workingDays", 7)
     except (json.JSONDecodeError, IOError):
         pass
     return 7

@@ -262,9 +262,9 @@ def main() -> None:
 
     # Load settings
     settings = load_settings()
-    short_term_days = settings["shortTermMemory"]["workingDays"]
-    project_days = settings["projectMemory"]["workingDays"]
-    include_subdirs = settings["projectMemory"]["includeSubdirectories"]
+    short_term_days = settings["globalShortTerm"]["workingDays"]
+    project_days = settings["projectShortTerm"]["workingDays"]
+    include_subdirs = settings["projectSettings"]["includeSubdirectories"]
     total_budget = settings["totalTokenBudget"]
 
     # Track total bytes for token estimation

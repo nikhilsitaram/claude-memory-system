@@ -86,18 +86,23 @@ def get_captured_file() -> Path:
 
 # Default settings
 DEFAULT_SETTINGS = {
-    "version": 1,
-    "shortTermMemory": {
+    "version": 3,
+    "globalShortTerm": {
         "workingDays": 7,
         "tokenLimit": 15000,
     },
-    "projectMemory": {
-        "workingDays": 7,
-        "tokenLimit": 8000,
-        "includeSubdirectories": False,
-    },
-    "longTermMemory": {
+    "globalLongTerm": {
         "tokenLimit": 7000,
+    },
+    "projectShortTerm": {
+        "workingDays": 7,
+        "tokenLimit": 5000,
+    },
+    "projectLongTerm": {
+        "tokenLimit": 3000,
+    },
+    "projectSettings": {
+        "includeSubdirectories": False,
     },
     "totalTokenBudget": 30000,
 }
@@ -148,7 +153,7 @@ def get_setting(path: str, default: Any = None) -> Any:
     """
     Get a nested setting by dot-notation path.
 
-    Example: get_setting("projectMemory.workingDays", 7)
+    Example: get_setting("projectShortTerm.workingDays", 7)
     """
     settings = load_settings()
     parts = path.split(".")
@@ -366,9 +371,9 @@ if __name__ == "__main__":
 
     settings = load_settings()
     print("Settings:")
-    print(f"  Short-term days: {settings['shortTermMemory']['workingDays']}")
-    print(f"  Project days:    {settings['projectMemory']['workingDays']}")
-    print(f"  Token budget:    {settings['totalTokenBudget']}")
+    print(f"  Global short-term days:  {settings['globalShortTerm']['workingDays']}")
+    print(f"  Project short-term days: {settings['projectShortTerm']['workingDays']}")
+    print(f"  Token budget:            {settings['totalTokenBudget']}")
     print()
 
     working_days = get_working_days(7)
