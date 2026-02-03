@@ -281,7 +281,7 @@ def main() -> None:
         print()
         print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts:")
         print("```")
-        print('Use the Task tool with subagent_type="general-purpose" and this prompt:')
+        print('Use the Task tool with subagent_type="general-purpose", model="haiku" and this prompt:')
         print('"Process pending memory transcripts using the /synthesize skill instructions.')
         print("Read ~/.claude/skills/synthesize/SKILL.md for the full process.")
         print("Extract transcripts, create daily summaries, update long-term memory files,")

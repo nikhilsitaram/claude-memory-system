@@ -67,6 +67,32 @@ def extract_text_content(content) -> str:
     return ""
 
 
+def should_skip_message(content: str) -> bool:
+    """
+    Filter out low-value messages from synthesis input.
+
+    Filters:
+    - Skill instruction injections (50%+ of typical extraction)
+    - System reminders (injected throughout sessions)
+    - User interruptions
+    """
+    # Skip skill instruction injections (major source of bloat)
+    if content.startswith("Base directory for this skill:"):
+        return True
+    if "<command-name>" in content[:200]:
+        return True
+
+    # Skip system reminders (auto-injected, not user content)
+    if "<system-reminder>" in content:
+        return True
+
+    # Skip interruptions (no useful content)
+    if content.strip() == "[Request interrupted by user]":
+        return True
+
+    return False
+
+
 def parse_jsonl_file(filepath: Path) -> list[dict]:
     """Parse a JSONL transcript file and extract messages."""
     messages = []
@@ -90,6 +116,9 @@ def parse_jsonl_file(filepath: Path) -> list[dict]:
                         if content:
                             # Skip tool results and system content for user messages
                             if role == "user" and content.startswith("<"):
+                                continue
+                            # Skip low-value messages (skill injections, system reminders)
+                            if should_skip_message(content):
                                 continue
                             messages.append({"role": role, "content": content})
 

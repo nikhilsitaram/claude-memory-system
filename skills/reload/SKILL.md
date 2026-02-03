@@ -21,7 +21,7 @@ python3 ~/.claude/scripts/indexing.py list-pending
 **Spawn a subagent** to process transcripts without bloating main context:
 
 ```
-Use the Task tool with subagent_type="general-purpose" and prompt:
+Use the Task tool with subagent_type="general-purpose", model="haiku" and prompt:
 "Process pending memory transcripts using the /synthesize skill instructions.
 Read ~/.claude/skills/synthesize/SKILL.md for the full process.
 Extract transcripts, create daily summaries, update long-term memory files,
