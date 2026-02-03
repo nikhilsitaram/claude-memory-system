@@ -151,6 +151,8 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "load_memory.py",
         claude_dir / "scripts" / "save_session.py",
         claude_dir / "scripts" / "indexing.py",
+        claude_dir / "scripts" / "decay.py",
+        claude_dir / "scripts" / "token_usage.py",
         claude_dir / "scripts" / "load-project-memory.py",
         claude_dir / "scripts" / "project_manager.py",
     ]
@@ -193,7 +195,7 @@ def print_cleanup_instructions() -> None:
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
-    print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory,project_manager}.py")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,decay,token_usage,load-project-memory,project_manager}.py")
 
 
 def main() -> int:

@@ -161,6 +161,7 @@ def copy_scripts(script_dir: Path) -> None:
         "load-project-memory.py",  # Keep the existing utility
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
+        "token_usage.py",  # Token usage calculation for /settings
     ]
 
     for script_name in scripts_to_copy:
