@@ -325,6 +325,14 @@ def main() -> None:
     # Start output
     print("<memory>")
 
+    # Include current local time for context
+    now = datetime.now()
+    utc_now = datetime.now(timezone.utc)
+    utc_offset_hours = (now - utc_now.replace(tzinfo=None)).total_seconds() / 3600
+    offset_sign = "+" if utc_offset_hours >= 0 else ""
+    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
+    print()
+
     # Check for pending transcripts (only if synthesis scheduling allows)
     pending_count = count_pending_transcripts()
     if pending_count > 0 and should_synthesize(settings):
