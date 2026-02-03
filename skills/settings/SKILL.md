@@ -31,13 +31,13 @@ When the user invokes this skill:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
-| **Total token budget** | **30,000** | **Overall memory budget** |
+| **Total token budget** | **23,500** | **Calculated: sum of 4 components** |
+| Global long-term token limit | 5,000 | Fixed - user profile, patterns |
 | Global short-term working days | 2 | Days with activity to load |
-| Global short-term token limit | 5,000 | Soft limit for daily summaries |
-| Global long-term token limit | 8,000 | Soft limit for global-long-term-memory.md |
+| Global short-term token limit | 3,000 | Calculated: workingDays × 1,500 |
+| Project long-term token limit | 5,000 | Fixed - project-specific learnings |
 | Project short-term working days | 7 | Project-specific history days |
-| Project short-term token limit | 10,000 | Soft limit for project daily history |
-| Project long-term token limit | 7,000 | Soft limit for project-memory/*.md |
+| Project short-term token limit | 10,500 | Calculated: workingDays × 1,500 |
 | Include subdirectories | false | Match subdirs to parent project |
 | Synthesis interval (hours) | 2 | Hours between auto-synthesis prompts |
 | Decay age (days) | 30 | Archive learnings older than this |
@@ -61,13 +61,13 @@ Run `/settings usage` to see current token usage.
 ```
 ## Memory Token Usage
 
-| Component | Tokens | Limit | Status |
-|-----------|--------|-------|--------|
-| Global long-term | ~1,850 | 7,000 | ✓ |
-| Global short-term (7 days) | ~8,760 | 15,000 | ✓ |
-| Project long-term | ~960 | 3,000 | ✓ |
-| Project short-term | ~2,100 | 5,000 | ✓ |
-| **Total** | **~13,670** | **30,000** | **✓** |
+| Component | ~Tokens | Limit | % Used | Status |
+|-----------|---------|-------|--------|--------|
+| Global long-term | ~2,360 | 5,000 | 47% | ✓ |
+| Global short-term (2 days) | ~2,067 | 3,000 | 69% | ✓ |
+| Project long-term | ~2,229 | 5,000 | 45% | ✓ |
+| Project short-term (7 days) | ~4,205 | 10,500 | 40% | ✓ |
+| **Total** | **~10,861** | **23,500** | **46%** | **✓** |
 
 ✓ = Within limit, ⚠ = Over limit (soft warning)
 ```
@@ -87,17 +87,16 @@ This outputs key=value pairs that can be parsed for the usage report.
 4. Confirm the change
 
 Valid paths:
-- `globalShortTerm.workingDays` (integer, 1-30)
-- `globalShortTerm.tokenLimit` (integer, 1000-50000)
+- `globalShortTerm.workingDays` (integer, 1-30) - also updates tokenLimit automatically
 - `globalLongTerm.tokenLimit` (integer, 1000-50000)
-- `projectShortTerm.workingDays` (integer, 1-30)
-- `projectShortTerm.tokenLimit` (integer, 1000-50000)
+- `projectShortTerm.workingDays` (integer, 1-30) - also updates tokenLimit automatically
 - `projectLongTerm.tokenLimit` (integer, 1000-50000)
 - `projectSettings.includeSubdirectories` (boolean)
 - `synthesis.intervalHours` (integer, 1-24)
 - `decay.ageDays` (integer, 7-365)
 - `decay.archiveRetentionDays` (integer, 30-730)
-- `totalTokenBudget` (integer, 10000-100000)
+
+**Note**: Short-term tokenLimits and totalTokenBudget are calculated automatically from workingDays.
 
 Example:
 ```
@@ -112,29 +111,34 @@ Reset settings to default values. The defaults are stored in `_defaults` section
 - `/settings reset projectLongTerm.tokenLimit` - Reset specific setting
 
 Default values:
+- `globalLongTerm.tokenLimit`: 5000 (fixed)
 - `globalShortTerm.workingDays`: 2
-- `globalShortTerm.tokenLimit`: 5000
-- `globalLongTerm.tokenLimit`: 8000
+- `projectLongTerm.tokenLimit`: 5000 (fixed)
 - `projectShortTerm.workingDays`: 7
-- `projectShortTerm.tokenLimit`: 10000
-- `projectLongTerm.tokenLimit`: 7000
 - `projectSettings.includeSubdirectories`: false
 - `synthesis.intervalHours`: 2
 - `decay.ageDays`: 30
 - `decay.archiveRetentionDays`: 365
-- `totalTokenBudget`: 30000
+
+**Calculated values** (from `memory_utils.py`):
+- Short-term tokenLimits = workingDays × 1500
+- totalTokenBudget = sum of all 4 limits
 
 ## Token Guidance
 
-| Memory Type | Suggested Range | Notes |
-|-------------|-----------------|-------|
-| Global long-term | 5K-10K | User profile, patterns (~2-4 pages) |
-| Global short-term | 10K-20K | Recent working days (~1-2 pages/day) |
-| Project long-term | 2K-5K | Project-specific accumulated learnings |
-| Project short-term | 3K-8K | Project-specific recent history |
-| **Total** | **25K-40K** | ~30K is efficient balance |
+| Memory Type | Default | Formula | Notes |
+|-------------|---------|---------|-------|
+| Global long-term | 5,000 | fixed | User profile, patterns, key learnings |
+| Global short-term | 3,000 | workingDays × 1,500 | Recent daily summaries |
+| Project long-term | 5,000 | fixed | Project-specific accumulated learnings |
+| Project short-term | 10,500 | workingDays × 1,500 | Project-specific recent history |
+| **Total** | **23,500** | sum of above | Keeps context efficient |
 
 **Estimation**: 1 token ≈ 4 characters. Divide file bytes by 4.
+
+**Formula basis**: 1,500 tokens/day provides headroom over observed max (~1,200 tokens/day).
+
+**Changing limits**: Adjust `workingDays` - tokenLimits are calculated automatically by `memory_utils.py`.
 
 ## Working Days Behavior
 

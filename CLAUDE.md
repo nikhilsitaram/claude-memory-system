@@ -220,14 +220,13 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 
 ```json
 {
-  "globalShortTerm": { "workingDays": 2, "tokenLimit": 15000 },
-  "globalLongTerm": { "tokenLimit": 7000 },
-  "projectShortTerm": { "workingDays": 7, "tokenLimit": 5000 },
-  "projectLongTerm": { "tokenLimit": 3000 },
+  "globalShortTerm": { "workingDays": 2 },
+  "globalLongTerm": { "tokenLimit": 5000 },
+  "projectShortTerm": { "workingDays": 7 },
+  "projectLongTerm": { "tokenLimit": 5000 },
   "projectSettings": { "includeSubdirectories": false },
   "synthesis": { "intervalHours": 2 },
-  "decay": { "ageDays": 30, "archiveRetentionDays": 365 },
-  "totalTokenBudget": 30000
+  "decay": { "ageDays": 30, "archiveRetentionDays": 365 }
 }
 ```
 
@@ -237,7 +236,11 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 - `decay.ageDays`: Learnings older than this are archived (default: 30)
 - `decay.archiveRetentionDays`: Archived items older than this are purged (default: 365)
 
-Token limits are informational (soft warnings), not hard caps. Use `/settings` to see current usage alongside limits.
+**Dynamic token limits**: Short-term tokenLimits and totalTokenBudget are calculated automatically in `memory_utils.py`:
+- Formula: `workingDays × 1500` (based on ~1200 observed max tokens/day)
+- Total budget = sum of 4 component limits (default: 23,500)
+
+Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to see current usage alongside limits.
 
 ## Project Management (`/projects`)
 

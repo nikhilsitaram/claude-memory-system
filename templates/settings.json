@@ -2,20 +2,18 @@
   "version": 3,
   "globalShortTerm": {
     "workingDays": 2,
-    "tokenLimit": 5000,
-    "_comment": "Daily session summaries (daily/*.md) - loads N most recent days with activity"
+    "_comment": "Daily session summaries - tokenLimit calculated: workingDays × 1500"
   },
   "globalLongTerm": {
-    "tokenLimit": 8000,
+    "tokenLimit": 5000,
     "_comment": "global-long-term-memory.md - user profile, patterns, preferences"
   },
   "projectShortTerm": {
     "workingDays": 7,
-    "tokenLimit": 10000,
-    "_comment": "Project-specific daily history - loads N days with activity for this project"
+    "_comment": "Project-specific daily history - tokenLimit calculated: workingDays × 1500"
   },
   "projectLongTerm": {
-    "tokenLimit": 7000,
+    "tokenLimit": 5000,
     "_comment": "project-memory/{project}-long-term-memory.md - project-specific learnings"
   },
   "projectSettings": {
@@ -31,26 +29,27 @@
     "archiveRetentionDays": 365,
     "_comment": "Learnings older than ageDays are archived; archived items older than archiveRetentionDays are purged"
   },
-  "totalTokenBudget": 30000,
   "_tokenGuidance": {
     "estimation": "1 token ≈ 4 characters. File bytes / 4 = rough token count",
-    "globalLongTerm": "5K-10K tokens: user profile, patterns, key learnings",
-    "globalShortTerm": "10K-20K tokens: recent working days (~1-2 pages/day)",
-    "projectShortTerm": "3K-8K tokens: project-specific daily history",
-    "projectLongTerm": "2K-5K tokens: project-specific accumulated learnings",
-    "total": "25K-40K tokens: ~30K is a good balance for context efficiency"
+    "formula": "Short-term limits = workingDays × 1500 (based on ~1200 observed max)",
+    "fixedLimits": {
+      "globalLongTerm": 5000,
+      "projectLongTerm": 5000
+    },
+    "calculatedLimits": {
+      "globalShortTerm": "2 days × 1500 = 3000",
+      "projectShortTerm": "7 days × 1500 = 10500",
+      "total": "5000 + 3000 + 5000 + 10500 = 23500"
+    }
   },
   "_defaults": {
     "globalShortTerm.workingDays": 2,
-    "globalShortTerm.tokenLimit": 5000,
-    "globalLongTerm.tokenLimit": 8000,
+    "globalLongTerm.tokenLimit": 5000,
     "projectShortTerm.workingDays": 7,
-    "projectShortTerm.tokenLimit": 10000,
-    "projectLongTerm.tokenLimit": 7000,
+    "projectLongTerm.tokenLimit": 5000,
     "projectSettings.includeSubdirectories": false,
     "synthesis.intervalHours": 2,
     "decay.ageDays": 30,
-    "decay.archiveRetentionDays": 365,
-    "totalTokenBudget": 30000
+    "decay.archiveRetentionDays": 365
   }
 }

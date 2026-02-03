@@ -84,22 +84,25 @@ def get_captured_file() -> Path:
     return get_memory_dir() / ".captured"
 
 
-# Default settings
+# Token limit formulas
+SHORT_TERM_TOKENS_PER_DAY = 1500  # ~1200 observed max, 1500 gives headroom
+
+# Default settings (tokenLimit for short-term calculated dynamically)
 DEFAULT_SETTINGS = {
     "version": 3,
     "globalShortTerm": {
         "workingDays": 2,
-        "tokenLimit": 15000,
+        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "globalLongTerm": {
-        "tokenLimit": 7000,
+        "tokenLimit": 5000,
     },
     "projectShortTerm": {
         "workingDays": 7,
-        "tokenLimit": 5000,
+        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "projectLongTerm": {
-        "tokenLimit": 3000,
+        "tokenLimit": 5000,
     },
     "projectSettings": {
         "includeSubdirectories": False,
@@ -111,7 +114,7 @@ DEFAULT_SETTINGS = {
         "ageDays": 30,
         "archiveRetentionDays": 365,
     },
-    "totalTokenBudget": 30000,
+    # totalTokenBudget calculated as sum of 4 components
 }
 
 
@@ -120,6 +123,8 @@ def load_settings() -> dict[str, Any]:
     Load memory settings from settings.json with defaults.
 
     Returns settings dict with all expected keys populated.
+    Short-term tokenLimits and totalTokenBudget are calculated dynamically
+    from workingDays × SHORT_TERM_TOKENS_PER_DAY.
     """
     settings_file = get_settings_file()
     settings = DEFAULT_SETTINGS.copy()
@@ -132,6 +137,33 @@ def load_settings() -> dict[str, Any]:
             settings = _deep_merge(settings, user_settings)
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load settings from {settings_file}: {e}", file=sys.stderr)
+
+    # Calculate dynamic token limits from workingDays
+    settings = _calculate_token_limits(settings)
+
+    return settings
+
+
+def _calculate_token_limits(settings: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calculate short-term tokenLimits and totalTokenBudget from workingDays.
+
+    Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (1500)
+    """
+    global_days = settings.get("globalShortTerm", {}).get("workingDays", 2)
+    project_days = settings.get("projectShortTerm", {}).get("workingDays", 7)
+
+    # Calculate short-term limits
+    settings["globalShortTerm"]["tokenLimit"] = global_days * SHORT_TERM_TOKENS_PER_DAY
+    settings["projectShortTerm"]["tokenLimit"] = project_days * SHORT_TERM_TOKENS_PER_DAY
+
+    # Calculate total budget as sum of 4 components
+    settings["totalTokenBudget"] = (
+        settings.get("globalLongTerm", {}).get("tokenLimit", 5000) +
+        settings["globalShortTerm"]["tokenLimit"] +
+        settings.get("projectLongTerm", {}).get("tokenLimit", 5000) +
+        settings["projectShortTerm"]["tokenLimit"]
+    )
 
     return settings
 
