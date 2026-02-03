@@ -308,11 +308,13 @@ def build_projects_index() -> dict:
             print(f"Warning: Could not read {sessions_file}: {e}", file=sys.stderr)
             continue
 
+        # Get original path: try root-level first, then entries[0].projectPath
         original_path = data.get("originalPath", "")
+        entries = data.get("entries", [])
+        if not original_path and entries:
+            original_path = entries[0].get("projectPath", "")
         if not original_path:
             continue
-
-        entries = data.get("entries", [])
         if not entries:
             continue
 

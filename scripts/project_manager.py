@@ -154,14 +154,23 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
     """
     Get the authoritative original path from a Claude Code project folder.
 
-    Reads sessions-index.json if it exists and returns the originalPath field.
+    Checks sessions-index.json for:
+    1. Root-level 'originalPath' (legacy/manual format)
+    2. entries[0].projectPath (Claude Code's actual format)
+
     This is the only reliable way to get the original path since encoding is lossy.
     """
     sessions_index = folder_path / "sessions-index.json"
     if sessions_index.exists():
         try:
             data = json.loads(sessions_index.read_text(encoding="utf-8"))
-            return data.get("originalPath")
+            # Try root-level originalPath first (legacy format)
+            if data.get("originalPath"):
+                return data.get("originalPath")
+            # Fall back to entries[0].projectPath (Claude Code format)
+            entries = data.get("entries", [])
+            if entries and entries[0].get("projectPath"):
+                return entries[0]["projectPath"]
         except (json.JSONDecodeError, IOError):
             pass
     return None
@@ -755,38 +764,108 @@ def restore_from_backup(backup_dir: Path) -> dict:
     }
 
 
-def merge_sessions_index(source: Path, dest: Path) -> int:
+def rebuild_sessions_index(folder: Path, project_path: str) -> dict:
+    """
+    Rebuild sessions-index.json from .jsonl files in a folder.
+
+    Scans all .jsonl files and creates entries with basic metadata.
+    Returns the rebuilt index data.
+    """
+    entries = []
+
+    for jsonl_file in sorted(folder.glob("*.jsonl")):
+        session_id = jsonl_file.stem
+        try:
+            stat = jsonl_file.stat()
+        except OSError:
+            continue
+
+        mtime_ms = int(stat.st_mtime * 1000)
+        created_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+
+        # Try to extract first prompt for context
+        first_prompt = "(recovered session)"
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        msg = json.loads(line)
+                        if msg.get("type") == "human":
+                            content = msg.get("message", {}).get("content", "")
+                            first_prompt = content[:150] if content else "(no prompt)"
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except IOError:
+            pass
+
+        entries.append({
+            "sessionId": session_id,
+            "fullPath": str(jsonl_file),
+            "fileMtime": mtime_ms,
+            "firstPrompt": first_prompt,
+            "summary": "(recovered session)",
+            "messageCount": 0,
+            "created": created_dt.isoformat().replace("+00:00", "Z"),
+            "modified": created_dt.isoformat().replace("+00:00", "Z"),
+            "gitBranch": "",
+            "projectPath": project_path,
+            "isSidechain": False,
+        })
+
+    # Sort by created date
+    entries.sort(key=lambda e: e["created"])
+
+    return {
+        "version": 1,
+        "entries": entries,
+        "originalPath": project_path,
+    }
+
+
+def merge_sessions_index(source: Path, dest: Path, project_path: Optional[str] = None) -> int:
     """
     Merge sessions-index.json files.
 
     Combines entries, dedupes by session ID, keeps newest for conflicts.
+    If source has no entries, scans source folder for .jsonl files.
     Returns number of entries merged from source.
     """
     source_data = load_json_file(source, {})
     dest_data = load_json_file(dest, {})
 
-    if not source_data.get("entries"):
+    # If source has no entries, try to rebuild from .jsonl files
+    source_entries = source_data.get("entries", [])
+    if not source_entries and source.parent.is_dir():
+        rebuilt = rebuild_sessions_index(
+            source.parent,
+            project_path or dest_data.get("originalPath", "")
+        )
+        source_entries = rebuilt.get("entries", [])
+
+    if not source_entries:
         return 0
 
     # Build lookup of existing entries by session ID
+    # Note: Claude Code uses "sessionId", not "id"
     dest_entries = {
-        e.get("id"): e
+        e.get("sessionId", e.get("id")): e
         for e in dest_data.get("entries", [])
-        if e.get("id")
+        if e.get("sessionId") or e.get("id")
     }
 
     merged_count = 0
 
-    for entry in source_data.get("entries", []):
-        session_id = entry.get("id")
+    for entry in source_entries:
+        session_id = entry.get("sessionId", entry.get("id"))
         if not session_id:
             continue
 
         if session_id in dest_entries:
             # Keep newer entry
             existing = dest_entries[session_id]
-            existing_time = existing.get("lastActive", existing.get("created", ""))
-            new_time = entry.get("lastActive", entry.get("created", ""))
+            existing_time = existing.get("modified", existing.get("lastActive", existing.get("created", "")))
+            new_time = entry.get("modified", entry.get("lastActive", entry.get("created", "")))
             if new_time > existing_time:
                 dest_entries[session_id] = entry
                 merged_count += 1
@@ -794,15 +873,17 @@ def merge_sessions_index(source: Path, dest: Path) -> int:
             dest_entries[session_id] = entry
             merged_count += 1
 
-    # Rebuild entries list sorted by lastActive
+    # Rebuild entries list sorted by modified/created (newest first)
     dest_data["entries"] = sorted(
         dest_entries.values(),
-        key=lambda e: e.get("lastActive", e.get("created", "")),
+        key=lambda e: e.get("modified", e.get("lastActive", e.get("created", ""))),
         reverse=True,
     )
 
-    # Update originalPath to destination
-    # (Keep the dest's originalPath as it's the valid one)
+    # Ensure version is set
+    dest_data["version"] = 1
+
+    # Keep the dest's originalPath as it's the valid one
 
     save_json_file(dest, dest_data)
     return merged_count
@@ -1078,19 +1159,7 @@ def execute_merge_orphan(
                 source_path = Path(source)
                 dest_path = Path(dest)
 
-                # Merge sessions-index.json if exists
-                source_sessions = source_path / "sessions-index.json"
-                dest_sessions = dest_path / "sessions-index.json"
-                if source_sessions.exists():
-                    if dest_sessions.exists():
-                        merge_sessions_index(source_sessions, dest_sessions)
-                    else:
-                        # Copy sessions-index but update originalPath
-                        data = load_json_file(source_sessions, {})
-                        data["originalPath"] = str(target_path)
-                        save_json_file(dest_sessions, data)
-
-                # Copy files
+                # Copy .jsonl files and subdirs first
                 for item in source_path.iterdir():
                     if item.name == "sessions-index.json":
                         continue
@@ -1100,6 +1169,39 @@ def execute_merge_orphan(
                     elif item.is_dir() and not dest_item.exists():
                         shutil.copytree(item, dest_item)
 
+                # Now merge sessions-index.json (will scan .jsonl files if entries missing)
+                source_sessions = source_path / "sessions-index.json"
+                dest_sessions = dest_path / "sessions-index.json"
+                if source_sessions.exists():
+                    if dest_sessions.exists():
+                        merge_sessions_index(source_sessions, dest_sessions, str(target_path))
+                    else:
+                        # Copy sessions-index but update originalPath
+                        data = load_json_file(source_sessions, {})
+                        data["originalPath"] = str(target_path)
+                        save_json_file(dest_sessions, data)
+
+            # After all merges, rebuild the target's sessions-index to ensure all .jsonl files are indexed
+            target_folder = projects_dir / target_encoded
+            if target_folder.exists():
+                rebuilt = rebuild_sessions_index(target_folder, str(target_path))
+                target_sessions = target_folder / "sessions-index.json"
+                # Merge rebuilt entries with any existing entries
+                if target_sessions.exists():
+                    existing = load_json_file(target_sessions, {})
+                    existing_ids = {e.get("sessionId") for e in existing.get("entries", [])}
+                    for entry in rebuilt.get("entries", []):
+                        if entry.get("sessionId") not in existing_ids:
+                            existing.setdefault("entries", []).append(entry)
+                    existing["entries"].sort(
+                        key=lambda e: e.get("modified", e.get("created", "")),
+                        reverse=True
+                    )
+                    existing["originalPath"] = str(target_path)
+                    save_json_file(target_sessions, existing)
+                else:
+                    save_json_file(target_sessions, rebuilt)
+
             # Execute moves
             for source, dest in plan.moves:
                 source_path = Path(source)
@@ -1108,12 +1210,24 @@ def execute_merge_orphan(
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(source_path), str(dest_path))
 
-                    # Update originalPath in sessions-index.json
+                    # Rebuild sessions-index.json with correct path and all .jsonl entries
                     dest_sessions = dest_path / "sessions-index.json"
+                    rebuilt = rebuild_sessions_index(dest_path, str(target_path))
                     if dest_sessions.exists():
-                        data = load_json_file(dest_sessions, {})
-                        data["originalPath"] = str(target_path)
-                        save_json_file(dest_sessions, data)
+                        # Merge with existing entries
+                        existing = load_json_file(dest_sessions, {})
+                        existing_ids = {e.get("sessionId") for e in existing.get("entries", [])}
+                        for entry in rebuilt.get("entries", []):
+                            if entry.get("sessionId") not in existing_ids:
+                                existing.setdefault("entries", []).append(entry)
+                        existing["entries"].sort(
+                            key=lambda e: e.get("modified", e.get("created", "")),
+                            reverse=True
+                        )
+                        existing["originalPath"] = str(target_path)
+                        save_json_file(dest_sessions, existing)
+                    else:
+                        save_json_file(dest_sessions, rebuilt)
 
             # Execute safety renames
             for old_name, new_name in plan.renames:
