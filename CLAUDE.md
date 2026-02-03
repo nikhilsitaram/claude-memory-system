@@ -15,6 +15,7 @@ claude-memory-system/
 │   ├── load_memory.py      # SessionStart hook - loads memory + orphan recovery
 │   ├── save_session.py     # SessionEnd/PreCompact hook - saves transcript
 │   ├── indexing.py         # Transcript extraction + project index building
+│   ├── decay.py            # Age-based decay for long-term memory
 │   ├── load-project-memory.py  # Manual project memory loader
 │   └── project_manager.py  # Project lifecycle management library
 ├── skills/
@@ -38,11 +39,12 @@ claude-memory-system/
 |-----------|-------------|
 | `scripts/*.py` | `~/.claude/scripts/` |
 | `skills/*/` | `~/.claude/skills/` |
+| `templates/*.md` | `~/.claude/memory/templates/` (always updated) |
 | `templates/global-long-term-memory.md` | `~/.claude/memory/` (if not exists) |
 | `templates/settings.json` | `~/.claude/memory/` (if not exists) |
 
 The install script also:
-- Creates `~/.claude/memory/{daily,transcripts,project-memory}/` directories
+- Creates `~/.claude/memory/{daily,transcripts,project-memory,templates}/` directories
 - Adds hooks to `~/.claude/settings.json` (SessionStart, SessionEnd, PreCompact, PreToolUse)
 - Adds minimal permissions to settings.json:
   - `Read(~/.claude/**)` - Read memory/skill files (tilde expansion)
@@ -124,6 +126,9 @@ After synthesis, the memory directory looks like:
 │   ├── granada-long-term-memory.md
 │   ├── cartwheel-long-term-memory.md
 │   └── claude-memory-system-long-term-memory.md
+├── templates/                    # Reference templates (updated on install)
+│   ├── global-long-term-memory.md
+│   └── project-long-term-memory.md
 └── transcripts/
     └── YYYY-MM-DD/
         └── {session_id}.jsonl
@@ -176,6 +181,9 @@ python3 ~/.claude/scripts/load_memory.py
 # Test indexing
 python3 ~/.claude/scripts/indexing.py list-pending
 python3 ~/.claude/scripts/indexing.py build-index
+
+# Test decay (dry-run)
+python3 ~/.claude/scripts/decay.py --dry-run
 ```
 
 ## Key Files Reference

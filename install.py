@@ -131,6 +131,7 @@ def create_directories() -> None:
         get_memory_dir() / "daily",
         get_memory_dir() / "transcripts",
         get_memory_dir() / "project-memory",
+        get_memory_dir() / "templates",
         get_memory_dir() / ".backups",
         get_claude_dir() / "scripts",
         get_claude_dir() / "hooks",
@@ -159,6 +160,7 @@ def copy_scripts(script_dir: Path) -> None:
         "indexing.py",
         "load-project-memory.py",  # Keep the existing utility
         "project_manager.py",  # Project lifecycle management
+        "decay.py",  # Age-based decay for long-term memory
     ]
 
     for script_name in scripts_to_copy:
@@ -214,10 +216,22 @@ def copy_skills(script_dir: Path) -> None:
 
 
 def copy_templates(script_dir: Path) -> None:
-    """Copy template files if they don't exist."""
+    """Copy template files."""
     memory_dir = get_memory_dir()
+    templates_dir = memory_dir / "templates"
 
-    # Copy global-long-term-memory.md template if it doesn't exist
+    # Always copy templates to templates/ dir (for subagent reference)
+    templates_to_copy = [
+        "global-long-term-memory.md",
+        "project-long-term-memory.md",
+    ]
+    for template_name in templates_to_copy:
+        src = script_dir / "templates" / template_name
+        if src.exists():
+            shutil.copy2(src, templates_dir / template_name)
+    print("Copied templates to ~/.claude/memory/templates/")
+
+    # Copy global-long-term-memory.md to memory root if it doesn't exist
     long_term_file = memory_dir / "global-long-term-memory.md"
     if not long_term_file.exists():
         src = script_dir / "templates" / "global-long-term-memory.md"
