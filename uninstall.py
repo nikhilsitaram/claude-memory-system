@@ -143,6 +143,7 @@ def purge_memory_data() -> None:
         claude_dir / "skills" / "recall",
         claude_dir / "skills" / "reload",
         claude_dir / "skills" / "settings",
+        claude_dir / "skills" / "projects",
         # Hook scripts
         claude_dir / "hooks" / "pretooluse-allow-memory.sh",
         # Scripts
@@ -151,6 +152,7 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "save_session.py",
         claude_dir / "scripts" / "indexing.py",
         claude_dir / "scripts" / "load-project-memory.py",
+        claude_dir / "scripts" / "project_manager.py",
     ]
 
     removed = []
@@ -189,9 +191,9 @@ def print_cleanup_instructions() -> None:
     print("Or manually:")
     print()
     print("  rm -rf ~/.claude/memory")
-    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings}")
+    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
-    print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory}.py")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,load-project-memory,project_manager}.py")
 
 
 def main() -> int:

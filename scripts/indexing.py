@@ -327,6 +327,24 @@ def build_projects_index() -> dict:
                 "workDays": sorted(work_days),
             }
 
+    # Check for stale paths (projects where originalPath no longer exists)
+    stale_projects = []
+    for canonical_path, data in projects.items():
+        original_path = data.get("originalPath", "")
+        if original_path and not Path(original_path).exists():
+            stale_projects.append({
+                "name": data.get("name", "unknown"),
+                "original_path": original_path,
+                "work_days": len(data.get("workDays", [])),
+            })
+
+    # Emit warnings for stale paths
+    if stale_projects:
+        print(f"\nWarning: {len(stale_projects)} project(s) have missing paths:", file=sys.stderr)
+        for stale in stale_projects:
+            print(f"  - {stale['name']}: {stale['original_path']} ({stale['work_days']} work days)", file=sys.stderr)
+        print("  Consider using /projects to migrate or cleanup stale data.\n", file=sys.stderr)
+
     # Build output structure
     output = {
         "version": 1,

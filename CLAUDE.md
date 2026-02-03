@@ -15,13 +15,17 @@ claude-memory-system/
 │   ├── load_memory.py      # SessionStart hook - loads memory + orphan recovery
 │   ├── save_session.py     # SessionEnd/PreCompact hook - saves transcript
 │   ├── indexing.py         # Transcript extraction + project index building
-│   └── load-project-memory.py  # Manual project memory loader
+│   ├── load-project-memory.py  # Manual project memory loader
+│   └── project_manager.py  # Project lifecycle management library
 ├── skills/
 │   ├── remember/SKILL.md   # /remember - save notes
 │   ├── synthesize/SKILL.md # /synthesize - process transcripts
 │   ├── recall/SKILL.md     # /recall - search history
 │   ├── reload/SKILL.md     # /reload - synthesize + load after /clear
-│   └── settings/SKILL.md   # /settings - view/modify memory config
+│   ├── settings/SKILL.md   # /settings - view/modify memory config
+│   └── projects/SKILL.md   # /projects - manage project data
+├── tests/
+│   └── test_project_manager.py  # Unit tests for project_manager
 └── templates/
     ├── global-long-term-memory.md  # Global patterns template
     ├── project-long-term-memory.md # Project memory template
@@ -211,6 +215,54 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 ```
 
 Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to check consumption.
+
+## Project Management (`/projects`)
+
+The `/projects` skill manages Claude Code project data when projects are renamed, moved, or need cleanup.
+
+### Common Scenarios
+
+**After renaming a project folder:**
+```
+# User manually renamed ~/personal/personal-shopper → ~/personal/cartwheel
+# Claude Code folders remain at ~/.claude/projects/-home-nsitaram-personal-personal-shopper
+
+/projects
+# Shows: personal-shopper marked as "path missing", cartwheel as valid
+# Suggests: merge orphaned data into cartwheel
+
+/projects merge personal-shopper into cartwheel
+# Merges session history, work days, memory files
+# Renames orphan folder to .merged.bak (not deleted)
+```
+
+**Clean up stale entries:**
+```
+/projects cleanup
+# Shows stale index entries where path no longer exists
+# Removes entries from index (doesn't delete folders)
+```
+
+### How It Works
+
+The skill uses `project_manager.py` library functions:
+- `list_projects()` - Show all indexed projects with status
+- `find_orphaned_folders()` - Find Claude folders without valid projects
+- `plan_merge_orphan(orphan, target)` - Preview merge operation
+- `execute_merge_orphan(orphan, target, confirmed=True)` - Execute merge
+
+All destructive operations:
+1. Create timestamped backups in `~/.claude/memory/.backups/`
+2. Require explicit user confirmation
+3. Rename (not delete) orphan folders after merge
+
+### Path Encoding
+
+Claude Code encodes project paths as folder names:
+- `/home/user/my-project` → `-home-user-my-project`
+- Both `/` and `.` become `-`
+
+This encoding is **lossy** - you cannot reliably decode back. Always read `sessions-index.json` inside the folder for the authoritative original path.
 
 ## Orphan Recovery
 

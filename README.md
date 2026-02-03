@@ -75,6 +75,7 @@ The installer automatically detects your Python command (`python3` vs `python`) 
 | `/recall [query]` | Search through all historical daily memory files |
 | `/reload` | Synthesize pending transcripts and reload memory (use after `/clear`) |
 | `/settings` | View/modify memory settings and check token usage |
+| `/projects` | Manage project data - list status, merge orphans, cleanup stale entries |
 
 **Note**: `/clear` does not trigger hooks ([GitHub #21578](https://github.com/anthropics/claude-code/issues/21578)), so use `/reload` afterward to restore memory context.
 

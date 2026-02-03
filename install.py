@@ -131,6 +131,7 @@ def create_directories() -> None:
         get_memory_dir() / "daily",
         get_memory_dir() / "transcripts",
         get_memory_dir() / "project-memory",
+        get_memory_dir() / ".backups",
         get_claude_dir() / "scripts",
         get_claude_dir() / "hooks",
         get_claude_dir() / "skills" / "remember",
@@ -138,6 +139,7 @@ def create_directories() -> None:
         get_claude_dir() / "skills" / "recall",
         get_claude_dir() / "skills" / "reload",
         get_claude_dir() / "skills" / "settings",
+        get_claude_dir() / "skills" / "projects",
     ]
 
     for dir_path in dirs:
@@ -156,6 +158,7 @@ def copy_scripts(script_dir: Path) -> None:
         "save_session.py",
         "indexing.py",
         "load-project-memory.py",  # Keep the existing utility
+        "project_manager.py",  # Project lifecycle management
     ]
 
     for script_name in scripts_to_copy:
@@ -194,7 +197,7 @@ def copy_skills(script_dir: Path) -> None:
     """Copy skill files to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "reload", "settings"]
+    skills = ["remember", "synthesize", "recall", "reload", "settings", "projects"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
@@ -425,6 +428,7 @@ def print_success_message() -> None:
     print("  /recall     - Search historical memory")
     print("  /reload     - Synthesize + load memory (use after /clear)")
     print("  /settings   - View/modify memory settings & token usage")
+    print("  /projects   - Manage projects (move, merge orphans, cleanup)")
     print()
     print("Memory location: ~/.claude/memory/")
     print("  - global-long-term-memory.md  (loaded every session)")
