@@ -37,11 +37,15 @@ python3 $HOME/.claude/scripts/indexing.py build-index
 
 ## Quick Start (for subagent execution)
 
-1. Run extraction: `python3 $HOME/.claude/scripts/indexing.py extract`
-2. Use Read/Edit tools to create/update `~/.claude/memory/daily/YYYY-MM-DD.md` (include `## Learnings` section)
-3. Route learnings to long-term memory (see Phase 2)
-4. Delete processed transcripts: `python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD`
-5. Return summary: "Processed N transcripts into daily summaries for [dates]. Routed X learnings to global memory, Y learnings to project memory."
+1. **Check migration**: If `~/.claude/memory/.migration-complete` doesn't exist, run migration first (see Phase 0)
+2. Run extraction: `python3 $HOME/.claude/scripts/indexing.py extract`
+3. Use Read/Edit tools to create/update `~/.claude/memory/daily/YYYY-MM-DD.md` (include `## Learnings` section with dates)
+4. **Size check**: Verify daily summary is 1-4 KB (see Size Validation below)
+5. Route learnings to long-term memory (see Phase 2)
+6. Apply decay to long-term memory (see Phase 3)
+7. Delete processed transcripts: `python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD`
+8. **Update synthesis timestamp**: Write current UTC time to `~/.claude/memory/.last-synthesis` (prevents redundant auto-prompts)
+9. Return summary: "Processed N transcripts into daily summaries for [dates]. Routed X learnings to global memory, Y learnings to project memory. Archived Z old learnings."
 
 ---
 
@@ -90,9 +94,98 @@ PreToolUse hooks work for subagent permissions (unlike PermissionRequest hooks)
 - Don't document standard workflows (git commands, tool usage)
 - Don't include conversation back-and-forth
 
+## Size Validation (CRITICAL)
+
+After creating or updating each daily summary, verify file size:
+
+```python
+from pathlib import Path
+
+daily_file = Path.home() / ".claude" / "memory" / "daily" / "YYYY-MM-DD.md"
+size_kb = daily_file.stat().st_size / 1024
+
+if size_kb > 8:
+    # ERROR: File needs manual review - way too large
+    print(f"ERROR: Daily summary {daily_file.name} is {size_kb:.1f} KB (max 4 KB)")
+    print("Re-synthesize with more aggressive compaction")
+elif size_kb > 4:
+    # WARNING: File should be trimmed
+    print(f"WARNING: Daily summary {daily_file.name} is {size_kb:.1f} KB (target: 1-4 KB)")
+    print("Consider removing less important details")
+```
+
+**Target sizes:**
+- Most days: 1-2 KB
+- Busy days: 2-4 KB
+- Maximum acceptable: 4 KB
+- Error threshold: 8 KB (requires re-synthesis)
+
+If a daily summary exceeds 4 KB, apply more aggressive compaction:
+- Remove all debugging narratives
+- Keep only final commit per feature
+- Consolidate similar learnings
+- Remove routine file lists
+
 ## Detailed Process (three phases):
 
-## Phase 0: Update Project Index
+## Phase 0: Migration Check (One-Time)
+
+**First, check if migration is needed:**
+
+```python
+from pathlib import Path
+
+migration_marker = Path.home() / ".claude" / "memory" / ".migration-complete"
+if migration_marker.exists():
+    # Skip migration, proceed to Phase 0.5
+    pass
+else:
+    # Run migration (see below)
+    pass
+```
+
+### Migration Process
+
+If `.migration-complete` doesn't exist, perform one-time migration:
+
+1. **Add `## Pinned` section** to long-term memory files if missing
+2. **Add creation dates** to existing learnings (estimate from file modification date)
+3. **LLM review**: Move high-value learnings to `## Pinned`
+4. **Write marker** to prevent re-running
+
+**Migration steps:**
+
+For `~/.claude/memory/global-long-term-memory.md`:
+1. Check if `## Pinned` section exists
+2. If missing, add it after `## Patterns & Preferences`
+3. Parse existing learnings in decay-eligible sections
+4. For learnings without dates: add `(YYYY-MM-DD)` using today's date as estimate
+5. Review each learning against pinning criteria (see LLM Pinning Criteria below)
+6. Move high-value learnings to `## Pinned`
+
+For each `~/.claude/memory/project-memory/*.md`:
+1. Check if `## Pinned` section exists
+2. If missing, add it at the top (after `# Project Name`)
+3. Add dates to existing learnings
+4. Review and pin high-value learnings
+
+**After migration:**
+```python
+migration_marker.write_text(f"Migrated on {date.today().isoformat()}")
+```
+
+### Migration Pinning Guidelines
+
+During migration, pin learnings that match these criteria:
+- Learnings that have been referenced or used multiple times
+- Error patterns that caused significant debugging time
+- Architecture or infrastructure decisions
+- Tool configurations that took time to discover
+- Patterns that appear in multiple projects (move to global Pinned)
+
+**Be conservative**: When in doubt, leave in normal sections. Users can pin manually later.
+
+## Phase 0.5: Update Project Index
 
 Before processing transcripts, rebuild the project-to-work-days index:
 
@@ -140,7 +233,13 @@ This enables future filtering/searching by project.
 
 ### Learning Extraction
 
-While creating daily summaries, extract learnings and tag them with `[scope/type]`:
+While creating daily summaries, extract learnings and tag them with `[scope/type]` and creation date `(YYYY-MM-DD)`:
+
+**Format:**
+```
+- **Title** [scope/type] (YYYY-MM-DD): Brief description
+  - Lesson: Actionable takeaway
+```
 
 **Scopes:**
 - `global` - Project-agnostic patterns (applies everywhere)
@@ -158,20 +257,22 @@ While creating daily summaries, extract learnings and tag them with `[scope/type
 - If learning is specific to that project's data/code, use project scope
 - If learning applies broadly (Claude Code, bash, general SQL, etc.), use `global`
 
+**IMPORTANT**: Always include the creation date `(YYYY-MM-DD)` after the tag. This enables age-based decay of old learnings.
+
 Add a `## Learnings` section to each daily summary:
 
 ```markdown
 ## Learnings
-- **Permission glob syntax** [global/error]: Used `:*` instead of `/*`
+- **Permission glob syntax** [global/error] (2026-02-03): Used `:*` instead of `/*`
   - Lesson: Use `/` for path separators in permission globs
 
-- **Missing Accident_Key check** [granada/error]: Joined without filtering CWOP
+- **Missing Accident_Key check** [granada/error] (2026-02-03): Joined without filtering CWOP
   - Lesson: Always filter Accident_Key != '99' before joins
 
-- **Dataiku heap scans** [global/best-practice]: No indexes on Dataiku tables
+- **Dataiku heap scans** [global/best-practice] (2026-02-03): No indexes on Dataiku tables
   - Lesson: Use row count knowledge for query planning
 
-- **PolicyholderType=1 filter** [granada/data-quirk]: Most rows are renewals
+- **PolicyholderType=1 filter** [granada/data-quirk] (2026-02-03): Most rows are renewals
   - Lesson: Filter to PolicyholderType=1 for new business analysis
 ```
 
@@ -245,6 +346,134 @@ After creating/updating daily summaries, route learnings to appropriate files:
   - High-impact learnings (errors that cost time, crucial decisions)
 - Token estimation: bytes / 4 ≈ tokens
 
+## Phase 3: Age-Based Decay
+
+After routing learnings, apply decay to keep long-term memory lean.
+
+### Read Decay Settings
+
+```python
+import json
+from pathlib import Path
+from datetime import datetime, date
+
+settings_file = Path.home() / ".claude" / "memory" / "settings.json"
+if settings_file.exists():
+    settings = json.loads(settings_file.read_text())
+    decay_age_days = settings.get("decay", {}).get("ageDays", 30)
+    archive_retention_days = settings.get("decay", {}).get("archiveRetentionDays", 365)
+else:
+    decay_age_days = 30
+    archive_retention_days = 365
+
+today = date.today()
+```
+
+### Auto-Pinned Sections (NEVER decay)
+
+These sections in `global-long-term-memory.md` are auto-pinned:
+- `## About Me`
+- `## Current Projects`
+- `## Technical Environment`
+- `## Patterns & Preferences`
+- `## Pinned`
+
+**Skip these sections entirely during decay processing.**
+
+### Decay-Eligible Sections
+
+**Global memory:**
+- `## Key Learnings`
+- `## Error Patterns to Avoid`
+- `## Best Practices`
+
+**Project memory:**
+- `## Error Patterns to Avoid`
+- `## Best Practices`
+- `## Data Quirks`
+- `## Key Decisions`
+- `## Useful Commands`
+
+The `## Pinned` section in project memory is also protected.
+
+### Decay Process
+
+For each long-term memory file:
+
+1. **Parse learnings with dates**: Look for pattern `(YYYY-MM-DD)` in each learning
+2. **Calculate age**: `(today - creation_date).days`
+3. **Archive if old**: If age > `decay_age_days`, move to archive
+4. **Skip if no date**: Learnings without dates are protected (add dates during normal synthesis)
+5. **Skip if pinned**: Never decay `## Pinned` or auto-pinned sections
+
+### Archive Format
+
+Write archived learnings to `~/.claude/memory/.decay-archive.md`:
+
+```markdown
+# Decay Archive
+
+## Archived 2026-02-03
+- **Old pattern** [global/error] (2025-12-15): Description
+  - Lesson: Details here
+  - *Source: global-long-term-memory.md*
+
+## Archived 2026-02-01
+- **Another old thing** [granada/best-practice] (2025-12-01): Description
+  - Lesson: More details
+  - *Source: granada-long-term-memory.md*
+```
+
+**Archive entry format:**
+- Group by archive date (newest first)
+- Include original source file
+- Preserve the full learning with lesson
+
+### Archive Purge
+
+After archiving, purge old archive entries:
+
+1. Parse archive dates from `## Archived YYYY-MM-DD` headers
+2. Calculate age: `(today - archive_date).days`
+3. If age > `archive_retention_days`, delete that section
+4. Default retention: 365 days (1 year)
+
+### Decay Implementation Steps
+
+1. Read `~/.claude/memory/settings.json` for decay settings
+2. For each long-term memory file (global + project):
+   a. Parse content into sections
+   b. For each decay-eligible section:
+      - Parse learnings with `(YYYY-MM-DD)` dates
+      - Identify learnings older than `decay_age_days`
+      - Remove old learnings from section
+      - Append to archive with today's date
+   c. Write updated file
+3. Open `~/.claude/memory/.decay-archive.md`:
+   a. Parse archive sections by date
+   b. Remove sections older than `archive_retention_days`
+   c. Append newly archived learnings under today's date header
+   d. Write updated archive
+
+## Phase 4: Update Synthesis Timestamp
+
+After completing synthesis, update the timestamp to prevent redundant auto-prompts:
+
+```python
+from datetime import datetime, timezone
+from pathlib import Path
+
+timestamp_file = Path.home() / ".claude" / "memory" / ".last-synthesis"
+timestamp_file.write_text(datetime.now(timezone.utc).isoformat())
+```
+
+Or via bash:
+```bash
+python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+```
+
+This prevents the auto-synthesis prompt from appearing on the next session start (unless it's a new day or >intervalHours have passed).
+
 ### Also Update User Profile Sections
 
 In addition to routing tagged learnings, continue updating global-long-term-memory.md sections:
@@ -252,6 +481,46 @@ In addition to routing tagged learnings, continue updating global-long-term-memo
 - `## Current Projects` - Active work with context
 - `## Technical Environment` - Tools, systems, workflows
 - `## Patterns & Preferences` - Coding style, decision patterns
+
+### LLM Pinning Criteria
+
+When routing learnings, intelligently move high-value ones to `## Pinned` section to protect from decay.
+
+**SHOULD be pinned** (move to `## Pinned`):
+- Fundamental patterns that will remain relevant long-term (architecture decisions, core workflows)
+- Hard-won lessons that took significant time to learn (multi-day debugging, complex investigations)
+- Safety-critical information (error patterns that could cause data loss, security issues)
+- User-stated preferences and identity information
+- Patterns that apply across multiple projects
+- Infrastructure decisions (tool choices, environment setup)
+
+**Should NOT be pinned** (leave in normal sections):
+- Version-specific fixes (likely to become outdated)
+- Temporary workarounds for bugs that will be fixed
+- Project-specific commands that may change
+- Context-dependent decisions (made for specific circumstances)
+- Recently discovered patterns (let them prove value over time before pinning)
+
+**Example pinning decisions:**
+```markdown
+## Pinned
+<!-- These survive decay -->
+- **PreToolUse hooks for subagent permissions** [global/best-practice] (2026-02-01): Subagents don't inherit permissions
+  - Lesson: Use PreToolUse hooks with {"permissionDecision": "allow"} instead of PermissionRequest
+  - *Pinned: Hard-won lesson, applies across all projects using subagents*
+
+## Error Patterns to Avoid
+<!-- Subject to 30-day decay -->
+- **Missing filter on Accident_Key** [granada/error] (2026-02-03): Query returned CWOP records
+  - Lesson: Always filter Accident_Key != '99' in Granada queries
+  - *Not pinned: Project-specific, may change if schema changes*
+```
+
+**Pinning workflow:**
+1. When adding a learning, evaluate against criteria above
+2. If clearly high-value and long-lasting → add to `## Pinned`
+3. If unclear → add to normal section, let decay test its value
+4. User can manually move learnings to Pinned later via `/remember pin <pattern>`
 
 ## Output Format for Daily Summary
 

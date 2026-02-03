@@ -33,10 +33,10 @@ if [ "$tool_name" = "Task" ]; then
     fi
 fi
 
-# 4. Indexing script operations
-if echo "$input" | grep -q 'indexing\.py'; then
+# 4. Memory system scripts (indexing.py, token_usage.py, etc.)
+if echo "$input" | grep -q '\.claude/scripts'; then
     should_allow=true
-    reason="indexing script"
+    reason="memory system script"
 fi
 
 # Output decision

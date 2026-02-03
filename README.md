@@ -7,11 +7,12 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 - **Auto-capture**: Full transcripts saved on session end and before compaction
 - **Two-tier memory**: Global patterns (always loaded) + project-specific learnings (loaded when in project)
 - **Self-improvement loop**: Errors, best practices, and decisions are automatically extracted and routed to long-term memory
+- **Age-based decay**: Learnings older than 30 days are automatically archived; pinned sections protected from decay
 - **Project-aware loading**: Automatically loads project-specific history (configurable days) when working in a known project directory
-- **Configurable settings**: Token budgets, working days, and subdirectory matching via `~/.claude/memory/settings.json`
+- **Configurable settings**: Token budgets, working days, synthesis scheduling, and decay via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
 - **Recovery**: Orphaned transcripts from ungraceful exits are recovered automatically on session start
-- **Auto-synthesis**: Unprocessed transcripts are automatically processed at session start
+- **Auto-synthesis**: Scheduled synthesis (first session of day + every N hours) to keep memory fresh
 - **Manual notes**: `/remember` for specific highlights
 - **Historical search**: `/recall` for searching older memory
 - **Cross-platform**: Works on Windows, macOS, and Linux (Python 3.9+ required)
@@ -45,7 +46,7 @@ When Claude (or a subagent) calls a tool that targets memory files:
 - **Read/Edit/Write** operations on `~/.claude/memory/**`
 - **Skill invocations** for memory skills (synthesize, remember, recall, reload, settings)
 - **Task tool** calls with memory-related prompts
-- **Python operations** using `indexing.py`
+- **Bash operations** using `~/.claude/scripts/*` (indexing.py, token_usage.py, etc.)
 
 The installer also adds minimal Read permissions for fallback:
 - `Read(~/.claude/**)` - Read memory and skill files
@@ -83,7 +84,7 @@ The installer automatically detects your Python command (`python3` vs `python`) 
 
 ### Session Lifecycle
 
-1. **Session Start**: Loads long-term memory, last 7 days of daily summaries, and project-specific history. Also recovers any orphaned transcripts from previous ungraceful exits.
+1. **Session Start**: Loads long-term memory, last 2 days of daily summaries, and project-specific history. Also recovers any orphaned transcripts and prompts for synthesis if needed.
 2. **During Session**: Use `/remember` to capture important notes; Claude proactively uses `/recall` when historical context would help
 3. **Before Compaction**: Transcript saved (both manual `/compact` and automatic compaction)
 4. **Session End**: Transcript automatically saved to `~/.claude/memory/transcripts/`
@@ -94,7 +95,7 @@ When you start a session in a project directory, the system automatically loads 
 
 | Context Type | Default | Description |
 |--------------|---------|-------------|
-| All projects | 7 working days | Days with actual session activity (not calendar days) |
+| Global (all projects) | 2 working days | Days with actual session activity (not calendar days) |
 | Current project | 7 working days | Additional project-specific history |
 
 **Working days vs calendar days**: The system scans for existing daily files rather than looping through calendar dates. If you work Mon-Thu but not Fri-Sun, you get 7 actual work days of context, not 7 calendar days with 3 empty.
@@ -116,6 +117,9 @@ python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load speci
 ├── global-long-term-memory.md  # Global patterns, user profile (always loaded)
 ├── settings.json               # Memory system configuration
 ├── projects-index.json         # Project-to-work-days mapping
+├── .last-synthesis             # UTC timestamp of last synthesis
+├── .decay-archive.md           # Archived learnings (recoverable)
+├── .migration-complete         # One-time migration marker
 ├── daily/
 │   └── YYYY-MM-DD.md           # Summarized daily entries with learnings
 ├── project-memory/
@@ -134,39 +138,70 @@ Configure the memory system via `~/.claude/memory/settings.json`:
 
 ```json
 {
-  "globalShortTerm": { "workingDays": 7, "tokenLimit": 15000 },
-  "globalLongTerm": { "tokenLimit": 7000 },
-  "projectShortTerm": { "workingDays": 7, "tokenLimit": 5000 },
-  "projectLongTerm": { "tokenLimit": 3000 },
+  "globalShortTerm": { "workingDays": 2, "tokenLimit": 5000 },
+  "globalLongTerm": { "tokenLimit": 8000 },
+  "projectShortTerm": { "workingDays": 7, "tokenLimit": 10000 },
+  "projectLongTerm": { "tokenLimit": 7000 },
   "projectSettings": { "includeSubdirectories": false },
+  "synthesis": { "intervalHours": 2 },
+  "decay": { "ageDays": 30, "archiveRetentionDays": 365 },
   "totalTokenBudget": 30000
 }
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `globalShortTerm.workingDays` | 7 | Recent days with activity to load (daily summaries) |
-| `globalShortTerm.tokenLimit` | 15000 | Token limit for daily summaries |
-| `globalLongTerm.tokenLimit` | 7000 | Token limit for global long-term memory |
+| `globalShortTerm.workingDays` | 2 | Recent days with activity to load (daily summaries) |
+| `globalShortTerm.tokenLimit` | 5000 | Token limit for daily summaries |
+| `globalLongTerm.tokenLimit` | 8000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 7 | Project-specific days to load (only days with project activity) |
-| `projectShortTerm.tokenLimit` | 5000 | Token limit for project daily history |
-| `projectLongTerm.tokenLimit` | 3000 | Token limit for project long-term memory |
+| `projectShortTerm.tokenLimit` | 10000 | Token limit for project daily history |
+| `projectLongTerm.tokenLimit` | 7000 | Token limit for project long-term memory |
 | `projectSettings.includeSubdirectories` | false | Match subdirs to parent project |
+| `synthesis.intervalHours` | 2 | Hours between auto-synthesis prompts |
+| `decay.ageDays` | 30 | Archive learnings older than this |
+| `decay.archiveRetentionDays` | 365 | Purge archived items after this |
 | `totalTokenBudget` | 30000 | Overall memory token budget (informational) |
 
 Token limits are soft warnings, not hard caps. Use `/settings usage` to check current token consumption.
 
+### Age-Based Decay
+
+Learnings in long-term memory files are subject to automatic archival:
+
+**Protected from decay (auto-pinned):**
+- `## About Me`, `## Current Projects`, `## Technical Environment`, `## Patterns & Preferences`
+- `## Pinned` - move important learnings here to protect them
+
+**Subject to decay:**
+- `## Key Learnings`, `## Error Patterns to Avoid`, `## Best Practices`
+- Project sections: `## Data Quirks`, `## Key Decisions`, `## Useful Commands`
+
+Learnings with creation dates older than `decay.ageDays` (default: 30) are moved to `~/.claude/memory/.decay-archive.md`. Archived items older than `decay.archiveRetentionDays` (default: 365) are purged.
+
+**Learning format**: `- **Title** [scope/type] (YYYY-MM-DD): Description`
+
+The inline date enables age tracking. Learnings without dates are protected from decay.
+
 ### Synthesis Workflow
 
-Synthesis runs automatically at session start when unprocessed transcripts exist. Claude spawns a background subagent to process them, keeping the main conversation context lean.
+Synthesis is scheduled to balance freshness with efficiency:
+
+- **First session of day (UTC)**: Always prompts if transcripts pending
+- **Subsequent sessions**: Only prompts if more than `synthesis.intervalHours` since last synthesis
+
+Claude spawns a background Haiku subagent to process transcripts, keeping the main conversation context lean (~80% cost reduction vs. Sonnet).
 
 The synthesis process:
 
-1. **Phase 0**: Update project index (maps projects to work days)
-2. **Phase 1**: Convert raw transcripts into daily summaries with tagged learnings (`[scope/type]`)
-3. **Phase 2**: Route learnings to appropriate long-term memory:
+1. **Phase 0**: Migration check (one-time: adds Pinned sections, dates to learnings)
+2. **Phase 0.5**: Update project index (maps projects to work days)
+3. **Phase 1**: Convert raw transcripts into daily summaries (1-4 KB each) with tagged learnings
+4. **Phase 2**: Route learnings to appropriate long-term memory:
    - `[global/*]` → `global-long-term-memory.md`
    - `[{project}/*]` → `project-memory/{project}-long-term-memory.md`
+5. **Phase 3**: Apply age-based decay (archive old learnings, purge expired archives)
+6. **Phase 4**: Update synthesis timestamp
 
 **Learning types**: `error`, `best-practice`, `data-quirk`, `decision`, `command`
 

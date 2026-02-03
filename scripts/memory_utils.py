@@ -88,7 +88,7 @@ def get_captured_file() -> Path:
 DEFAULT_SETTINGS = {
     "version": 3,
     "globalShortTerm": {
-        "workingDays": 7,
+        "workingDays": 2,
         "tokenLimit": 15000,
     },
     "globalLongTerm": {
@@ -103,6 +103,13 @@ DEFAULT_SETTINGS = {
     },
     "projectSettings": {
         "includeSubdirectories": False,
+    },
+    "synthesis": {
+        "intervalHours": 2,
+    },
+    "decay": {
+        "ageDays": 30,
+        "archiveRetentionDays": 365,
     },
     "totalTokenBudget": 30000,
 }

@@ -31,16 +31,21 @@ When the user invokes this skill:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
-| Global short-term working days | 7 | Days with activity to load |
-| Global short-term token limit | 15,000 | Soft limit for daily summaries |
-| Global long-term token limit | 7,000 | Soft limit for global-long-term-memory.md |
+| **Total token budget** | **30,000** | **Overall memory budget** |
+| Global short-term working days | 2 | Days with activity to load |
+| Global short-term token limit | 5,000 | Soft limit for daily summaries |
+| Global long-term token limit | 8,000 | Soft limit for global-long-term-memory.md |
 | Project short-term working days | 7 | Project-specific history days |
-| Project short-term token limit | 5,000 | Soft limit for project daily history |
-| Project long-term token limit | 3,000 | Soft limit for project-memory/*.md |
+| Project short-term token limit | 10,000 | Soft limit for project daily history |
+| Project long-term token limit | 7,000 | Soft limit for project-memory/*.md |
 | Include subdirectories | false | Match subdirs to parent project |
-| Total token budget | 30,000 | Overall memory budget |
+| Synthesis interval (hours) | 2 | Hours between auto-synthesis prompts |
+| Decay age (days) | 30 | Archive learnings older than this |
+| Archive retention (days) | 365 | Purge archived items older than this |
 
 Settings file: `~/.claude/memory/settings.json`
+
+Run `/settings usage` to see current token usage.
 ```
 
 ### For `/settings usage`:
@@ -67,29 +72,12 @@ Settings file: `~/.claude/memory/settings.json`
 ✓ = Within limit, ⚠ = Over limit (soft warning)
 ```
 
-Use Python for file size calculation:
-```python
-from pathlib import Path
-
-memory_dir = Path.home() / ".claude" / "memory"
-
-# Global long-term
-global_memory = memory_dir / "global-long-term-memory.md"
-if global_memory.exists():
-    global_long_term_tokens = global_memory.stat().st_size // 4
-
-# Global short-term (daily files, list, sort, take latest N)
-daily_dir = memory_dir / "daily"
-if daily_dir.exists():
-    daily_files = sorted(daily_dir.glob("*.md"), reverse=True)[:7]
-    global_short_term_tokens = sum(f.stat().st_size for f in daily_files) // 4
-
-# Project long-term (if in a project)
-project_memory_dir = memory_dir / "project-memory"
-project_file = project_memory_dir / f"{project_name}-long-term-memory.md"
-if project_file.exists():
-    project_long_term_tokens = project_file.stat().st_size // 4
+Run the token usage script:
+```bash
+python3 $HOME/.claude/scripts/token_usage.py
 ```
+
+This outputs key=value pairs that can be parsed for the usage report.
 
 ### For `/settings set <path> <value>`:
 
@@ -106,6 +94,9 @@ Valid paths:
 - `projectShortTerm.tokenLimit` (integer, 1000-50000)
 - `projectLongTerm.tokenLimit` (integer, 1000-50000)
 - `projectSettings.includeSubdirectories` (boolean)
+- `synthesis.intervalHours` (integer, 1-24)
+- `decay.ageDays` (integer, 7-365)
+- `decay.archiveRetentionDays` (integer, 30-730)
 - `totalTokenBudget` (integer, 10000-100000)
 
 Example:
@@ -121,13 +112,16 @@ Reset settings to default values. The defaults are stored in `_defaults` section
 - `/settings reset projectLongTerm.tokenLimit` - Reset specific setting
 
 Default values:
-- `globalShortTerm.workingDays`: 7
-- `globalShortTerm.tokenLimit`: 15000
-- `globalLongTerm.tokenLimit`: 7000
+- `globalShortTerm.workingDays`: 2
+- `globalShortTerm.tokenLimit`: 5000
+- `globalLongTerm.tokenLimit`: 8000
 - `projectShortTerm.workingDays`: 7
-- `projectShortTerm.tokenLimit`: 5000
-- `projectLongTerm.tokenLimit`: 3000
+- `projectShortTerm.tokenLimit`: 10000
+- `projectLongTerm.tokenLimit`: 7000
 - `projectSettings.includeSubdirectories`: false
+- `synthesis.intervalHours`: 2
+- `decay.ageDays`: 30
+- `decay.archiveRetentionDays`: 365
 - `totalTokenBudget`: 30000
 
 ## Token Guidance
@@ -157,6 +151,35 @@ When `projectSettings.includeSubdirectories` is `true`:
 - Uses longest path match (most specific project wins)
 
 **Warning**: May load excessive context for repos with many active subdirectories. Use with caution on large monorepos.
+
+## Synthesis Scheduling
+
+The `synthesis.intervalHours` setting controls how often auto-synthesis prompts appear:
+- **First session of day (UTC)**: Always prompts for synthesis if transcripts pending
+- **Subsequent sessions**: Only prompts if more than N hours since last synthesis
+- **Default**: 2 hours
+
+This prevents redundant synthesis prompts when starting multiple short sessions.
+
+## Decay Settings
+
+The decay system automatically archives old learnings to keep long-term memory lean:
+
+- `decay.ageDays` (default: 30): Learnings older than this are archived
+- `decay.archiveRetentionDays` (default: 365): Archived items older than this are purged
+
+**What gets decayed:**
+- Learnings in decay-eligible sections (Key Learnings, Error Patterns, Best Practices, etc.)
+- Only learnings with creation dates older than `ageDays`
+
+**What is protected:**
+- Auto-pinned sections: About Me, Current Projects, Technical Environment, Patterns & Preferences
+- Custom pinned section: `## Pinned` - move important learnings here to protect them
+- Learnings without dates (legacy format) - add dates during synthesis to enable decay
+
+**Archive location**: `~/.claude/memory/.decay-archive.md`
+
+To recover an archived learning, manually copy it back to the appropriate section.
 
 ## Settings File Location
 

@@ -20,7 +20,7 @@ Requirements: Python 3.9+
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -50,6 +50,58 @@ from memory_utils import (
 
 # Minimum age for orphan transcripts (seconds) - 30 minutes
 ORPHAN_MIN_AGE = 30 * 60
+
+
+def get_last_synthesis_file() -> Path:
+    """Get the path to the .last-synthesis timestamp file."""
+    return get_memory_dir() / ".last-synthesis"
+
+
+def should_synthesize(settings: dict) -> bool:
+    """
+    Determine if synthesis should run based on scheduling rules.
+
+    Synthesis runs if:
+    1. .last-synthesis file doesn't exist (never synthesized)
+    2. Last synthesis was on a different day (UTC) - first session of day
+    3. More than intervalHours since last synthesis
+
+    Args:
+        settings: Memory settings dict with synthesis.intervalHours
+
+    Returns:
+        True if synthesis should run, False otherwise
+    """
+    last_synthesis_file = get_last_synthesis_file()
+    interval_hours = settings.get("synthesis", {}).get("intervalHours", 2)
+
+    try:
+        if not last_synthesis_file.exists():
+            return True  # Never synthesized
+
+        last_time_str = last_synthesis_file.read_text(encoding="utf-8").strip()
+        last_time = datetime.fromisoformat(last_time_str)
+
+        # Ensure timezone awareness
+        if last_time.tzinfo is None:
+            last_time = last_time.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        hours_since = (now - last_time).total_seconds() / 3600
+
+        # First session of day (UTC) OR >interval since last
+        return last_time.date() < now.date() or hours_since > interval_hours
+
+    except (ValueError, OSError, IOError):
+        return True  # Fallback: always synthesize if file missing/invalid
+
+
+def update_last_synthesis_time() -> None:
+    """Update .last-synthesis file with current UTC timestamp."""
+    last_synthesis_file = get_last_synthesis_file()
+    last_synthesis_file.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    last_synthesis_file.write_text(timestamp, encoding="utf-8")
 
 
 def recover_orphan_transcripts() -> int:
@@ -273,9 +325,9 @@ def main() -> None:
     # Start output
     print("<memory>")
 
-    # Check for pending transcripts
+    # Check for pending transcripts (only if synthesis scheduling allows)
     pending_count = count_pending_transcripts()
-    if pending_count > 0:
+    if pending_count > 0 and should_synthesize(settings):
         print("## AUTO-SYNTHESIZE REQUIRED")
         print(f"There are {pending_count} unprocessed session transcripts.")
         print()
@@ -288,6 +340,8 @@ def main() -> None:
         print('and delete processed transcript files. Return a brief summary of what was processed."')
         print("```")
         print()
+        # Update synthesis timestamp so we don't prompt again within interval
+        update_last_synthesis_time()
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()

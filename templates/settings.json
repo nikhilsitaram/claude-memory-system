@@ -1,26 +1,35 @@
 {
   "version": 3,
   "globalShortTerm": {
-    "workingDays": 7,
-    "tokenLimit": 15000,
+    "workingDays": 2,
+    "tokenLimit": 5000,
     "_comment": "Daily session summaries (daily/*.md) - loads N most recent days with activity"
   },
   "globalLongTerm": {
-    "tokenLimit": 7000,
+    "tokenLimit": 8000,
     "_comment": "global-long-term-memory.md - user profile, patterns, preferences"
   },
   "projectShortTerm": {
     "workingDays": 7,
-    "tokenLimit": 5000,
+    "tokenLimit": 10000,
     "_comment": "Project-specific daily history - loads N days with activity for this project"
   },
   "projectLongTerm": {
-    "tokenLimit": 3000,
+    "tokenLimit": 7000,
     "_comment": "project-memory/{project}-long-term-memory.md - project-specific learnings"
   },
   "projectSettings": {
     "includeSubdirectories": false,
     "_comment": "If true, /project/subdir matches /project for project memory loading"
+  },
+  "synthesis": {
+    "intervalHours": 2,
+    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day)"
+  },
+  "decay": {
+    "ageDays": 30,
+    "archiveRetentionDays": 365,
+    "_comment": "Learnings older than ageDays are archived; archived items older than archiveRetentionDays are purged"
   },
   "totalTokenBudget": 30000,
   "_tokenGuidance": {
@@ -32,13 +41,16 @@
     "total": "25K-40K tokens: ~30K is a good balance for context efficiency"
   },
   "_defaults": {
-    "globalShortTerm.workingDays": 7,
-    "globalShortTerm.tokenLimit": 15000,
-    "globalLongTerm.tokenLimit": 7000,
+    "globalShortTerm.workingDays": 2,
+    "globalShortTerm.tokenLimit": 5000,
+    "globalLongTerm.tokenLimit": 8000,
     "projectShortTerm.workingDays": 7,
-    "projectShortTerm.tokenLimit": 5000,
-    "projectLongTerm.tokenLimit": 3000,
+    "projectShortTerm.tokenLimit": 10000,
+    "projectLongTerm.tokenLimit": 7000,
     "projectSettings.includeSubdirectories": false,
+    "synthesis.intervalHours": 2,
+    "decay.ageDays": 30,
+    "decay.archiveRetentionDays": 365,
     "totalTokenBudget": 30000
   }
 }

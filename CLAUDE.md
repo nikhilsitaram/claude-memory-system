@@ -111,9 +111,13 @@ After synthesis, the memory directory looks like:
 
 ```
 ~/.claude/memory/
-├── global-long-term-memory.md    # Global patterns (always loaded)
-├── settings.json
-├── projects-index.json
+├── global-long-term-memory.md    # Global patterns (always loaded, has ## Pinned)
+├── settings.json                 # Memory configuration
+├── projects-index.json           # Project → work days mapping
+├── .last-synthesis               # UTC timestamp of last synthesis
+├── .decay-archive.md             # Archived learnings (recoverable)
+├── .migration-complete           # One-time migration marker
+├── .captured                     # Tracks saved session IDs
 ├── daily/
 │   └── YYYY-MM-DD.md             # Daily summaries with ## Learnings
 ├── project-memory/
@@ -177,13 +181,16 @@ python3 ~/.claude/scripts/indexing.py build-index
 ## Key Files Reference
 
 - **~/.claude/settings.json**: User's Claude Code settings (hooks, permissions)
-- **~/.claude/memory/settings.json**: Memory system configuration (working days, token limits)
-- **global-long-term-memory.md**: Synthesized user profile and global patterns
-- **project-memory/{project}-long-term-memory.md**: Project-specific learnings
+- **~/.claude/memory/settings.json**: Memory system configuration (working days, token limits, synthesis, decay)
+- **global-long-term-memory.md**: Synthesized user profile and global patterns (has `## Pinned` section)
+- **project-memory/{project}-long-term-memory.md**: Project-specific learnings (has `## Pinned` section)
 - **projects-index.json**: Maps project paths to their work days (for project-aware loading)
 - **daily/YYYY-MM-DD.md**: Daily session summaries (may include `<!-- projects: ... -->` tags and `## Learnings` section)
 - **transcripts/{date}/{session_id}.jsonl**: Raw session data (JSONL format)
 - **.captured**: Tracks which session IDs have been saved (prevents duplicates)
+- **.last-synthesis**: UTC ISO timestamp of last synthesis (controls scheduling)
+- **.decay-archive.md**: Archive of decayed learnings (recoverable, purged after 1 year)
+- **.migration-complete**: Marker preventing re-run of one-time migration
 
 ## Project-Aware Loading
 
@@ -205,16 +212,24 @@ Memory system settings are stored in `~/.claude/memory/settings.json`:
 
 ```json
 {
-  "globalShortTerm": { "workingDays": 7, "tokenLimit": 15000 },
+  "globalShortTerm": { "workingDays": 2, "tokenLimit": 15000 },
   "globalLongTerm": { "tokenLimit": 7000 },
   "projectShortTerm": { "workingDays": 7, "tokenLimit": 5000 },
   "projectLongTerm": { "tokenLimit": 3000 },
   "projectSettings": { "includeSubdirectories": false },
+  "synthesis": { "intervalHours": 2 },
+  "decay": { "ageDays": 30, "archiveRetentionDays": 365 },
   "totalTokenBudget": 30000
 }
 ```
 
-Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to check consumption.
+**Key settings:**
+- `globalShortTerm.workingDays`: 2 (reduced from 7 - project memory covers most context)
+- `synthesis.intervalHours`: Hours between auto-synthesis prompts (always runs on first session of day)
+- `decay.ageDays`: Learnings older than this are archived (default: 30)
+- `decay.archiveRetentionDays`: Archived items older than this are purged (default: 365)
+
+Token limits are informational (soft warnings), not hard caps. Use `/settings` to see current usage alongside limits.
 
 ## Project Management (`/projects`)
 
@@ -263,6 +278,34 @@ Claude Code encodes project paths as folder names:
 - Both `/` and `.` become `-`
 
 This encoding is **lossy** - you cannot reliably decode back. Always read `sessions-index.json` inside the folder for the authoritative original path.
+
+## Synthesis Scheduling
+
+Auto-synthesis prompts are controlled by `synthesis.intervalHours` setting:
+
+- **First session of day (UTC)**: Always prompts if transcripts pending
+- **Subsequent sessions**: Only prompts if more than N hours since last synthesis
+- **Default**: 2 hours
+
+The `.last-synthesis` file stores the UTC timestamp. Delete it to force synthesis on next session.
+
+## Age-Based Decay
+
+Learnings in long-term memory files are subject to 30-day decay (configurable via `decay.ageDays`):
+
+**Auto-pinned sections** (never decay):
+- `## About Me`, `## Current Projects`, `## Technical Environment`, `## Patterns & Preferences`
+- `## Pinned` - move important learnings here to protect them
+
+**Decay-eligible sections** (subject to 30-day archival):
+- `## Key Learnings`, `## Error Patterns to Avoid`, `## Best Practices`
+- Project sections: `## Data Quirks`, `## Key Decisions`, `## Useful Commands`
+
+**Learning format with date**: `- **Title** [scope/type] (YYYY-MM-DD): Description`
+
+The creation date `(YYYY-MM-DD)` enables age calculation. Learnings without dates are protected from decay (add dates during synthesis to enable decay).
+
+**Archive**: Decayed learnings go to `.decay-archive.md`, retained for 365 days (configurable), then purged.
 
 ## Orphan Recovery
 

@@ -6,6 +6,17 @@ user-invocable: true
 
 # Recall Skill
 
+## Proactive Use (IMPORTANT)
+
+Use this skill PROACTIVELY without being asked when:
+- User asks about past decisions, discussions, or work ("what did we decide about X?")
+- User references something from more than a week ago
+- User asks "when did we...", "did we ever...", "have we talked about..."
+- A topic comes up that likely has relevant history (projects, patterns, bugs fixed)
+- User seems to expect you to remember something not in the loaded context
+
+Don't wait to be prompted - search first, then answer with full context.
+
 ## Instructions
 
 1. Get the search query from the user
