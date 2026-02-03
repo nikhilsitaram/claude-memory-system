@@ -216,31 +216,43 @@ This loads:
 
 ## Settings Configuration
 
-Memory system settings are stored in `~/.claude/memory/settings.json`:
+Memory system settings are stored in `~/.claude/memory/settings.json`. Use `/settings` to view and `/settings set <path> <value>` to modify.
 
-```json
-{
-  "globalShortTerm": { "workingDays": 2 },
-  "globalLongTerm": { "tokenLimit": 5000 },
-  "projectShortTerm": { "workingDays": 7 },
-  "projectLongTerm": { "tokenLimit": 5000 },
-  "projectSettings": { "includeSubdirectories": false },
-  "synthesis": { "intervalHours": 2 },
-  "decay": { "ageDays": 30, "archiveRetentionDays": 365 }
-}
+### Default Values
+
+| Setting | Default | Modifiable | Notes |
+|---------|---------|------------|-------|
+| `globalShortTerm.workingDays` | 2 | Yes | Days of daily summaries to load |
+| `globalLongTerm.tokenLimit` | 5,000 | Yes | Fixed limit for global memory |
+| `projectShortTerm.workingDays` | 7 | Yes | Days of project history to load |
+| `projectLongTerm.tokenLimit` | 5,000 | Yes | Fixed limit for project memory |
+| `projectSettings.includeSubdirectories` | false | Yes | Match subdirs to parent project |
+| `synthesis.intervalHours` | 2 | Yes | Hours between auto-synthesis |
+| `decay.ageDays` | 30 | Yes | Archive learnings older than this |
+| `decay.archiveRetentionDays` | 365 | Yes | Purge archived items after this |
+
+### Calculated Token Limits
+
+Short-term token limits are **calculated dynamically** in `memory_utils.py`:
+
+```
+shortTermTokenLimit = workingDays × 1500
+totalTokenBudget = sum of all 4 component limits
 ```
 
-**Key settings:**
-- `globalShortTerm.workingDays`: 2 (reduced from 7 - project memory covers most context)
-- `synthesis.intervalHours`: Hours between auto-synthesis prompts (always runs on first session of day)
-- `decay.ageDays`: Learnings older than this are archived (default: 30)
-- `decay.archiveRetentionDays`: Archived items older than this are purged (default: 365)
+The multiplier (1,500 tokens/day) is hardcoded based on observed max ~1,200 tokens/day with headroom.
 
-**Dynamic token limits**: Short-term tokenLimits and totalTokenBudget are calculated automatically in `memory_utils.py`:
-- Formula: `workingDays × 1500` (based on ~1200 observed max tokens/day)
-- Total budget = sum of 4 component limits (default: 23,500)
+| Component | Calculation | Default |
+|-----------|-------------|---------|
+| Global short-term | 2 days × 1,500 | 3,000 |
+| Global long-term | fixed | 5,000 |
+| Project short-term | 7 days × 1,500 | 10,500 |
+| Project long-term | fixed | 5,000 |
+| **Total** | sum | **23,500** |
 
-Token limits are informational (soft warnings), not hard caps. Use `/settings usage` to see current usage alongside limits.
+**To increase short-term limits**: Change `workingDays` (e.g., `/settings set globalShortTerm.workingDays 3` → 4,500 tokens).
+
+Token limits are soft warnings, not hard caps. Use `/settings usage` to see current usage vs limits.
 
 ## Project Management (`/projects`)
 
