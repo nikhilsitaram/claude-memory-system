@@ -11,7 +11,7 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 - **Configurable settings**: Token budgets, working days, and subdirectory matching via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
 - **Recovery**: Orphaned transcripts from ungraceful exits are recovered automatically on session start
-- **Auto-synthesize prompt**: Unprocessed transcripts trigger reminder at session start
+- **Auto-synthesis**: Unprocessed transcripts are automatically processed at session start
 - **Manual notes**: `/remember` for specific highlights
 - **Historical search**: `/recall` for searching older memory
 - **Cross-platform**: Works on Windows, macOS, and Linux (Python 3.9+ required)
@@ -98,7 +98,7 @@ When you start a session in a project directory, the system automatically loads 
 
 **Working days vs calendar days**: The system scans for existing daily files rather than looping through calendar dates. If you work Mon-Thu but not Fri-Sun, you get 7 actual work days of context, not 7 calendar days with 3 empty.
 
-**Project detection**: By default, uses exact path match only. Enable `includeSubdirectories` in settings to match `/project/subdir` to `/project/`.
+**Project detection**: By default, uses exact path match only. Enable `projectSettings.includeSubdirectories` to match `/project/subdir` to `/project/`.
 
 **Why "project days"?** If you work on a project sporadically (e.g., Jan 25, then Feb 15), all project days of context come from meaningful work sessions - no wasted context on empty days.
 
@@ -133,38 +133,33 @@ Configure the memory system via `~/.claude/memory/settings.json`:
 
 ```json
 {
-  "shortTermMemory": {
-    "calendarDays": 7,
-    "tokenLimit": 15000
-  },
-  "projectMemory": {
-    "workingDays": 7,
-    "dailyTokenLimit": 5000,
-    "longTermTokenLimit": 3000,
-    "includeSubdirectories": false
-  },
-  "longTermMemory": {
-    "tokenLimit": 7000
-  },
+  "globalShortTerm": { "workingDays": 7, "tokenLimit": 15000 },
+  "globalLongTerm": { "tokenLimit": 7000 },
+  "projectShortTerm": { "workingDays": 7, "tokenLimit": 5000 },
+  "projectLongTerm": { "tokenLimit": 3000 },
+  "projectSettings": { "includeSubdirectories": false },
   "totalTokenBudget": 30000
 }
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `shortTermMemory.calendarDays` | 7 | Recent calendar days of daily summaries to load |
-| `projectMemory.workingDays` | 7 | Project-specific days to load (only days with activity) |
-| `projectMemory.includeSubdirectories` | false | Match subdirs to parent project |
-| `projectMemory.dailyTokenLimit` | 5000 | Token limit for project daily history |
-| `projectMemory.longTermTokenLimit` | 3000 | Token limit for project long-term memory |
-| `longTermMemory.tokenLimit` | 7000 | Token limit for global long-term memory |
+| `globalShortTerm.workingDays` | 7 | Recent days with activity to load (daily summaries) |
+| `globalShortTerm.tokenLimit` | 15000 | Token limit for daily summaries |
+| `globalLongTerm.tokenLimit` | 7000 | Token limit for global long-term memory |
+| `projectShortTerm.workingDays` | 7 | Project-specific days to load (only days with project activity) |
+| `projectShortTerm.tokenLimit` | 5000 | Token limit for project daily history |
+| `projectLongTerm.tokenLimit` | 3000 | Token limit for project long-term memory |
+| `projectSettings.includeSubdirectories` | false | Match subdirs to parent project |
 | `totalTokenBudget` | 30000 | Overall memory token budget (informational) |
 
 Token limits are soft warnings, not hard caps. Use `/settings usage` to check current token consumption.
 
 ### Synthesis Workflow
 
-Run `/synthesize` periodically (weekly recommended) to:
+Synthesis runs automatically at session start when unprocessed transcripts exist. Claude spawns a background subagent to process them, keeping the main conversation context lean.
+
+The synthesis process:
 
 1. **Phase 0**: Update project index (maps projects to work days)
 2. **Phase 1**: Convert raw transcripts into daily summaries with tagged learnings (`[scope/type]`)
@@ -174,7 +169,7 @@ Run `/synthesize` periodically (weekly recommended) to:
 
 **Learning types**: `error`, `best-practice`, `data-quirk`, `decision`, `command`
 
-**Auto-synthesis**: At session start, if unprocessed transcripts exist, Claude spawns a background subagent to process them. This keeps the main conversation context lean while handling potentially large transcript files.
+**Manual synthesis**: You can also run `/synthesize` at any time to process pending transcripts immediately.
 
 ## Uninstallation
 
@@ -192,7 +187,7 @@ git pull
 python3 install.py    # or: python install.py
 ```
 
-The installer is idempotent and handles migrations from previous versions (including the bash-based version).
+The installer is idempotent and preserves your existing memory data.
 
 ## File Locations
 
@@ -204,15 +199,6 @@ The installer is idempotent and handles migrations from previous versions (inclu
 | Scripts | `~/.claude/scripts/` |
 | Skills | `~/.claude/skills/` |
 | Claude settings | `~/.claude/settings.json` |
-
-## Migration from Bash Version
-
-If you previously installed the bash-based version (install.sh), the Python installer will:
-
-1. Remove old bash hooks (load-memory.sh, save-session.sh)
-2. Remove the cron job (recovery now runs on SessionStart)
-3. Add new Python hooks
-4. Preserve all your memory data
 
 ## License
 
