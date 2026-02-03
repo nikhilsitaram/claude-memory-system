@@ -24,7 +24,6 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Minimum Python version
@@ -86,23 +85,6 @@ def get_claude_dir() -> Path:
 def get_memory_dir() -> Path:
     """Get the memory directory."""
     return get_claude_dir() / "memory"
-
-
-def backup_settings(settings_file: Path) -> Path | None:
-    """Backup existing settings.json. Returns backup path or None."""
-    if not settings_file.exists():
-        return None
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = settings_file.parent / f"settings.json.backup.{timestamp}"
-
-    try:
-        shutil.copy2(settings_file, backup_path)
-        print(f"Backed up settings to: {backup_path}")
-        return backup_path
-    except IOError as e:
-        print(f"Warning: Could not backup settings: {e}")
-        return None
 
 
 def load_json_file(filepath: Path) -> dict:
@@ -488,8 +470,6 @@ def main() -> int:
 
     # Update settings.json
     settings_file = claude_dir / "settings.json"
-    backup_settings(settings_file)
-
     settings = load_json_file(settings_file)
 
     # Add hooks
