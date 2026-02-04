@@ -1,28 +1,24 @@
 # {Project Name}
 
 ## Pinned
-<!-- Custom pinned learnings: never decay -->
-<!-- Move important learnings here to protect from age-based decay -->
+<!-- Custom pinned: never decay -->
+<!-- Move important items here to protect from age-based decay -->
 
-## Error Patterns to Avoid
+## Key Actions
 <!-- Subject to 30-day decay -->
-<!-- Mistakes encountered and how to prevent them -->
-
-## Best Practices
-<!-- Subject to 30-day decay -->
-<!-- Patterns and approaches that worked well -->
-
-## Data Quirks
-<!-- Subject to 30-day decay -->
-<!-- Gotchas, edge cases, data quality issues -->
+<!-- Significant actions worth remembering. From daily Actions. -->
 
 ## Key Decisions
 <!-- Subject to 30-day decay -->
-<!-- Important choices made and their rationale -->
+<!-- Important choices and rationale. From daily Decisions. -->
 
-## Useful Commands
+## Key Learnings
 <!-- Subject to 30-day decay -->
-<!-- Queries, scripts, commands that helped -->
+<!-- Patterns, gotchas, insights. From daily Learnings (title + description). -->
+
+## Key Lessons
+<!-- Subject to 30-day decay -->
+<!-- Actionable takeaways. From daily Learnings (Lesson line). -->
 
 ---
 *Last updated: {date}*

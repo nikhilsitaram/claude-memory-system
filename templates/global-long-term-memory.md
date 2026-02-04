@@ -17,20 +17,24 @@
 <!-- Coding style, decision patterns, things I like/dislike -->
 
 ## Pinned
-<!-- Custom pinned learnings: never decay -->
-<!-- Move important learnings here to protect from age-based decay -->
+<!-- Custom pinned: never decay -->
+<!-- Move important items here to protect from age-based decay -->
+
+## Key Actions
+<!-- Subject to 30-day decay -->
+<!-- Significant actions worth remembering. From daily Actions. -->
+
+## Key Decisions
+<!-- Subject to 30-day decay -->
+<!-- Important choices and rationale. From daily Decisions. -->
 
 ## Key Learnings
 <!-- Subject to 30-day decay -->
-<!-- Important discoveries, solutions, insights worth preserving -->
+<!-- Patterns, gotchas, insights. From daily Learnings (title + description). -->
 
-## Error Patterns to Avoid
+## Key Lessons
 <!-- Subject to 30-day decay -->
-<!-- Global mistakes and how to prevent them -->
-
-## Best Practices
-<!-- Subject to 30-day decay -->
-<!-- Patterns that work well across projects -->
+<!-- Actionable takeaways. From daily Learnings (Lesson line). -->
 
 ---
 *Last synthesized: never*

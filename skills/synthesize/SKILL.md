@@ -100,41 +100,48 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
 **IMPORTANT:** Do NOT include date in daily file learnings - date is derived from filename during long-term routing.
 
-## Phase 2: Route Learnings
+## Phase 2: Route to Long-Term Memory
 
-### Global → `~/.claude/memory/global-long-term-memory.md`
+Route daily content to long-term memory files:
+- Global (`[global/*]`) → `~/.claude/memory/global-long-term-memory.md`
+- Project (`[project/*]`) → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
 
-| Tag | Section |
-|-----|---------|
-| `[global/error]` | `## Error Patterns to Avoid` |
-| `[global/best-practice]` | `## Best Practices` |
-| `[global/data-quirk]` | `## Key Learnings` |
-| `[global/decision]` | `## Patterns & Preferences` |
-| `[global/command]` | `## Key Learnings` |
+### Routing Table
 
-### Project → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
+| Daily Section | Daily Tag | Long-Term Section |
+|---------------|-----------|-------------------|
+| `## Actions` | `[scope/action]` | `## Key Actions` |
+| `## Decisions` | `[scope/decision]` | `## Key Decisions` |
+| `## Learnings` (line 1) | `[scope/type]` | `## Key Learnings` |
+| `## Learnings` (line 2) | `Lesson:` | `## Key Lessons` |
 
-| Tag | Section |
-|-----|---------|
-| `[{project}/error]` | `## Error Patterns to Avoid` |
-| `[{project}/best-practice]` | `## Best Practices` |
-| `[{project}/data-quirk]` | `## Data Quirks` |
-| `[{project}/decision]` | `## Key Decisions` |
-| `[{project}/command]` | `## Useful Commands` |
+### Routing Rules
 
-**Deduplication:** Before adding, check if concept already exists (even with different wording). Skip duplicates.
+1. **Scope-stripping:** Remove scope from tag (long-term file is already scoped)
+2. **Date addition:** Add `(YYYY-MM-DD)` from daily filename
+3. **Deduplication:** Check if concept already exists (skip duplicates)
+4. **Selective routing:** Only route items worth preserving long-term (not every action/decision)
 
-**Scope-stripping and date addition:** When routing to long-term memory:
-1. Strip the scope from the tag (long-term file is already scoped)
-2. Add date from the daily file's filename
+### Examples
 
-Example:
 ```markdown
 # In daily file (2026-02-02.md):
+## Actions
+- [claude-memory-system/action] Implemented age-based decay with 30-day threshold
+
+## Learnings
 - **Path encoding lossy** [claude-memory-system/data-quirk]: Both / and . become -
+  - Lesson: Always read sessions-index.json for authoritative path
 
 # Routed to project-memory/claude-memory-system-long-term-memory.md:
+## Key Actions
+- [action] (2026-02-02): Implemented age-based decay with 30-day threshold
+
+## Key Learnings
 - **Path encoding lossy** [data-quirk] (2026-02-02): Both / and . become -
+
+## Key Lessons
+- [data-quirk] (2026-02-02): Always read sessions-index.json for authoritative path
 ```
 
 **Templates** (read for section structure):
@@ -171,7 +178,7 @@ python3 $HOME/.claude/scripts/decay.py
 
 **Protected sections** (never decay): `## About Me`, `## Current Projects`, `## Technical Environment`, `## Patterns & Preferences`, `## Pinned`
 
-**Decay-eligible sections:** `## Key Learnings`, `## Error Patterns to Avoid`, `## Best Practices`, `## Data Quirks`, `## Key Decisions`, `## Useful Commands`
+**Decay-eligible sections:** `## Key Actions`, `## Key Decisions`, `## Key Learnings`, `## Key Lessons`
 
 Learnings without `(YYYY-MM-DD)` dates are protected from decay.
 

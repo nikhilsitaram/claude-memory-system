@@ -51,16 +51,12 @@ AUTO_PINNED_SECTIONS = {
     "## Pinned",
 }
 
-# Decay-eligible sections
+# Decay-eligible sections (same for global and project)
 DECAY_ELIGIBLE_SECTIONS = {
-    # Global
-    "## Key Learnings",
-    "## Error Patterns to Avoid",
-    "## Best Practices",
-    # Project
-    "## Data Quirks",
+    "## Key Actions",
     "## Key Decisions",
-    "## Useful Commands",
+    "## Key Learnings",
+    "## Key Lessons",
 }
 
 
