@@ -114,8 +114,8 @@ def parse_jsonl_file(filepath: Path) -> list[dict]:
                         content = extract_text_content(msg.get("content", ""))
 
                         if content:
-                            # Skip tool results and system content for user messages
-                            if role == "user" and content.startswith("<"):
+                            # Skip all user messages - Claude echoes important context
+                            if role == "user":
                                 continue
                             # Skip low-value messages (skill injections, system reminders)
                             if should_skip_message(content):
