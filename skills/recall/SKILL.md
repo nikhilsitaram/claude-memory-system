@@ -56,3 +56,23 @@ ls ~/.claude/memory/daily/2026-01-*.md
 ```
 
 Always provide the date with each result so the user knows when something happened.
+
+## Format Compatibility
+
+Daily files may use two formats:
+
+**Old format (pre-2026-02-05):**
+- `## Sessions Summary` - What was accomplished
+- `## Topics` - List of topics covered
+- `## Key Points` - Detailed outcomes and configurations
+- `## Learnings` - Tagged learnings with dates
+
+**New format (2026-02-05+):**
+- `## Actions` - What was done, tagged `[scope/action]`
+- `## Decisions` - Choices with rationale, tagged `[project/decision]` or `[global/decision]`
+- `## Learnings` - Tagged `[scope/type]` but NO date (date comes from filename)
+
+When searching, be aware that:
+- "What was done" may be in `## Sessions Summary`, `## Key Points`, or `## Actions`
+- "Decisions" may be in `## Key Points` or `## Decisions`
+- `## Learnings` format is consistent across both

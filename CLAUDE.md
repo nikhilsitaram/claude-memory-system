@@ -35,11 +35,18 @@ claude-memory-system/
 
 **Learning flow:**
 ```
-Session transcript → /synthesize Phase 1 → Daily summary with ## Learnings
-                  → /synthesize Phase 2 → Route [global/*] or [{project}/*] to long-term files
+Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions, Learnings)
+                  → /synthesize Phase 2 → Route tagged content to long-term files
 ```
 
-**Learning tags:** `[scope/type]` where scope is `global` or project name, type is `error`, `best-practice`, `data-quirk`, `decision`, `command`.
+**Daily file format:**
+- `## Actions` - What was done, tagged `[scope/action]`
+- `## Decisions` - Choices with rationale, tagged `[project/decision]` or `[global/decision]`
+- `## Learnings` - Patterns/gotchas, tagged `[scope/type]` (no date - comes from filename)
+
+**Tag types:** `error`, `best-practice`, `data-quirk`, `decision`, `command`
+
+**Filtering:** Tags determine scope (not content). Untagged content treated as global.
 
 ## Making Changes
 

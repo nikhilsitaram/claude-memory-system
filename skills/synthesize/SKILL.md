@@ -53,22 +53,39 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 ```markdown
 # YYYY-MM-DD
 
-<!-- projects: project-name-1, project-name-2 -->
+## Actions
+<!-- What was done. Tag [scope/action]. -->
+- [project-name/action] What was accomplished for this project
+- [global/action] What was accomplished that applies broadly
 
-## Sessions Summary
-[1-2 sentences: what was accomplished]
-
-## Topics
-- [Topic 1]
-- [Topic 2]
-
-## Key Points
-[Only decisions, outcomes, insights - not process details]
+## Decisions
+<!-- Important choices and rationale. Tag [project/decision] or [global/decision]. -->
+- [project-name/decision] Choice made and why it was made
+- [global/decision] Project-agnostic choice and rationale
 
 ## Learnings
-- **Title** [scope/type] (YYYY-MM-DD): Brief description
+<!-- Patterns, gotchas, insights. Must include scope/type tag. NO DATE - comes from filename. -->
+- **Title** [scope/type]: Brief description
   - Lesson: Actionable takeaway
 ```
+
+### Content Guidance
+
+**Actions** - "What was done":
+- Implemented features, fixed bugs, completed tasks
+- Configuration changes, setup work
+- Research and exploration outcomes
+- Tagged `[scope/action]` where scope is project name or `global`
+
+**Decisions** - "What was chosen and why":
+- Architecture choices, technology selections
+- Tradeoffs evaluated and rationale
+- Policy decisions, workflow changes
+- Always include the "why" - bare choices without rationale go in Actions
+
+**Learnings** - "What was discovered":
+- Format: `[scope/type]` - NO date (date comes from filename)
+- Gotchas, patterns, commands, errors
 
 ### Learning Tags
 
@@ -81,7 +98,7 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 - `decision` - Important choices and rationale
 - `command` - Useful queries, scripts
 
-**IMPORTANT:** Always include creation date `(YYYY-MM-DD)` - enables decay.
+**IMPORTANT:** Do NOT include date in daily file learnings - date is derived from filename during long-term routing.
 
 ## Phase 2: Route Learnings
 
@@ -107,9 +124,42 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
 **Deduplication:** Before adding, check if concept already exists (even with different wording). Skip duplicates.
 
+**Scope-stripping and date addition:** When routing to long-term memory:
+1. Strip the scope from the tag (long-term file is already scoped)
+2. Add date from the daily file's filename
+
+Example:
+```markdown
+# In daily file (2026-02-02.md):
+- **Path encoding lossy** [claude-memory-system/data-quirk]: Both / and . become -
+
+# Routed to project-memory/claude-memory-system-long-term-memory.md:
+- **Path encoding lossy** [data-quirk] (2026-02-02): Both / and . become -
+```
+
 **Templates** (read for section structure):
 - Global: `Read(~/.claude/memory/templates/global-long-term-memory.md)`
 - Project: `Read(~/.claude/memory/templates/project-long-term-memory.md)`
+
+## Filtering Specification
+
+Daily files use mandatory tags (`[project]` or `[global]`) to enable project-specific filtering during memory loading.
+
+**Tag precedence:** Tag determines scope, content is informational only.
+- `- [global] Analyzed token usage for claude-memory-system` → Global (despite mentioning project)
+- `- [claude-memory-system] Analyzed token usage` → Project-specific
+
+**Untagged content:** Treated as global (fallback). Avoid by always tagging.
+
+**Tag format (all use `[scope/type]`):**
+- Actions: `[project-name/action]` or `[global/action]`
+- Decisions: `[project-name/decision]` or `[global/decision]`
+- Learnings: `[scope/type]` where type is error, best-practice, data-quirk, decision, command
+
+**Filtering behavior** (implemented in load_memory.py):
+- When loading project memory, include items tagged with that project name
+- Global items (`[global]`) always included
+- Untagged items treated as global
 
 ## Phase 3: Decay
 

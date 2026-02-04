@@ -207,6 +207,7 @@ def copy_templates(script_dir: Path) -> None:
     templates_to_copy = [
         "global-long-term-memory.md",
         "project-long-term-memory.md",
+        "daily-template.md",
     ]
     for template_name in templates_to_copy:
         src = script_dir / "templates" / template_name
