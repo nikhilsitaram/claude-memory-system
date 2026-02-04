@@ -163,7 +163,8 @@ def recover_orphan_transcripts() -> int:
                     # Copy file content
                     content = jsonl_file.read_bytes()
                     dest_file.write_bytes(content)
-                    add_captured_session(session_id)
+                    add_captured_session(session_id, captured)
+                    captured.add(session_id)  # Keep local set in sync
                     recovered_count += 1
                 except IOError:
                     continue

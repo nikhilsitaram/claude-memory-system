@@ -359,15 +359,25 @@ def get_captured_sessions() -> set[str]:
         return set()
 
 
-def add_captured_session(session_id: str) -> None:
-    """Add a session ID to the captured list."""
+def add_captured_session(session_id: str, captured_set: Optional[set[str]] = None) -> None:
+    """
+    Add a session ID to the captured list.
+
+    Args:
+        session_id: The session ID to add
+        captured_set: Optional pre-loaded set to avoid re-reading file
+    """
     captured_file = get_captured_file()
     captured_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if already captured
-    captured = get_captured_sessions()
-    if session_id in captured:
-        return
+    # Check if already captured (use provided set or load from file)
+    if captured_set is not None:
+        if session_id in captured_set:
+            return
+    else:
+        captured = get_captured_sessions()
+        if session_id in captured:
+            return
 
     # Append to file
     with open(captured_file, "a", encoding="utf-8") as f:
