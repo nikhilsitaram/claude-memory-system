@@ -126,7 +126,7 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
 | `decay.ageDays` | 30 | Archive learnings older than this |
 
-Short-term token limits calculated as `workingDays × 1500`.
+Short-term token limits calculated as `workingDays × 750` (reduced due to scope filtering).
 
 ## Features Summary
 

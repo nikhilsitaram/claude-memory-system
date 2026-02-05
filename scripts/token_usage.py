@@ -29,9 +29,9 @@ def calculate_usage():
     project_short_days = settings.get("projectShortTerm", {}).get("workingDays", 7)
     project_long_limit = settings.get("projectLongTerm", {}).get("tokenLimit", 5000)
 
-    # Short-term limits are calculated: workingDays × 1500
-    global_short_limit = global_short_days * 1500
-    project_short_limit = project_short_days * 1500
+    # Short-term limits are calculated: workingDays × 750
+    global_short_limit = global_short_days * 750
+    project_short_limit = project_short_days * 750
 
     # Total budget is sum of all 4 components
     total_budget = global_long_limit + global_short_limit + project_long_limit + project_short_limit

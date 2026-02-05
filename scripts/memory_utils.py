@@ -80,7 +80,7 @@ def get_captured_file() -> Path:
 
 
 # Token limit formulas
-SHORT_TERM_TOKENS_PER_DAY = 1500  # ~1200 observed max, 1500 gives headroom
+SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per day
 
 # Default settings (tokenLimit for short-term calculated dynamically)
 DEFAULT_SETTINGS = {
@@ -143,7 +143,7 @@ def _calculate_token_limits(settings: dict[str, Any]) -> dict[str, Any]:
     """
     Calculate short-term tokenLimits and totalTokenBudget from workingDays.
 
-    Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (1500)
+    Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (750)
     """
     global_days = settings.get("globalShortTerm", {}).get("workingDays", 2)
     project_days = settings.get("projectShortTerm", {}).get("workingDays", 7)

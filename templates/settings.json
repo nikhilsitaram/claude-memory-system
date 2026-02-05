@@ -2,7 +2,7 @@
   "version": 3,
   "globalShortTerm": {
     "workingDays": 2,
-    "_comment": "Daily session summaries - tokenLimit calculated: workingDays × 1500"
+    "_comment": "Global short-term filtered to [global/*] tags - tokenLimit: workingDays × 750"
   },
   "globalLongTerm": {
     "tokenLimit": 5000,
@@ -10,7 +10,7 @@
   },
   "projectShortTerm": {
     "workingDays": 7,
-    "_comment": "Project-specific daily history - tokenLimit calculated: workingDays × 1500"
+    "_comment": "Project short-term filtered to [project/*] tags - tokenLimit: workingDays × 750"
   },
   "projectLongTerm": {
     "tokenLimit": 5000,
@@ -31,15 +31,15 @@
   },
   "_tokenGuidance": {
     "estimation": "1 token ≈ 4 characters. File bytes / 4 = rough token count",
-    "formula": "Short-term limits = workingDays × 1500 (based on ~1200 observed max)",
+    "formula": "Short-term limits = workingDays × 750 (based on ~400-600 observed after scope filtering)",
     "fixedLimits": {
       "globalLongTerm": 5000,
       "projectLongTerm": 5000
     },
     "calculatedLimits": {
-      "globalShortTerm": "2 days × 1500 = 3000",
-      "projectShortTerm": "7 days × 1500 = 10500",
-      "total": "5000 + 3000 + 5000 + 10500 = 23500"
+      "globalShortTerm": "2 days × 750 = 1500",
+      "projectShortTerm": "7 days × 750 = 5250",
+      "total": "5000 + 1500 + 5000 + 5250 = 16750"
     }
   },
   "_defaults": {

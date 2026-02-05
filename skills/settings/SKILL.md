@@ -31,13 +31,13 @@ When the user invokes this skill:
 
 | Setting | Value | Description |
 |---------|-------|-------------|
-| **Total token budget** | **23,500** | **Calculated: sum of 4 components** |
+| **Total token budget** | **16,750** | **Calculated: sum of 4 components** |
 | Global long-term token limit | 5,000 | Fixed - user profile, patterns |
-| Global short-term working days | 2 | Days with activity to load |
-| Global short-term token limit | 3,000 | Calculated: workingDays × 1,500 |
+| Global short-term working days | 2 | Days with `[global/*]` content to load |
+| Global short-term token limit | 1,500 | Calculated: workingDays × 750 |
 | Project long-term token limit | 5,000 | Fixed - project-specific learnings |
-| Project short-term working days | 7 | Project-specific history days |
-| Project short-term token limit | 10,500 | Calculated: workingDays × 1,500 |
+| Project short-term working days | 7 | Days with `[project/*]` content |
+| Project short-term token limit | 5,250 | Calculated: workingDays × 750 |
 | Include subdirectories | false | Match subdirs to parent project |
 | Synthesis interval (hours) | 2 | Hours between auto-synthesis prompts |
 | Decay age (days) | 30 | Archive learnings older than this |
@@ -63,11 +63,11 @@ Run `/settings usage` to see current token usage.
 
 | Component | ~Tokens | Limit | % Used | Status |
 |-----------|---------|-------|--------|--------|
-| Global long-term | ~2,360 | 5,000 | 47% | ✓ |
-| Global short-term (2 days) | ~2,067 | 3,000 | 69% | ✓ |
-| Project long-term | ~2,229 | 5,000 | 45% | ✓ |
-| Project short-term (7 days) | ~4,205 | 10,500 | 40% | ✓ |
-| **Total** | **~10,861** | **23,500** | **46%** | **✓** |
+| Global long-term | ~2,540 | 5,000 | 51% | ✓ |
+| Global short-term (N days with `[global/*]`) | ~412 | 1,500 | 27% | ✓ |
+| Project long-term | ~2,357 | 5,000 | 47% | ✓ |
+| Project short-term (N days with `[project/*]`) | ~3,892 | 5,250 | 74% | ✓ |
+| **Total** | **~9,201** | **16,750** | **55%** | **✓** |
 
 ✓ = Within limit, ⚠ = Over limit (soft warning)
 ```
@@ -121,7 +121,7 @@ Default values:
 - `decay.archiveRetentionDays`: 365
 
 **Calculated values** (from `memory_utils.py`):
-- Short-term tokenLimits = workingDays × 1500
+- Short-term tokenLimits = workingDays × 750
 - totalTokenBudget = sum of all 4 limits
 
 ## Token Guidance
@@ -129,24 +129,24 @@ Default values:
 | Memory Type | Default | Formula | Notes |
 |-------------|---------|---------|-------|
 | Global long-term | 5,000 | fixed | User profile, patterns, key learnings |
-| Global short-term | 3,000 | workingDays × 1,500 | Recent daily summaries |
+| Global short-term | 1,500 | workingDays × 750 | Filtered to `[global/*]` entries |
 | Project long-term | 5,000 | fixed | Project-specific accumulated learnings |
-| Project short-term | 10,500 | workingDays × 1,500 | Project-specific recent history |
-| **Total** | **23,500** | sum of above | Keeps context efficient |
+| Project short-term | 5,250 | workingDays × 750 | Filtered to `[project/*]` entries |
+| **Total** | **16,750** | sum of above | Keeps context efficient |
 
 **Estimation**: 1 token ≈ 4 characters. Divide file bytes by 4.
 
-**Formula basis**: 1,500 tokens/day provides headroom over observed max (~1,200 tokens/day).
+**Formula basis**: 750 tokens/day based on ~400-600 observed after scope filtering (reduced from 1,500 when loading full files).
 
 **Changing limits**: Adjust `workingDays` - tokenLimits are calculated automatically by `memory_utils.py`.
 
 ## Working Days Behavior
 
-Both global and project short-term memory use "working days" - days with actual activity:
-- **Global short-term**: Scans `daily/*.md` files, loads N most recent
-- **Project short-term**: Scans daily files tagged with project, loads N most recent for that project
+Both global and project short-term memory use "working days" - days with matching content:
+- **Global short-term**: Scans `daily/*.md` files, loads N most recent days that have `[global/*]` tagged entries
+- **Project short-term**: Scans `daily/*.md` files, loads N most recent days that have `[project-name/*]` tagged entries
 
-Days without activity don't count against the limit.
+Days without matching tagged content are skipped. Content is filtered by scope tag before loading.
 
 ## Subdirectory Option
 

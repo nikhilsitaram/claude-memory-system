@@ -160,13 +160,13 @@ Configure the memory system via `~/.claude/memory/settings.json` or `/settings s
 
 | Component | Calculation | Default |
 |-----------|-------------|---------|
-| Global short-term | workingDays × 1,500 | 3,000 |
+| Global short-term | workingDays × 750 | 1,500 |
 | Global long-term | fixed | 5,000 |
-| Project short-term | workingDays × 1,500 | 10,500 |
+| Project short-term | workingDays × 750 | 5,250 |
 | Project long-term | fixed | 5,000 |
-| **Total budget** | sum of above | **23,500** |
+| **Total budget** | sum of above | **16,750** |
 
-The 1,500 tokens/day multiplier is hardcoded (based on ~1,200 observed max). To increase short-term limits, change `workingDays`.
+The 750 tokens/day multiplier is based on ~400-600 observed after scope filtering. Short-term memory is filtered by `[scope/*]` tags, so only relevant entries are loaded. To increase short-term limits, change `workingDays`.
 
 Token limits are soft warnings, not hard caps. Use `/settings usage` to check current token consumption.
 
