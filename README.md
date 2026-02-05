@@ -187,9 +187,9 @@ Learnings in long-term memory files are subject to automatic archival:
 
 Learnings with creation dates older than `decay.ageDays` (default: 30) are moved to `~/.claude/memory/.decay-archive.md`. Archived items older than `decay.archiveRetentionDays` (default: 365) are purged.
 
-**Learning format**: `- **Title** [scope/type] (YYYY-MM-DD): Description`
+**Entry format**: `- (YYYY-MM-DD) [type] Description`
 
-The inline date enables age tracking. Learnings without dates are protected from decay.
+The date prefix enables age tracking. Entries without dates are protected from decay.
 
 ### Synthesis Workflow
 
@@ -211,7 +211,10 @@ The synthesis process:
 5. **Phase 3**: Apply age-based decay (archive old learnings, purge expired archives)
 6. **Phase 4**: Update synthesis timestamp
 
-**Learning types**: `error`, `best-practice`, `data-quirk`, `decision`, `command`
+**Action types:** `implement`, `improve`, `document`, `analyze`
+**Decision types:** `design`, `tradeoff`, `scope`
+**Learning types:** `gotcha`, `pitfall`, `pattern`
+**Lesson types:** `insight`, `tip`, `workaround`
 
 **Manual synthesis**: You can also run `/synthesize` at any time to process pending transcripts immediately.
 

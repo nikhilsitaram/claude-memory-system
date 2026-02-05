@@ -75,36 +75,54 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 ### Content Guidance
 
 **Actions** - "What was done":
-- Implemented features, fixed bugs, completed tasks
-- Configuration changes, setup work
-- Research and exploration outcomes
-- Tagged `[scope/action]` where scope is project name or `global`
+- `[scope/implement]` - New features, setup, configuration
+- `[scope/improve]` - Bug fixes, refactoring, optimization
+- `[scope/document]` - Documentation work
+- `[scope/analyze]` - Research, exploration
 
 **Decisions** - "What was chosen and why":
-- Architecture choices, technology selections
-- Tradeoffs evaluated and rationale
-- Policy decisions, workflow changes
+- `[scope/design]` - Architecture, structure, technology choices
+- `[scope/tradeoff]` - Choosing between competing options with rationale
+- `[scope/scope]` - What to include/exclude/defer
 - Always include the "why" - bare choices without rationale go in Actions
 
-**Learnings** - "What was discovered":
+**Learnings** - "What was discovered" (observations):
 - Format: `- [scope/type] Description` - NO date (date comes from filename)
-- Gotchas, patterns, commands, errors
+- `[scope/gotcha]` - Unexpected behavior, edge cases, surprises
+- `[scope/pitfall]` - Errors, bugs, mistakes to avoid
+- `[scope/pattern]` - How-to approaches, proven methods
 
-**Lessons** - "What to do about it":
+**Lessons** - "What to do about it" (takeaways):
 - Format: `- [scope/type] Actionable takeaway`
-- Rules, guidelines, or commands to follow
+- `[scope/insight]` - Why things work, mental models
+- `[scope/tip]` - Shortcuts, commands, snippets
+- `[scope/workaround]` - Temporary fixes, known limitations
 - Learnings and Lessons don't need to be 1:1 paired
 
-### Learning Tags
+### Tag System
 
 **Scopes:** `global` (project-agnostic) or `{project-name}` (project-specific)
 
-**Types:**
-- `error` - Bugs, failed commands, exceptions
-- `best-practice` - Patterns that worked well
-- `data-quirk` - Edge cases, gotchas
-- `decision` - Important choices and rationale
-- `command` - Useful queries, scripts
+**Action Subtypes:**
+- `implement` - New features, setup, configuration
+- `improve` - Bug fixes, refactoring, optimization
+- `document` - Documentation work
+- `analyze` - Research, exploration
+
+**Decision Subtypes:**
+- `design` - Architecture, structure, technology choices
+- `tradeoff` - Choosing between competing options
+- `scope` - What to include/exclude/defer
+
+**Learning Subtypes (observations/discoveries):**
+- `gotcha` - Unexpected behavior, edge cases, surprises
+- `pitfall` - Errors, bugs, mistakes to avoid
+- `pattern` - How-to approaches, proven methods
+
+**Lesson Subtypes (takeaways/actions):**
+- `insight` - Why things work, mental models
+- `tip` - Shortcuts, commands, snippets
+- `workaround` - Temporary fixes, known limitations
 
 **IMPORTANT:** Do NOT include date in daily file learnings - date is derived from filename during long-term routing.
 
@@ -126,7 +144,7 @@ Route daily content to long-term memory files:
 ### Routing Rules
 
 1. **Scope-stripping:** Remove scope from tag (long-term file is already scoped)
-2. **Date addition:** Add `(YYYY-MM-DD)` from daily filename
+2. **Date-first format:** Prefix with `(YYYY-MM-DD)` from daily filename, then `[type]`
 3. **Deduplication:** Check if concept already exists (skip duplicates)
 4. **Selective routing:** Only route items worth preserving long-term (not every action/decision)
 
@@ -135,23 +153,29 @@ Route daily content to long-term memory files:
 ```markdown
 # In daily file (2026-02-02.md):
 ## Actions
-- [claude-memory-system/action] Implemented age-based decay with 30-day threshold
+- [claude-memory-system/implement] Built age-based decay with 30-day threshold
+
+## Decisions
+- [claude-memory-system/design] Use age-based decay instead of access tracking: simpler to implement, predictable behavior
 
 ## Learnings
-- [claude-memory-system/data-quirk] Path encoding is lossy - both / and . become -
+- [claude-memory-system/gotcha] Path encoding is lossy - both / and . become -
 
 ## Lessons
-- [claude-memory-system/data-quirk] Always read sessions-index.json for authoritative path
+- [claude-memory-system/insight] Always read sessions-index.json for authoritative path
 
 # Routed to project-memory/claude-memory-system-long-term-memory.md:
 ## Key Actions
-- [action] (2026-02-02) Implemented age-based decay with 30-day threshold
+- (2026-02-02) [implement] Built age-based decay with 30-day threshold
+
+## Key Decisions
+- (2026-02-02) [design] Use age-based decay instead of access tracking: simpler to implement, predictable behavior
 
 ## Key Learnings
-- [data-quirk] (2026-02-02) Path encoding is lossy - both / and . become -
+- (2026-02-02) [gotcha] Path encoding is lossy - both / and . become -
 
 ## Key Lessons
-- [data-quirk] (2026-02-02) Always read sessions-index.json for authoritative path
+- (2026-02-02) [insight] Always read sessions-index.json for authoritative path
 ```
 
 **Templates** (read for section structure):
@@ -169,10 +193,10 @@ Daily files use mandatory tags (`[project]` or `[global]`) to enable project-spe
 **Untagged content:** Treated as global (fallback). Avoid by always tagging.
 
 **Tag format (all use `[scope/type]`):**
-- Actions: `[project-name/action]` or `[global/action]`
-- Decisions: `[project-name/decision]` or `[global/decision]`
-- Learnings: `[scope/type]` where type is error, best-practice, data-quirk, decision, command
-- Lessons: `[scope/type]` same types as Learnings
+- Actions: `[scope/implement]`, `[scope/improve]`, `[scope/document]`, `[scope/analyze]`
+- Decisions: `[scope/design]`, `[scope/tradeoff]`, `[scope/scope]`
+- Learnings: `[scope/gotcha]`, `[scope/pitfall]`, `[scope/pattern]`
+- Lessons: `[scope/insight]`, `[scope/tip]`, `[scope/workaround]`
 
 **Filtering behavior** (implemented in load_memory.py):
 - When loading project memory, include items tagged with that project name

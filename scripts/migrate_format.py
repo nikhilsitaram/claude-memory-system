@@ -21,7 +21,7 @@ Old long-term format (in ## Pinned and ## Key Learnings):
       - Lesson: Actionable takeaway
 
 New long-term format:
-    - [type] (date) Title - Description
+    - (date) [type] Title - Description
     (lessons extracted to ## Key Lessons)
 
 Usage:
@@ -61,20 +61,20 @@ def migrate_lesson_line(line: str) -> str:
     """
     Transform a lesson line from old to new format.
 
-    Old: - [type] (date): Description
-    New: - [type] (date) Description
+    Old: - [type] (date): Description  or  - [type] (date) Description
+    New: - (date) [type] Description
 
-    Removes the colon after the date.
+    Moves date before type and removes any colon after the date.
     """
     stripped = line.strip()
 
-    # Pattern: - [tag] (date): text
-    pattern = r'^(\s*)- \[([^\]]+)\]\s*\((\d{4}-\d{2}-\d{2})\):\s*(.*)$'
+    # Pattern: - [tag] (date): text  or  - [tag] (date) text
+    pattern = r'^(\s*)- \[([^\]]+)\]\s*\((\d{4}-\d{2}-\d{2})\):?\s*(.*)$'
     match = re.match(pattern, line)
 
     if match:
         indent, tag, date, text = match.groups()
-        return f"{indent}- [{tag}] ({date}) {text}"
+        return f"{indent}- ({date}) [{tag}] {text}"
 
     return line
 
@@ -87,8 +87,8 @@ def migrate_learning_line(line: str) -> tuple[str, str | None]:
     New: - [scope/type] Title - Description
 
     Also handles long-term format with dates:
-    Old: - **Title** [type] (date): Description
-    New: - [type] (date) Title - Description
+    Old: - **Title** [type] (date): Description  or  - [type] (date) Description
+    New: - (date) [type] Title - Description
 
     Returns (migrated_line, lesson_if_found).
     """
@@ -96,7 +96,7 @@ def migrate_learning_line(line: str) -> tuple[str, str | None]:
 
     # Already in new format (check for tag at start, no bold)
     if stripped.startswith("- [") and "**" not in stripped:
-        # But might need colon removal - handle that in migrate_lesson_line
+        # But might need format conversion (date before type)
         return migrate_lesson_line(line), None
 
     # Match old format: - **Title** [tag] (optional date): Description
@@ -109,12 +109,12 @@ def migrate_learning_line(line: str) -> tuple[str, str | None]:
 
     indent, title, tag, date, desc = match.groups()
 
-    # Build new format
-    date_part = f" ({date})" if date else ""
+    # Build new format: (date) [tag] Title - Description
+    date_part = f"({date}) " if date else ""
     if desc:
-        new_line = f"{indent}- [{tag}]{date_part} {title} - {desc}"
+        new_line = f"{indent}- {date_part}[{tag}] {title} - {desc}"
     else:
-        new_line = f"{indent}- [{tag}]{date_part} {title}"
+        new_line = f"{indent}- {date_part}[{tag}] {title}"
 
     return new_line, None
 

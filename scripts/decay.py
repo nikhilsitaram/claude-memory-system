@@ -39,7 +39,7 @@ except ImportError:
         load_settings,
     )
 
-# Pattern to extract date from learning: (YYYY-MM-DD)
+# Pattern to extract date from learning: - (YYYY-MM-DD) [type] description
 DATE_PATTERN = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
 
 # Auto-pinned sections (never decay)
@@ -106,14 +106,14 @@ def parse_sections(content: str) -> list[tuple[str, str]]:
 def parse_learnings(section_content: str) -> list[tuple[str, date | None]]:
     """Parse learnings from section content with their dates.
 
-    New format: "- [type] (date) description"
+    Format: "- (date) [type] description"
     """
     learnings = []
 
     for line in section_content.split("\n"):
         stripped = line.strip()
-        # Format: "- [type] (date) description"
-        if stripped.startswith("- ["):
+        # Format: "- (date) [type] description" (also handles legacy "- [type] (date)")
+        if stripped.startswith("- "):
             learnings.append((line, parse_learning_date(line)))
 
     return learnings

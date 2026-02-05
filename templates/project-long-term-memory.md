@@ -6,19 +6,19 @@
 
 ## Key Actions
 <!-- Subject to 30-day decay -->
-<!-- Significant actions worth remembering. From daily Actions. -->
+<!-- Promote: multi-day implementations, novel integrations, reusable setups -->
 
 ## Key Decisions
 <!-- Subject to 30-day decay -->
-<!-- Important choices and rationale. From daily Decisions. -->
+<!-- design: architecture | tradeoff: competing options | scope: include/exclude/defer -->
 
 ## Key Learnings
 <!-- Subject to 30-day decay -->
-<!-- Patterns, gotchas, insights. From daily Learnings section. -->
+<!-- Observations: gotcha (unexpected), pitfall (errors), pattern (proven methods) -->
 
 ## Key Lessons
 <!-- Subject to 30-day decay -->
-<!-- Actionable takeaways. From daily Lessons section. -->
+<!-- Takeaways: insight (mental models), tip (commands), workaround (temp fixes) -->
 
 ---
 *Last updated: {date}*

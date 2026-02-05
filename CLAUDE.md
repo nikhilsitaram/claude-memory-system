@@ -51,7 +51,12 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 - `## Key Learnings` - Patterns/insights (from daily Learnings)
 - `## Key Lessons` - Actionable takeaways (from daily Lessons)
 
-**Tag types:** `error`, `best-practice`, `data-quirk`, `decision`, `command`
+**Long-term entry format:** `- (YYYY-MM-DD) [type] Description` (date first, then subtype)
+
+**Action types:** `implement`, `improve`, `document`, `analyze`
+**Decision types:** `design`, `tradeoff`, `scope`
+**Learning types:** `gotcha`, `pitfall`, `pattern`
+**Lesson types:** `insight`, `tip`, `workaround`
 
 **Filtering:** Tags determine scope (not content). Untagged content treated as global.
 
@@ -117,7 +122,7 @@ Short-term token limits calculated as `workingDays × 1500`.
 
 | Feature | Implementation |
 |---------|----------------|
-| Age-based decay | Learnings with `(YYYY-MM-DD)` date archived after 30 days; `## Pinned` section protected |
+| Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
 | Orphan recovery | Runs on SessionStart, recovers transcripts from ungraceful exits |
 | Synthesis scheduling | First session of day + every N hours (default 2) |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + recent project days |
