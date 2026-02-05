@@ -111,7 +111,6 @@ def create_directories() -> None:
     """Create required directory structure."""
     dirs = [
         get_memory_dir() / "daily",
-        get_memory_dir() / "transcripts",
         get_memory_dir() / "project-memory",
         get_memory_dir() / "templates",
         get_memory_dir() / ".backups",
@@ -138,8 +137,8 @@ def copy_scripts(script_dir: Path) -> None:
     scripts_to_copy = [
         "memory_utils.py",
         "load_memory.py",
-        "save_session.py",
         "indexing.py",
+        "transcript_source.py",  # Abstraction for reading Claude Code transcripts
         "load-project-memory.py",  # Keep the existing utility
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
@@ -244,6 +243,49 @@ def hook_entry_key(entry: dict) -> tuple:
     return (matcher, commands)
 
 
+def remove_obsolete_hooks(settings: dict) -> dict:
+    """
+    Remove hooks that are no longer used (e.g., save_session.py).
+
+    This handles migration from older versions where SessionEnd and PreCompact
+    hooks were used to copy transcripts.
+    """
+    obsolete_patterns = [
+        "save_session.py",
+    ]
+
+    hooks = settings.get("hooks", {})
+    events_to_clean = ["SessionEnd", "PreCompact"]
+
+    for event in events_to_clean:
+        if event not in hooks:
+            continue
+
+        # Filter out entries that reference obsolete scripts
+        new_entries = []
+        removed_count = 0
+        for entry in hooks[event]:
+            entry_hooks = entry.get("hooks", [])
+            # Check if any hook command contains obsolete patterns
+            is_obsolete = any(
+                any(pattern in h.get("command", "") for pattern in obsolete_patterns)
+                for h in entry_hooks
+            )
+            if is_obsolete:
+                removed_count += 1
+            else:
+                new_entries.append(entry)
+
+        if removed_count > 0:
+            print(f"  Removed {removed_count} obsolete {event} hook(s)")
+            if new_entries:
+                hooks[event] = new_entries
+            else:
+                del hooks[event]
+
+    return settings
+
+
 def merge_hooks(settings: dict, python_cmd: str) -> dict:
     """Merge memory system hooks into settings."""
     home = str(Path.home())
@@ -307,30 +349,8 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 ],
             },
         ],
-        "SessionEnd": [
-            {
-                "matcher": "*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/save_session.py",
-                        "timeout": 30,
-                    }
-                ],
-            }
-        ],
-        "PreCompact": [
-            {
-                "matcher": "*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/save_session.py",
-                        "timeout": 30,
-                    }
-                ],
-            }
-        ],
+        # Note: SessionEnd and PreCompact hooks removed - transcripts are read
+        # directly from Claude Code's storage (~/.claude/projects/)
     }
 
     if "hooks" not in settings:
@@ -472,6 +492,9 @@ def main() -> int:
     # Update settings.json
     settings_file = claude_dir / "settings.json"
     settings = load_json_file(settings_file)
+
+    # Remove obsolete hooks (e.g., save_session.py)
+    settings = remove_obsolete_hooks(settings)
 
     # Add hooks
     settings = merge_hooks(settings, python_cmd)

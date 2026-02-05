@@ -5,7 +5,6 @@ Indexing utilities for Claude Code Memory System.
 Provides:
 1. Transcript extraction (JSONL parsing for synthesis)
 2. Project index building (maps projects to their work days)
-3. Transcript deletion (cross-platform, no bash required)
 
 This module is called by the /synthesize skill to process transcripts
 and maintain the project index.
@@ -20,20 +19,19 @@ Usage:
     # Build/rebuild project index
     python indexing.py build-index
 
-    # Delete processed transcripts (cross-platform)
-    python indexing.py delete 2026-02-02
-    python indexing.py delete 2026-02-01 2026-02-02
+    # List pending transcript days
+    python indexing.py list-pending
 
 Requirements: Python 3.9+
 """
 
 import argparse
 import json
-import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # Add scripts directory to path for local imports
 script_dir = Path(__file__).parent
@@ -43,9 +41,16 @@ if str(script_dir) not in sys.path:
 from memory_utils import (
     check_python_version,
     get_memory_dir,
-    get_transcripts_dir,
     get_projects_dir,
     get_projects_index_file,
+    get_captured_sessions,
+    add_captured_session,
+)
+
+from transcript_source import (
+    list_pending_sessions,
+    list_pending_days,
+    get_session_date,
 )
 
 
@@ -136,7 +141,10 @@ def parse_jsonl_file(filepath: Path) -> list[dict]:
 
 def extract_transcripts(specific_day: str | None = None) -> dict[str, list[dict]]:
     """
-    Extract all transcripts, organized by day and session.
+    Extract pending transcripts directly from Claude Code's projects directory.
+
+    Reads from ~/.claude/projects/ (source of truth) instead of copied files.
+    Uses sessions-index.json for metadata enrichment when available.
 
     Args:
         specific_day: Optional specific day to extract (YYYY-MM-DD format)
@@ -148,6 +156,7 @@ def extract_transcripts(specific_day: str | None = None) -> dict[str, list[dict]
                 {
                     "session_id": "abc123",
                     "filepath": "/path/to/file.jsonl",
+                    "project_path": "/home/user/project" or None,
                     "message_count": 42,
                     "messages": [{"role": "user", "content": "..."}, ...]
                 },
@@ -156,35 +165,32 @@ def extract_transcripts(specific_day: str | None = None) -> dict[str, list[dict]
             ...
         }
     """
-    transcripts_dir = get_transcripts_dir()
+    captured = get_captured_sessions()
+    pending = list_pending_sessions(captured, min_file_size=1000)
+
+    # Filter by specific day if requested
+    if specific_day:
+        pending = [s for s in pending if get_session_date(s) == specific_day]
+
+    if not pending:
+        return {}
+
     daily_data: dict[str, list[dict]] = defaultdict(list)
 
-    if not transcripts_dir.exists():
-        print(f"Transcript directory not found: {transcripts_dir}", file=sys.stderr)
-        return dict(daily_data)
+    for session in pending:
+        day = get_session_date(session)
+        messages = parse_jsonl_file(session.transcript_path)
 
-    for day_dir in sorted(transcripts_dir.iterdir()):
-        if not day_dir.is_dir():
-            continue
-
-        day = day_dir.name
-
-        # Skip if filtering for specific day
-        if specific_day and day != specific_day:
-            continue
-
-        for jsonl_file in sorted(day_dir.glob("*.jsonl")):
-            messages = parse_jsonl_file(jsonl_file)
-
-            if messages:
-                daily_data[day].append(
-                    {
-                        "session_id": jsonl_file.stem,
-                        "filepath": str(jsonl_file),
-                        "message_count": len(messages),
-                        "messages": messages,
-                    }
-                )
+        if messages:
+            daily_data[day].append(
+                {
+                    "session_id": session.session_id,
+                    "filepath": str(session.transcript_path),
+                    "project_path": session.project_path,  # May be None
+                    "message_count": len(messages),
+                    "messages": messages,
+                }
+            )
 
     return dict(daily_data)
 
@@ -213,51 +219,14 @@ def format_transcripts_for_output(daily_data: dict[str, list[dict]]) -> str:
     return "\n".join(output)
 
 
-def list_pending_days() -> list[str]:
-    """List all days that have pending transcripts."""
-    transcripts_dir = get_transcripts_dir()
-    if not transcripts_dir.exists():
-        return []
-
-    days = []
-    for day_dir in sorted(transcripts_dir.iterdir()):
-        if day_dir.is_dir() and list(day_dir.glob("*.jsonl")):
-            days.append(day_dir.name)
-
-    return days
-
-
-def delete_transcripts(day: str) -> tuple[bool, str]:
+def get_pending_days() -> list[str]:
     """
-    Delete transcript directory for a specific day.
+    List all days that have pending (uncaptured) transcripts.
 
-    Cross-platform implementation using shutil.rmtree().
-
-    Args:
-        day: Date string in YYYY-MM-DD format
-
-    Returns:
-        Tuple of (success, message)
+    Queries Claude Code's projects directory directly.
     """
-    transcripts_dir = get_transcripts_dir()
-    day_dir = transcripts_dir / day
-
-    if not day_dir.exists():
-        return False, f"Transcript directory not found: {day_dir}"
-
-    if not day_dir.is_dir():
-        return False, f"Not a directory: {day_dir}"
-
-    # Count files before deletion for reporting
-    file_count = len(list(day_dir.glob("*.jsonl")))
-    total_size = sum(f.stat().st_size for f in day_dir.glob("*") if f.is_file())
-
-    try:
-        shutil.rmtree(day_dir)
-        size_kb = total_size / 1024
-        return True, f"Deleted {day}: {file_count} files ({size_kb:.1f} KB)"
-    except OSError as e:
-        return False, f"Failed to delete {day_dir}: {e}"
+    captured = get_captured_sessions()
+    return list_pending_days(captured, min_file_size=1000)
 
 
 # =============================================================================
@@ -416,8 +385,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
     daily_data = extract_transcripts(args.day)
 
     if not daily_data:
-        print("No transcripts found.", file=sys.stderr)
+        print("No pending transcripts found.", file=sys.stderr)
         return 1
+
+    # Mark extracted sessions as captured (unless --no-mark flag)
+    if not getattr(args, "no_mark", False):
+        captured = get_captured_sessions()
+        for day_sessions in daily_data.values():
+            for session in day_sessions:
+                session_id = session["session_id"]
+                add_captured_session(session_id, captured)
+                captured.add(session_id)
 
     if args.json:
         # JSON output
@@ -448,7 +426,7 @@ def cmd_build_index(args: argparse.Namespace) -> int:
 
 def cmd_list_pending(args: argparse.Namespace) -> int:
     """Handle list-pending command."""
-    days = list_pending_days()
+    days = get_pending_days()
     if days:
         print("Pending transcript days:")
         for day in days:
@@ -456,22 +434,6 @@ def cmd_list_pending(args: argparse.Namespace) -> int:
     else:
         print("No pending transcripts.")
     return 0
-
-
-def cmd_delete(args: argparse.Namespace) -> int:
-    """Handle delete command."""
-    if not args.days:
-        print("Error: At least one day (YYYY-MM-DD) is required.", file=sys.stderr)
-        return 1
-
-    all_success = True
-    for day in args.days:
-        success, message = delete_transcripts(day)
-        print(message)
-        if not success:
-            all_success = False
-
-    return 0 if all_success else 1
 
 
 def main() -> int:
@@ -490,6 +452,11 @@ def main() -> int:
     extract_parser.add_argument("day", nargs="?", help="Specific day to extract (YYYY-MM-DD)")
     extract_parser.add_argument("--output", "-o", help="Output file path")
     extract_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    extract_parser.add_argument(
+        "--no-mark",
+        action="store_true",
+        help="Don't mark sessions as captured (for preview/debugging)",
+    )
     extract_parser.set_defaults(func=cmd_extract)
 
     # Build-index command
@@ -503,15 +470,6 @@ def main() -> int:
         "list-pending", help="List days with pending transcripts"
     )
     list_parser.set_defaults(func=cmd_list_pending)
-
-    # Delete command
-    delete_parser = subparsers.add_parser(
-        "delete", help="Delete processed transcript directories (cross-platform)"
-    )
-    delete_parser.add_argument(
-        "days", nargs="+", help="Days to delete (YYYY-MM-DD format)"
-    )
-    delete_parser.set_defaults(func=cmd_delete)
 
     args = parser.parse_args()
 

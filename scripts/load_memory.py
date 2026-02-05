@@ -5,12 +5,11 @@ SessionStart hook - loads memory context for Claude Code.
 This script runs on: startup, resume, clear, compact
 
 It performs:
-1. Orphan transcript recovery (inline, replaces cron job)
-2. Loads global long-term memory
-3. Loads project-specific long-term memory (if applicable)
-4. Loads recent daily summaries (working days)
-5. Loads project history (days worked in this project)
-6. Checks for pending transcripts and prompts for synthesis
+1. Loads global long-term memory
+2. Loads project-specific long-term memory (if applicable)
+3. Loads recent daily summaries (working days)
+4. Loads project history (days worked in this project)
+5. Checks for pending transcripts and prompts for synthesis
 
 Output is printed to stdout and injected into Claude Code's context.
 
@@ -19,7 +18,6 @@ Requirements: Python 3.9+
 
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,24 +30,17 @@ from memory_utils import (
     check_python_version,
     get_memory_dir,
     get_daily_dir,
-    get_transcripts_dir,
     get_project_memory_dir,
-    get_projects_dir,
     get_global_memory_file,
     get_projects_index_file,
     get_captured_sessions,
-    add_captured_session,
     load_settings,
     load_json_file,
-    estimate_tokens,
-    estimate_file_tokens,
     project_name_to_filename,
     get_working_days,
-    FileLock,
 )
 
-# Minimum age for orphan transcripts (seconds) - 30 minutes
-ORPHAN_MIN_AGE = 30 * 60
+from transcript_source import list_pending_sessions
 
 
 def get_last_synthesis_file() -> Path:
@@ -102,78 +93,6 @@ def update_last_synthesis_time() -> None:
     last_synthesis_file.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
     last_synthesis_file.write_text(timestamp, encoding="utf-8")
-
-
-def recover_orphan_transcripts() -> int:
-    """
-    Recover orphaned transcripts from ungraceful session exits.
-
-    Scans ~/.claude/projects/ for transcript files older than 30 minutes
-    that haven't been captured yet.
-
-    Returns number of recovered transcripts.
-    """
-    projects_dir = get_projects_dir()
-    transcripts_dir = get_transcripts_dir()
-
-    if not projects_dir.exists():
-        return 0
-
-    captured = get_captured_sessions()
-    recovered_count = 0
-    current_time = time.time()
-
-    # Use lock to prevent race conditions with other recovery processes
-    lock_path = get_memory_dir() / ".recovery.lock"
-    try:
-        with FileLock(lock_path, timeout=5):
-            # Find all .jsonl files in projects directory
-            for jsonl_file in projects_dir.rglob("*.jsonl"):
-                # Skip subagent files
-                if "subagent" in str(jsonl_file).lower():
-                    continue
-
-                # Check file age
-                try:
-                    file_mtime = jsonl_file.stat().st_mtime
-                    file_age = current_time - file_mtime
-                    if file_age < ORPHAN_MIN_AGE:
-                        continue
-                except OSError:
-                    continue
-
-                # Extract session ID
-                session_id = jsonl_file.stem
-
-                # Skip if already captured
-                if session_id in captured:
-                    continue
-
-                # Determine date from file modification time
-                file_date = datetime.fromtimestamp(file_mtime).strftime("%Y-%m-%d")
-                file_time = datetime.fromtimestamp(file_mtime).strftime("%H-%M-%S")
-
-                # Create destination directory and copy
-                dest_dir = transcripts_dir / file_date
-                dest_dir.mkdir(parents=True, exist_ok=True)
-
-                dest_file = dest_dir / f"{file_time}_recovered.jsonl"
-
-                try:
-                    # Copy file content
-                    content = jsonl_file.read_bytes()
-                    dest_file.write_bytes(content)
-                    add_captured_session(session_id, captured)
-                    captured.add(session_id)  # Keep local set in sync
-                    recovered_count += 1
-                except IOError:
-                    continue
-
-    except TimeoutError:
-        # Another recovery process is running, skip
-        pass
-
-    return recovered_count
 
 
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
@@ -291,27 +210,15 @@ def load_project_history(
 
 
 def count_pending_transcripts() -> int:
-    """Count number of pending (unprocessed) transcript files."""
-    transcripts_dir = get_transcripts_dir()
-    if not transcripts_dir.exists():
-        return 0
-
-    count = 0
-    for jsonl_file in transcripts_dir.rglob("*.jsonl"):
-        count += 1
-
-    return count
+    """Count number of pending (unprocessed) session transcripts."""
+    captured = get_captured_sessions()
+    pending = list_pending_sessions(captured, min_file_size=1000)
+    return len(pending)
 
 
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
-
-    # Run orphan recovery silently (errors logged to stderr only)
-    try:
-        recover_orphan_transcripts()
-    except Exception as e:
-        print(f"<!-- Recovery error: {e} -->", file=sys.stderr)
 
     # Load settings
     settings = load_settings()

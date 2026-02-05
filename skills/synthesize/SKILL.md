@@ -19,9 +19,12 @@ Process memory transcripts into compact daily summaries and route learnings to a
 ```bash
 python3 $HOME/.claude/scripts/indexing.py list-pending
 python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD
-python3 $HOME/.claude/scripts/indexing.py delete YYYY-MM-DD
+python3 $HOME/.claude/scripts/indexing.py extract --no-mark YYYY-MM-DD  # Preview without marking as captured
 python3 $HOME/.claude/scripts/indexing.py build-index
 ```
+
+Note: Transcripts are read directly from Claude Code's storage (`~/.claude/projects/`).
+The `.captured` file tracks which sessions have been processed.
 
 **Decay** - run after routing learnings:
 ```bash
@@ -32,12 +35,11 @@ python3 $HOME/.claude/scripts/decay.py --dry-run  # Preview only
 ## Quick Start
 
 1. `indexing.py build-index` - Update project index
-2. `indexing.py extract` - Get pending transcripts
-3. Create/update `~/.claude/memory/daily/YYYY-MM-DD.md` with `## Learnings`
+2. `indexing.py extract` - Get pending transcripts (auto-marks as captured)
+3. Create/update `~/.claude/memory/daily/YYYY-MM-DD.md` with sections
 4. Route learnings to long-term memory (Phase 2)
 5. `decay.py` - Archive old learnings
-6. `indexing.py delete YYYY-MM-DD` - Clean up transcripts
-7. Update `.last-synthesis`: `python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"`
+6. Update `.last-synthesis`: `python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"`
 
 ## Compactness Rules (Target: 1-4 KB per daily summary)
 

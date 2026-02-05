@@ -11,8 +11,8 @@ claude-memory-system/
 ├── install.py / uninstall.py   # Cross-platform installers
 ├── scripts/
 │   ├── memory_utils.py         # Shared utilities: paths, settings, locking
-│   ├── load_memory.py          # SessionStart hook - loads memory + orphan recovery
-│   ├── save_session.py         # SessionEnd/PreCompact hook - saves transcript
+│   ├── load_memory.py          # SessionStart hook - loads memory
+│   ├── transcript_source.py    # Reads transcripts from Claude Code storage
 │   ├── indexing.py             # Transcript extraction + project index building
 │   ├── decay.py                # Age-based decay for long-term memory
 │   └── project_manager.py      # Project lifecycle management library
@@ -83,9 +83,10 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 ## Key Implementation Details
 
 ### Hooks (defined in `install.py` `merge_hooks()`)
-- `SessionStart` - loads memory, runs orphan recovery
-- `SessionEnd` / `PreCompact` - saves transcript
+- `SessionStart` - loads memory context
 - `PreToolUse` - auto-approves memory operations (workaround for subagent permission bug)
+
+Note: Transcripts are read directly from Claude Code's storage (`~/.claude/projects/`), not copied via hooks.
 
 ### PreToolUse Auto-Approval
 Subagents don't inherit permissions (GitHub #10906, #11934, #18172, #18950). The PreToolUse hook returns `{"permissionDecision": "allow"}` for operations targeting `.claude/memory` paths.
@@ -123,6 +124,6 @@ Short-term token limits calculated as `workingDays × 1500`.
 | Feature | Implementation |
 |---------|----------------|
 | Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
-| Orphan recovery | Runs on SessionStart, recovers transcripts from ungraceful exits |
+| Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
 | Synthesis scheduling | First session of day + every N hours (default 2) |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + recent project days |

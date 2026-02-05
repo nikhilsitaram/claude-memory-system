@@ -3,7 +3,7 @@
 Shared utilities for Claude Code Memory System.
 
 Provides cross-platform path handling, settings management, token estimation,
-and file locking. Used by load_memory.py, save_session.py, and indexing.py.
+and file locking. Used by load_memory.py, indexing.py, and other scripts.
 
 Requirements: Python 3.9+
 """
@@ -42,11 +42,6 @@ def get_memory_dir() -> Path:
 def get_daily_dir() -> Path:
     """Get the daily summaries directory."""
     return get_memory_dir() / "daily"
-
-
-def get_transcripts_dir() -> Path:
-    """Get the transcripts directory."""
-    return get_memory_dir() / "transcripts"
 
 
 def get_project_memory_dir() -> Path:
