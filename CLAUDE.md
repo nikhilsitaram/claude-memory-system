@@ -12,8 +12,7 @@ claude-memory-system/
 ├── scripts/
 │   ├── memory_utils.py         # Shared utilities: paths, settings, locking
 │   ├── load_memory.py          # SessionStart hook - loads memory
-│   ├── transcript_source.py    # Reads transcripts from Claude Code storage
-│   ├── indexing.py             # Transcript extraction + project index building
+│   ├── indexing.py             # Session discovery, transcript extraction, project index
 │   ├── decay.py                # Age-based decay for long-term memory
 │   └── project_manager.py      # Project lifecycle management library
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects

@@ -40,7 +40,7 @@ from memory_utils import (
     get_working_days,
 )
 
-from transcript_source import list_pending_sessions
+from indexing import list_pending_sessions
 
 
 def get_last_synthesis_file() -> Path:

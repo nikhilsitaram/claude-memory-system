@@ -136,8 +136,7 @@ def copy_scripts(script_dir: Path) -> None:
     scripts_to_copy = [
         "memory_utils.py",
         "load_memory.py",
-        "indexing.py",
-        "transcript_source.py",  # Abstraction for reading Claude Code transcripts
+        "indexing.py",  # Session discovery, transcript extraction, project index
         "load-project-memory.py",  # Keep the existing utility
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
