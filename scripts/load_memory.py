@@ -7,8 +7,8 @@ This script runs on: startup, resume, clear, compact
 It performs:
 1. Loads global long-term memory
 2. Loads project-specific long-term memory (if applicable)
-3. Loads recent daily summaries (working days)
-4. Loads project history (days worked in this project)
+3. Loads global short-term memory (recent daily summaries, filtered to [global/*] tags)
+4. Loads project short-term memory (project history, filtered to [project/*] tags)
 5. Checks for pending transcripts and prompts for synthesis
 
 Output is printed to stdout and injected into Claude Code's context.
@@ -17,6 +17,7 @@ Requirements: Python 3.9+
 """
 
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,85 @@ from memory_utils import (
 )
 
 from indexing import list_pending_sessions
+
+# Regex to extract scope from tagged entries: [scope/type] or [scope]
+TAG_PATTERN = re.compile(r"^\s*-\s*\[([^\]/]+)(?:/[^\]]+)?\]")
+
+
+def filter_daily_content(content: str, scope: str) -> str:
+    """
+    Filter daily file content to include only entries matching the given scope.
+
+    Args:
+        content: Raw markdown content from a daily file
+        scope: Either "global" or a project name to filter by
+
+    Returns:
+        Filtered content with only matching entries, preserving section structure.
+        Returns empty string if no entries match.
+    """
+    lines = content.split("\n")
+    result_lines = []
+    current_section = None
+    section_lines = []
+    section_has_content = False
+
+    def flush_section():
+        """Add current section to result if it has content."""
+        nonlocal section_lines, section_has_content
+        if current_section and section_has_content:
+            result_lines.extend(section_lines)
+        section_lines = []
+        section_has_content = False
+
+    for line in lines:
+        # Check for date header (# YYYY-MM-DD)
+        if line.startswith("# "):
+            flush_section()
+            result_lines.append(line)
+            current_section = None
+            continue
+
+        # Check for section header (## Section)
+        if line.startswith("## "):
+            flush_section()
+            current_section = line
+            section_lines = [line]
+            continue
+
+        # If we're in a section, process the line
+        if current_section:
+            # Check if this is a tagged entry
+            match = TAG_PATTERN.match(line)
+            if match:
+                entry_scope = match.group(1).lower()
+                # Include if scope matches (case-insensitive)
+                if entry_scope == scope.lower():
+                    section_lines.append(line)
+                    section_has_content = True
+            elif line.strip() == "":
+                # Keep blank lines within sections that have content
+                section_lines.append(line)
+            elif not line.strip().startswith("-"):
+                # Non-list content (e.g., ## Notes text) - include for global scope only
+                if scope.lower() == "global":
+                    section_lines.append(line)
+                    section_has_content = True
+            # Skip untagged list items (treat as needing explicit tag)
+
+    # Flush final section
+    flush_section()
+
+    # Clean up: remove trailing empty lines and ensure proper spacing
+    while result_lines and result_lines[-1].strip() == "":
+        result_lines.pop()
+
+    filtered = "\n".join(result_lines)
+
+    # Only return content if we have more than just the date header
+    if filtered.strip() and not re.match(r"^#\s+\d{4}-\d{2}-\d{2}\s*$", filtered.strip()):
+        return filtered
+    return ""
 
 
 def get_last_synthesis_file() -> Path:
@@ -150,9 +230,13 @@ def load_project_memory(project_name: str) -> tuple[str, int]:
         return "", 0
 
 
-def load_daily_summaries(days_limit: int) -> tuple[list[tuple[str, str]], int]:
+def load_daily_summaries(days_limit: int, scope: str = "global") -> tuple[list[tuple[str, str]], int]:
     """
-    Load recent daily summaries.
+    Load recent daily summaries, filtered by scope.
+
+    Args:
+        days_limit: Maximum number of working days to load
+        scope: Filter scope - "global" for global entries, or project name for project entries
 
     Returns (list of (date, content) tuples, total bytes).
     """
@@ -165,9 +249,11 @@ def load_daily_summaries(days_limit: int) -> tuple[list[tuple[str, str]], int]:
         daily_file = daily_dir / f"{date}.md"
         if daily_file.exists():
             try:
-                content = daily_file.read_text(encoding="utf-8")
-                summaries.append((date, content))
-                total_bytes += len(content.encode("utf-8"))
+                raw_content = daily_file.read_text(encoding="utf-8")
+                filtered_content = filter_daily_content(raw_content, scope)
+                if filtered_content:
+                    summaries.append((date, filtered_content))
+                    total_bytes += len(filtered_content.encode("utf-8"))
             except IOError:
                 continue
 
@@ -175,36 +261,43 @@ def load_daily_summaries(days_limit: int) -> tuple[list[tuple[str, str]], int]:
 
 
 def load_project_history(
-    project: dict, loaded_dates: set[str], days_limit: int
+    project: dict, days_limit: int
 ) -> tuple[list[tuple[str, str]], int]:
     """
     Load project-specific work history (days worked in this project).
 
-    Excludes dates already loaded in daily summaries.
+    Filters content to only include entries tagged with this project's name.
     Returns (list of (date, content) tuples, total bytes).
     """
     daily_dir = get_daily_dir()
-    work_days = project.get("workDays", [])
+    project_name = project.get("name", "")
 
-    if not work_days:
+    if not project_name:
         return [], 0
 
-    # Get project days not already loaded, most recent first, up to limit
-    project_days = [d for d in sorted(work_days, reverse=True) if d not in loaded_dates][:days_limit]
+    # Get all daily files and filter by project content
+    # We scan all daily files since project work may exist on any day
+    all_daily_files = sorted(daily_dir.glob("*.md"), reverse=True)
 
     summaries = []
     total_bytes = 0
 
+    for daily_file in all_daily_files:
+        if len(summaries) >= days_limit:
+            break
+
+        try:
+            raw_content = daily_file.read_text(encoding="utf-8")
+            filtered_content = filter_daily_content(raw_content, project_name)
+            if filtered_content:
+                date = daily_file.stem  # YYYY-MM-DD from filename
+                summaries.append((date, filtered_content))
+                total_bytes += len(filtered_content.encode("utf-8"))
+        except IOError:
+            continue
+
     # Output oldest first for chronological reading
-    for date in sorted(project_days):
-        daily_file = daily_dir / f"{date}.md"
-        if daily_file.exists():
-            try:
-                content = daily_file.read_text(encoding="utf-8")
-                summaries.append((date, content))
-                total_bytes += len(content.encode("utf-8"))
-            except IOError:
-                continue
+    summaries.reverse()
 
     return summaries, total_bytes
 
@@ -285,29 +378,25 @@ def main() -> None:
                 print(project_content)
                 print()
 
-    # Load recent daily summaries
-    daily_summaries, daily_bytes = load_daily_summaries(short_term_days)
-    total_bytes += daily_bytes
+    # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
+    global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
+    total_bytes += global_daily_bytes
 
-    # Track loaded dates for project history deduplication
-    loaded_dates = set(date for date, _ in daily_summaries)
+    if global_summaries:
+        print("## Global Short-Term Memory")
+        for date, content in global_summaries:
+            print(f"### {date}")
+            print(content)
+            print()
 
-    print("## Recent Sessions")
-    for date, content in daily_summaries:
-        print(f"### {date}")
-        print(content)
-        print()
-
-    # Load project-specific history (additional days from this project)
+    # Load project short-term memory (project history, filtered to [project/*] tags)
     if current_project:
         project_name = current_project.get("name", "unknown")
-        project_history, history_bytes = load_project_history(
-            current_project, loaded_dates, project_days
-        )
+        project_history, history_bytes = load_project_history(current_project, project_days)
         total_bytes += history_bytes
 
         if project_history:
-            print(f"## Project History: {project_name} (Last {project_days} Work Days)")
+            print(f"## Project Short-Term Memory: {project_name}")
             print()
             for date, content in project_history:
                 print(f"### {date}")

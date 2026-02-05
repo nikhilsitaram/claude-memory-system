@@ -27,10 +27,17 @@ claude-memory-system/
 
 ## Two-Tier Memory Architecture
 
+**Long-term memory** (curated, persistent):
 | Tier | File | Loaded | Content |
 |------|------|--------|---------|
 | Global | `~/.claude/memory/global-long-term-memory.md` | Every session | User profile, global patterns |
 | Project | `~/.claude/memory/project-memory/{project}-long-term-memory.md` | When `$PWD` matches | Project-specific learnings |
+
+**Short-term memory** (recent daily summaries, filtered by scope tags):
+| Tier | Source | Days | Filter |
+|------|--------|------|--------|
+| Global | `~/.claude/memory/daily/*.md` | 2 | `[global/*]` tagged entries only |
+| Project | `~/.claude/memory/daily/*.md` | 7 | `[project-name/*]` tagged entries only |
 
 **Learning flow:**
 ```
@@ -57,7 +64,10 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 **Learning types:** `gotcha`, `pitfall`, `pattern`
 **Lesson types:** `insight`, `tip`, `workaround`
 
-**Filtering:** Tags determine scope (not content). Untagged content treated as global.
+**Filtering:** Tags determine which short-term memory tier content appears in:
+- `[global/*]` → Global Short-Term Memory (loaded every session)
+- `[project-name/*]` → Project Short-Term Memory (loaded when in that project)
+- Untagged content is excluded from short-term (only appears in raw daily files)
 
 ## Making Changes
 
@@ -122,7 +132,8 @@ Short-term token limits calculated as `workingDays × 1500`.
 
 | Feature | Implementation |
 |---------|----------------|
+| Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]` |
 | Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
 | Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
 | Synthesis scheduling | First session of day + every N hours (default 2) |
-| Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + recent project days |
+| Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
