@@ -104,32 +104,17 @@ def parse_sections(content: str) -> list[tuple[str, str]]:
 
 
 def parse_learnings(section_content: str) -> list[tuple[str, date | None]]:
-    """Parse learnings from section content with their dates."""
+    """Parse learnings from section content with their dates.
+
+    New format: "- [type] (date) description"
+    """
     learnings = []
-    current_learning = []
 
     for line in section_content.split("\n"):
-        # New learning starts with "- **"
-        if line.strip().startswith("- **"):
-            if current_learning:
-                text = "\n".join(current_learning)
-                learnings.append((text, parse_learning_date(text)))
-            current_learning = [line]
-        elif current_learning:
-            # Continuation of current learning (indented lines or empty)
-            if line.strip().startswith("- ") and not line.strip().startswith("- Lesson:"):
-                # New non-learning bullet
-                if current_learning:
-                    text = "\n".join(current_learning)
-                    learnings.append((text, parse_learning_date(text)))
-                current_learning = []
-            else:
-                current_learning.append(line)
-
-    # Don't forget the last learning
-    if current_learning:
-        text = "\n".join(current_learning)
-        learnings.append((text, parse_learning_date(text)))
+        stripped = line.strip()
+        # Format: "- [type] (date) description"
+        if stripped.startswith("- ["):
+            learnings.append((line, parse_learning_date(line)))
 
     return learnings
 

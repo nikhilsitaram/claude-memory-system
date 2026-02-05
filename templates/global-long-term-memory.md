@@ -30,11 +30,11 @@
 
 ## Key Learnings
 <!-- Subject to 30-day decay -->
-<!-- Patterns, gotchas, insights. From daily Learnings (title + description). -->
+<!-- Patterns, gotchas, insights. From daily Learnings section. -->
 
 ## Key Lessons
 <!-- Subject to 30-day decay -->
-<!-- Actionable takeaways. From daily Learnings (Lesson line). -->
+<!-- Actionable takeaways. From daily Lessons section. -->
 
 ---
 *Last synthesized: never*

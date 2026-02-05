@@ -42,15 +42,14 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 **Daily file format:**
 - `## Actions` - What was done, tagged `[scope/action]`
 - `## Decisions` - Choices with rationale, tagged `[scope/decision]`
-- `## Learnings` - Patterns/gotchas, tagged `[scope/type]` (no date - comes from filename)
-  - Line 1: `- **Title** [scope/type]: Description`
-  - Line 2: `  - Lesson: Actionable takeaway`
+- `## Learnings` - Patterns/gotchas, format: `- [scope/type] Description`
+- `## Lessons` - Actionable takeaways, format: `- [scope/type] Takeaway`
 
 **Long-term file format (decay-eligible sections):**
 - `## Key Actions` - Significant actions (from daily Actions)
 - `## Key Decisions` - Important choices (from daily Decisions)
-- `## Key Learnings` - Patterns/insights (from daily Learnings line 1)
-- `## Key Lessons` - Actionable takeaways (from daily Learnings line 2)
+- `## Key Learnings` - Patterns/insights (from daily Learnings)
+- `## Key Lessons` - Actionable takeaways (from daily Lessons)
 
 **Tag types:** `error`, `best-practice`, `data-quirk`, `decision`, `command`
 

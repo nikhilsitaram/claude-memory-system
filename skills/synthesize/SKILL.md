@@ -64,9 +64,12 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 - [global/decision] Project-agnostic choice and rationale
 
 ## Learnings
-<!-- Patterns, gotchas, insights. Must include scope/type tag. NO DATE - comes from filename. -->
-- **Title** [scope/type]: Brief description
-  - Lesson: Actionable takeaway
+<!-- Patterns, gotchas, insights. Tag [scope/type]. -->
+- [scope/type] Description of the pattern or insight
+
+## Lessons
+<!-- Actionable takeaways. Tag [scope/type]. -->
+- [scope/type] Actionable takeaway or rule
 ```
 
 ### Content Guidance
@@ -84,8 +87,13 @@ For each day with transcripts, create `~/.claude/memory/daily/YYYY-MM-DD.md`:
 - Always include the "why" - bare choices without rationale go in Actions
 
 **Learnings** - "What was discovered":
-- Format: `[scope/type]` - NO date (date comes from filename)
+- Format: `- [scope/type] Description` - NO date (date comes from filename)
 - Gotchas, patterns, commands, errors
+
+**Lessons** - "What to do about it":
+- Format: `- [scope/type] Actionable takeaway`
+- Rules, guidelines, or commands to follow
+- Learnings and Lessons don't need to be 1:1 paired
 
 ### Learning Tags
 
@@ -112,8 +120,8 @@ Route daily content to long-term memory files:
 |---------------|-----------|-------------------|
 | `## Actions` | `[scope/action]` | `## Key Actions` |
 | `## Decisions` | `[scope/decision]` | `## Key Decisions` |
-| `## Learnings` (line 1) | `[scope/type]` | `## Key Learnings` |
-| `## Learnings` (line 2) | `Lesson:` | `## Key Lessons` |
+| `## Learnings` | `[scope/type]` | `## Key Learnings` |
+| `## Lessons` | `[scope/type]` | `## Key Lessons` |
 
 ### Routing Rules
 
@@ -130,18 +138,20 @@ Route daily content to long-term memory files:
 - [claude-memory-system/action] Implemented age-based decay with 30-day threshold
 
 ## Learnings
-- **Path encoding lossy** [claude-memory-system/data-quirk]: Both / and . become -
-  - Lesson: Always read sessions-index.json for authoritative path
+- [claude-memory-system/data-quirk] Path encoding is lossy - both / and . become -
+
+## Lessons
+- [claude-memory-system/data-quirk] Always read sessions-index.json for authoritative path
 
 # Routed to project-memory/claude-memory-system-long-term-memory.md:
 ## Key Actions
-- [action] (2026-02-02): Implemented age-based decay with 30-day threshold
+- [action] (2026-02-02) Implemented age-based decay with 30-day threshold
 
 ## Key Learnings
-- **Path encoding lossy** [data-quirk] (2026-02-02): Both / and . become -
+- [data-quirk] (2026-02-02) Path encoding is lossy - both / and . become -
 
 ## Key Lessons
-- [data-quirk] (2026-02-02): Always read sessions-index.json for authoritative path
+- [data-quirk] (2026-02-02) Always read sessions-index.json for authoritative path
 ```
 
 **Templates** (read for section structure):
@@ -162,6 +172,7 @@ Daily files use mandatory tags (`[project]` or `[global]`) to enable project-spe
 - Actions: `[project-name/action]` or `[global/action]`
 - Decisions: `[project-name/decision]` or `[global/decision]`
 - Learnings: `[scope/type]` where type is error, best-practice, data-quirk, decision, command
+- Lessons: `[scope/type]` same types as Learnings
 
 **Filtering behavior** (implemented in load_memory.py):
 - When loading project memory, include items tagged with that project name
