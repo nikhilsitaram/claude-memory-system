@@ -3,7 +3,15 @@
 
 import json
 import os
+import sys
 from pathlib import Path
+
+# Add scripts directory to path for local imports
+script_dir = Path(__file__).parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+
+from load_memory import filter_daily_content
 
 
 def calculate_usage():
@@ -32,10 +40,15 @@ def calculate_usage():
     global_memory = memory_dir / "global-long-term-memory.md"
     global_long_term_tokens = global_memory.stat().st_size // 4 if global_memory.exists() else 0
 
-    # Global short-term (daily files, sort by name, take latest N)
+    # Global short-term (daily files filtered to [global/*] tags)
     daily_dir = memory_dir / "daily"
     daily_files = sorted(daily_dir.glob("*.md"), reverse=True)[:global_short_days] if daily_dir.exists() else []
-    global_short_term_tokens = sum(f.stat().st_size for f in daily_files) // 4
+    global_short_term_bytes = 0
+    for f in daily_files:
+        content = f.read_text(encoding="utf-8")
+        filtered = filter_daily_content(content, "global")
+        global_short_term_bytes += len(filtered.encode("utf-8"))
+    global_short_term_tokens = global_short_term_bytes // 4
 
     # Project: find by CWD match
     project_name = None
@@ -55,12 +68,24 @@ def calculate_usage():
         project_file = memory_dir / "project-memory" / f"{project_name}-long-term-memory.md"
         project_long_term_tokens = project_file.stat().st_size // 4 if project_file.exists() else 0
 
-    # Project short-term
-    project_short_term_tokens = 0
-    for day in project_days:
-        day_file = daily_dir / f"{day}.md"
-        if day_file.exists():
-            project_short_term_tokens += day_file.stat().st_size // 4
+    # Project short-term (daily files filtered to [project/*] tags)
+    project_short_term_bytes = 0
+    project_short_days_actual = 0
+    if project_name:
+        # Scan all daily files for project-tagged content (up to limit)
+        all_daily_files = sorted(daily_dir.glob("*.md"), reverse=True) if daily_dir.exists() else []
+        for day_file in all_daily_files:
+            if project_short_days_actual >= project_short_days:
+                break
+            content = day_file.read_text(encoding="utf-8")
+            filtered = filter_daily_content(content, project_name)
+            if filtered:
+                project_short_term_bytes += len(filtered.encode("utf-8"))
+                project_short_days_actual += 1
+    project_short_term_tokens = project_short_term_bytes // 4
+
+    # Count actual global days with content
+    global_short_days_actual = sum(1 for f in daily_files if filter_daily_content(f.read_text(encoding="utf-8"), "global"))
 
     total_tokens = global_long_term_tokens + global_short_term_tokens + project_long_term_tokens + project_short_term_tokens
 
@@ -70,12 +95,12 @@ def calculate_usage():
     print(f"global_long_limit={global_long_limit}")
     print(f"global_short_term_tokens={global_short_term_tokens}")
     print(f"global_short_limit={global_short_limit}")
-    print(f"global_short_days={global_short_days}")
+    print(f"global_short_days_actual={global_short_days_actual}")
     print(f"project_long_term_tokens={project_long_term_tokens}")
     print(f"project_long_limit={project_long_limit}")
     print(f"project_short_term_tokens={project_short_term_tokens}")
     print(f"project_short_limit={project_short_limit}")
-    print(f"project_short_days_actual={len(project_days)}")
+    print(f"project_short_days_actual={project_short_days_actual}")
     print(f"total_tokens={total_tokens}")
     print(f"total_budget={total_budget}")
 
