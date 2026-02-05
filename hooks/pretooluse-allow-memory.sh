@@ -19,7 +19,7 @@ fi
 
 # 2. Memory system skills
 if [ "$tool_name" = "Skill" ]; then
-    if echo "$input" | grep -qE '"skill"\s*:\s*"(synthesize|remember|recall|reload|settings)"'; then
+    if echo "$input" | grep -qE '"skill"\s*:\s*"(synthesize|remember|recall|settings)"'; then
         should_allow=true
         reason="memory system skill"
     fi

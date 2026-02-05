@@ -16,7 +16,7 @@ claude-memory-system/
 │   ├── indexing.py             # Transcript extraction + project index building
 │   ├── decay.py                # Age-based decay for long-term memory
 │   └── project_manager.py      # Project lifecycle management library
-├── skills/                     # /remember, /synthesize, /recall, /reload, /settings, /projects
+├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
 ```

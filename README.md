@@ -44,7 +44,7 @@ When Claude (or a subagent) calls a tool that targets memory files:
 ### What's Auto-Approved
 
 - **Read/Edit/Write** operations on `~/.claude/memory/**`
-- **Skill invocations** for memory skills (synthesize, remember, recall, reload, settings)
+- **Skill invocations** for memory skills (synthesize, remember, recall, settings)
 - **Task tool** calls with memory-related prompts
 - **Bash operations** using `~/.claude/scripts/*` (indexing.py, token_usage.py, etc.)
 
@@ -74,11 +74,8 @@ The installer automatically detects your Python command (`python3` vs `python`) 
 | `/remember [note]` | Save a note to today's daily log |
 | `/synthesize` | Process transcripts into daily summaries and update long-term memory |
 | `/recall [query]` | Search through all historical daily memory files |
-| `/reload` | Synthesize pending transcripts and reload memory (use after `/clear`) |
 | `/settings` | View/modify memory settings and check token usage |
 | `/projects` | Manage project data - list status, merge orphans, cleanup stale entries |
-
-**Note**: `/clear` does not trigger hooks ([GitHub #21578](https://github.com/anthropics/claude-code/issues/21578)), so use `/reload` afterward to restore memory context.
 
 ## How It Works
 

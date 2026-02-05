@@ -119,7 +119,6 @@ def create_directories() -> None:
         get_claude_dir() / "skills" / "remember",
         get_claude_dir() / "skills" / "synthesize",
         get_claude_dir() / "skills" / "recall",
-        get_claude_dir() / "skills" / "reload",
         get_claude_dir() / "skills" / "settings",
         get_claude_dir() / "skills" / "projects",
     ]
@@ -181,7 +180,7 @@ def copy_skills(script_dir: Path) -> None:
     """Copy skill files to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "reload", "settings", "projects"]
+    skills = ["remember", "synthesize", "recall", "settings", "projects"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
@@ -444,7 +443,6 @@ def print_success_message() -> None:
     print("  /remember   - Save notes to daily log")
     print("  /synthesize - Process transcripts & update long-term memory")
     print("  /recall     - Search historical memory")
-    print("  /reload     - Synthesize + load memory (use after /clear)")
     print("  /settings   - View/modify memory settings & token usage")
     print("  /projects   - Manage projects (move, merge orphans, cleanup)")
     print()

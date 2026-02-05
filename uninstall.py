@@ -141,7 +141,6 @@ def purge_memory_data() -> None:
         claude_dir / "skills" / "remember",
         claude_dir / "skills" / "synthesize",
         claude_dir / "skills" / "recall",
-        claude_dir / "skills" / "reload",
         claude_dir / "skills" / "settings",
         claude_dir / "skills" / "projects",
         # Hook scripts
@@ -193,7 +192,7 @@ def print_cleanup_instructions() -> None:
     print("Or manually:")
     print()
     print("  rm -rf ~/.claude/memory")
-    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,reload,settings,projects}")
+    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
     print("  rm ~/.claude/scripts/{memory_utils,load_memory,save_session,indexing,decay,token_usage,load-project-memory,project_manager}.py")
 
