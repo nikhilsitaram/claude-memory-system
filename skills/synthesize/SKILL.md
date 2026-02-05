@@ -38,6 +38,8 @@ python3 $HOME/.claude/scripts/decay.py --dry-run  # Preview only
 2. `indexing.py extract` - Get pending transcripts (auto-marks as captured)
 3. Create/update `~/.claude/memory/daily/YYYY-MM-DD.md` with sections
 4. Route learnings to long-term memory (Phase 2)
+   - **Create new project files** from template if they don't exist
+   - Check `ls ~/.claude/memory/project-memory/` for existing files
 5. `decay.py` - Archive old learnings
 6. Update `.last-synthesis`: `python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"`
 
@@ -145,10 +147,11 @@ Route daily content to long-term memory files:
 
 ### Routing Rules
 
-1. **Scope-stripping:** Remove scope from tag (long-term file is already scoped)
-2. **Date-first format:** Prefix with `(YYYY-MM-DD)` from daily filename, then `[type]`
-3. **Deduplication:** Check if concept already exists (skip duplicates)
-4. **Selective routing:** Only route items worth preserving long-term (not every action/decision)
+1. **Create missing project files:** If `project-memory/{project}-long-term-memory.md` doesn't exist, create it from the template at `~/.claude/memory/templates/project-long-term-memory.md`
+2. **Scope-stripping:** Remove scope from tag (long-term file is already scoped)
+3. **Date-first format:** Prefix with `(YYYY-MM-DD)` from daily filename, then `[type]`
+4. **Deduplication:** Check if concept already exists (skip duplicates)
+5. **Selective routing:** Only route items worth preserving long-term (not every action/decision)
 
 ### Examples
 
@@ -180,9 +183,18 @@ Route daily content to long-term memory files:
 - (2026-02-02) [insight] Always read sessions-index.json for authoritative path
 ```
 
-**Templates** (read for section structure):
-- Global: `Read(~/.claude/memory/templates/global-long-term-memory.md)`
-- Project: `Read(~/.claude/memory/templates/project-long-term-memory.md)`
+**Templates** (use to create new files or verify section structure):
+- Global: `~/.claude/memory/templates/global-long-term-memory.md`
+- Project: `~/.claude/memory/templates/project-long-term-memory.md`
+
+**Creating a new project file:**
+```bash
+# Check if file exists
+ls ~/.claude/memory/project-memory/{project}-long-term-memory.md
+
+# If not, copy from template and update header
+```
+Then replace `{Project Name}` with the actual project name and `{date}` with today's date.
 
 ## Filtering Specification
 
