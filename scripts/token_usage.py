@@ -15,13 +15,18 @@ def calculate_usage():
     settings_file = memory_dir / "settings.json"
     settings = json.loads(settings_file.read_text()) if settings_file.exists() else {}
 
+    # Settings with defaults
     global_short_days = settings.get("globalShortTerm", {}).get("workingDays", 2)
-    global_short_limit = settings.get("globalShortTerm", {}).get("tokenLimit", 15000)
-    global_long_limit = settings.get("globalLongTerm", {}).get("tokenLimit", 7000)
+    global_long_limit = settings.get("globalLongTerm", {}).get("tokenLimit", 5000)
     project_short_days = settings.get("projectShortTerm", {}).get("workingDays", 7)
-    project_short_limit = settings.get("projectShortTerm", {}).get("tokenLimit", 5000)
-    project_long_limit = settings.get("projectLongTerm", {}).get("tokenLimit", 3000)
-    total_budget = settings.get("totalTokenBudget", 30000)
+    project_long_limit = settings.get("projectLongTerm", {}).get("tokenLimit", 5000)
+
+    # Short-term limits are calculated: workingDays × 1500
+    global_short_limit = global_short_days * 1500
+    project_short_limit = project_short_days * 1500
+
+    # Total budget is sum of all 4 components
+    total_budget = global_long_limit + global_short_limit + project_long_limit + project_short_limit
 
     # Global long-term
     global_memory = memory_dir / "global-long-term-memory.md"
