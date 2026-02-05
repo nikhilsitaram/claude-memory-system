@@ -5,7 +5,7 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 ## Features
 
 - **Auto-capture**: Full transcripts saved on session end and before compaction
-- **Two-tier memory**: Global patterns (always loaded) + project-specific learnings (loaded when in project)
+- **Two-tier memory**: Global patterns (always loaded) + project-specific learnings (loaded when in project), filtered by `[scope/*]` tags
 - **Self-improvement loop**: Errors, best practices, and decisions are automatically extracted and routed to long-term memory
 - **Age-based decay**: Learnings older than 30 days are automatically archived; pinned sections protected from decay
 - **Project-aware loading**: Automatically loads project-specific history (configurable days) when working in a known project directory
@@ -81,21 +81,23 @@ The installer automatically detects your Python command (`python3` vs `python`) 
 
 ### Session Lifecycle
 
-1. **Session Start**: Loads long-term memory, last 2 days of daily summaries, and project-specific history. Also recovers any orphaned transcripts and prompts for synthesis if needed.
+1. **Session Start**: Loads long-term memory, global short-term (`[global/*]` entries from last 2 days), and project short-term (`[project/*]` entries from last 7 days). Also recovers any orphaned transcripts and prompts for synthesis if needed.
 2. **During Session**: Use `/remember` to capture important notes; Claude proactively uses `/recall` when historical context would help
 3. **Before Compaction**: Transcript saved (both manual `/compact` and automatic compaction)
 4. **Session End**: Transcript automatically saved to `~/.claude/memory/transcripts/`
 
 ### Project-Aware Memory Loading
 
-When you start a session in a project directory, the system automatically loads that project's historical context:
+When you start a session in a project directory, the system automatically loads relevant context filtered by scope tags:
 
-| Context Type | Default | Description |
-|--------------|---------|-------------|
-| Global (all projects) | 2 working days | Days with actual session activity (not calendar days) |
-| Current project | 7 working days | Additional project-specific history |
+| Context Type | Default | Filter | Description |
+|--------------|---------|--------|-------------|
+| Global short-term | 2 days | `[global/*]` | Only entries tagged with global scope |
+| Project short-term | 7 days | `[project/*]` | Only entries tagged with current project |
 
-**Working days vs calendar days**: The system scans for existing daily files rather than looping through calendar dates. If you work Mon-Thu but not Fri-Sun, you get 7 actual work days of context, not 7 calendar days with 3 empty.
+**Tag-based filtering**: Daily files contain entries tagged with scopes like `[global/implement]` or `[claude-memory-system/gotcha]`. Only matching entries are loaded - global short-term loads `[global/*]` entries, project short-term loads `[project-name/*]` entries. This keeps context relevant and reduces token usage.
+
+**Working days**: The system scans for daily files with matching tagged content. Days without matching content are skipped.
 
 **Project detection**: By default, uses exact path match only. Enable `projectSettings.includeSubdirectories` to match `/project/subdir` to `/project/`.
 
