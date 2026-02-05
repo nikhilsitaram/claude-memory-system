@@ -173,13 +173,13 @@ The decay system automatically archives old learnings to keep long-term memory l
 - `decay.archiveRetentionDays` (default: 365): Archived items older than this are purged
 
 **What gets decayed:**
-- Learnings in decay-eligible sections (Key Learnings, Error Patterns, Best Practices, etc.)
-- Only learnings with creation dates older than `ageDays`
+- Entries in decay-eligible sections (Key Actions, Key Decisions, Key Learnings, Key Lessons)
+- Only entries with creation dates older than `ageDays`
 
 **What is protected:**
 - Auto-pinned sections: About Me, Current Projects, Technical Environment, Patterns & Preferences
 - Custom pinned section: `## Pinned` - move important learnings here to protect them
-- Learnings without dates (legacy format) - add dates during synthesis to enable decay
+- Entries without dates are protected from decay
 
 **Archive location**: `~/.claude/memory/.decay-archive.md`
 

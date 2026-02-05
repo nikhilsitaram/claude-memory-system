@@ -237,7 +237,7 @@ print(result["message"])
 3. **Backups are automatic** - Tell user where they're stored (result includes backup_path)
 4. **Orphaned folders are renamed, not deleted** - Renamed to `.merged.bak` for safety
 5. **Memory files need intelligent merge** - Not just concatenated; Claude should:
-   - Combine similar sections (merge two "## Error Patterns" into one)
+   - Combine similar sections (merge two "## Key Learnings" into one)
    - Deduplicate equivalent learnings
    - Preserve unique content from both files
    - Keep the merged file coherent and well-organized

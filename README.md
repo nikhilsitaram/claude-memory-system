@@ -130,7 +130,7 @@ python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load speci
 └── .captured                   # Tracks which sessions were already captured
 ```
 
-**Two-tier memory**: Global memory contains user profile, patterns, and project-agnostic learnings. Project memory contains project-specific errors, data quirks, and decisions. Both are updated during `/synthesize`.
+**Two-tier memory**: Global memory contains user profile, patterns, and project-agnostic learnings. Project memory contains project-specific learnings and decisions. Both are updated during `/synthesize`.
 
 ### Settings
 
@@ -182,8 +182,7 @@ Learnings in long-term memory files are subject to automatic archival:
 - `## Pinned` - move important learnings here to protect them
 
 **Subject to decay:**
-- `## Key Learnings`, `## Error Patterns to Avoid`, `## Best Practices`
-- Project sections: `## Data Quirks`, `## Key Decisions`, `## Useful Commands`
+- `## Key Actions`, `## Key Decisions`, `## Key Learnings`, `## Key Lessons`
 
 Learnings with creation dates older than `decay.ageDays` (default: 30) are moved to `~/.claude/memory/.decay-archive.md`. Archived items older than `decay.archiveRetentionDays` (default: 365) are purged.
 

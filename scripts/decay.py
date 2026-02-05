@@ -112,7 +112,7 @@ def parse_learnings(section_content: str) -> list[tuple[str, date | None]]:
 
     for line in section_content.split("\n"):
         stripped = line.strip()
-        # Format: "- (date) [type] description" (also handles legacy "- [type] (date)")
+        # Format: "- (date) [type] description"
         if stripped.startswith("- "):
             learnings.append((line, parse_learning_date(line)))
 
