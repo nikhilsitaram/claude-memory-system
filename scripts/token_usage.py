@@ -11,7 +11,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from load_memory import filter_daily_content
+from memory_utils import filter_daily_content
 
 
 def calculate_usage():

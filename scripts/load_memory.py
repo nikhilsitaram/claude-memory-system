@@ -17,7 +17,6 @@ Requirements: Python 3.9+
 """
 
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +28,8 @@ if str(script_dir) not in sys.path:
 
 from memory_utils import (
     check_python_version,
+    filter_daily_content,
+    find_current_project,
     get_memory_dir,
     get_daily_dir,
     get_project_memory_dir,
@@ -42,85 +43,6 @@ from memory_utils import (
 )
 
 from indexing import list_pending_sessions
-
-# Regex to extract scope from tagged entries: [scope/type] or [scope]
-TAG_PATTERN = re.compile(r"^\s*-\s*\[([^\]/]+)(?:/[^\]]+)?\]")
-
-
-def filter_daily_content(content: str, scope: str) -> str:
-    """
-    Filter daily file content to include only entries matching the given scope.
-
-    Args:
-        content: Raw markdown content from a daily file
-        scope: Either "global" or a project name to filter by
-
-    Returns:
-        Filtered content with only matching entries, preserving section structure.
-        Returns empty string if no entries match.
-    """
-    lines = content.split("\n")
-    result_lines = []
-    current_section = None
-    section_lines = []
-    section_has_content = False
-
-    def flush_section():
-        """Add current section to result if it has content."""
-        nonlocal section_lines, section_has_content
-        if current_section and section_has_content:
-            result_lines.extend(section_lines)
-        section_lines = []
-        section_has_content = False
-
-    for line in lines:
-        # Check for date header (# YYYY-MM-DD)
-        if line.startswith("# "):
-            flush_section()
-            result_lines.append(line)
-            current_section = None
-            continue
-
-        # Check for section header (## Section)
-        if line.startswith("## "):
-            flush_section()
-            current_section = line
-            section_lines = [line]
-            continue
-
-        # If we're in a section, process the line
-        if current_section:
-            # Check if this is a tagged entry
-            match = TAG_PATTERN.match(line)
-            if match:
-                entry_scope = match.group(1).lower()
-                # Include if scope matches (case-insensitive)
-                if entry_scope == scope.lower():
-                    section_lines.append(line)
-                    section_has_content = True
-            elif line.strip() == "":
-                # Keep blank lines within sections that have content
-                section_lines.append(line)
-            elif not line.strip().startswith("-"):
-                # Non-list content (e.g., ## Notes text) - include for global scope only
-                if scope.lower() == "global":
-                    section_lines.append(line)
-                    section_has_content = True
-            # Skip untagged list items (treat as needing explicit tag)
-
-    # Flush final section
-    flush_section()
-
-    # Clean up: remove trailing empty lines and ensure proper spacing
-    while result_lines and result_lines[-1].strip() == "":
-        result_lines.pop()
-
-    filtered = "\n".join(result_lines)
-
-    # Only return content if we have more than just the date header
-    if filtered.strip() and not re.match(r"^#\s+\d{4}-\d{2}-\d{2}\s*$", filtered.strip()):
-        return filtered
-    return ""
 
 
 def get_last_synthesis_file() -> Path:
@@ -173,32 +95,6 @@ def update_last_synthesis_time() -> None:
     last_synthesis_file.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
     last_synthesis_file.write_text(timestamp, encoding="utf-8")
-
-
-def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
-    """
-    Find the project matching the current working directory.
-
-    Returns project dict with 'name', 'originalPath', 'workDays' or None.
-    """
-    projects = projects_index.get("projects", {})
-    pwd_lower = pwd.lower()
-
-    if include_subdirs:
-        # Match if PWD starts with any known project path (longest match wins)
-        best_match = None
-        best_length = 0
-
-        for path_key, project in projects.items():
-            if pwd_lower.startswith(path_key) or pwd_lower == path_key:
-                if len(path_key) > best_length:
-                    best_match = project
-                    best_length = len(path_key)
-
-        return best_match
-    else:
-        # Exact match only
-        return projects.get(pwd_lower)
 
 
 def load_global_memory() -> tuple[str, int]:
