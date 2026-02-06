@@ -10,7 +10,7 @@ Markdown-based memory persistence for Claude Code. Installs hooks, scripts, and 
 claude-memory-system/
 ├── install.py / uninstall.py   # Cross-platform installers
 ├── scripts/
-│   ├── memory_utils.py         # Shared utilities: paths, settings, locking
+│   ├── memory_utils.py         # Shared utilities: paths, settings, filtering, locking
 │   ├── load_memory.py          # SessionStart hook - loads memory
 │   ├── indexing.py             # Session discovery, transcript extraction, project index
 │   ├── decay.py                # Age-based decay for long-term memory
