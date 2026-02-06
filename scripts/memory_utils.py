@@ -380,6 +380,30 @@ def add_captured_session(session_id: str, captured_set: Optional[set[str]] = Non
         f.write(f"{session_id}\n")
 
 
+def remove_captured_session(session_id: str) -> bool:
+    """
+    Remove a session ID from .captured. Returns True if found and removed.
+
+    Args:
+        session_id: The session ID to remove
+    """
+    captured_file = get_captured_file()
+    if not captured_file.exists():
+        return False
+
+    try:
+        lines = captured_file.read_text(encoding="utf-8").splitlines()
+        new_lines = [line for line in lines if line.strip() != session_id]
+
+        if len(new_lines) == len(lines):
+            return False  # Not found
+
+        captured_file.write_text("\n".join(new_lines) + "\n" if new_lines else "", encoding="utf-8")
+        return True
+    except IOError:
+        return False
+
+
 def get_working_days(days_limit: int) -> list[str]:
     """
     Get the most recent N working days (days with daily files).

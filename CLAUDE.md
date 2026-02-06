@@ -86,6 +86,8 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 python3 install.py                           # Apply changes
 python3 ~/.claude/scripts/load_memory.py     # Test memory loading
 python3 ~/.claude/scripts/indexing.py list-pending  # Test indexing
+python3 ~/.claude/scripts/indexing.py extract 2026-02-06 --output /tmp/test.txt  # Test extract (no marking)
+python3 ~/.claude/scripts/indexing.py mark-captured --sidecar /tmp/test.sessions  # Test marking
 python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 ```
 
@@ -134,6 +136,8 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 |---------|----------------|
 | Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]` |
 | Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
+| Safe capture workflow | `extract` is pure read (never marks); `mark-captured --sidecar` skips today's sessions; subagent failure = full retry |
+| Session exclusion | `--exclude-session` flag + auto-uncapture on resume prevent active session data loss |
 | Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
-| Synthesis scheduling | First session of day + every N hours (default 2) |
+| Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |

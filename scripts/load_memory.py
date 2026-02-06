@@ -16,6 +16,7 @@ Output is printed to stdout and injected into Claude Code's context.
 Requirements: Python 3.9+
 """
 
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ from memory_utils import (
     load_json_file,
     project_name_to_filename,
     get_working_days,
+    remove_captured_session,
 )
 
 from indexing import list_pending_sessions
@@ -87,14 +89,6 @@ def should_synthesize(settings: dict) -> bool:
 
     except (ValueError, OSError, IOError):
         return True  # Fallback: always synthesize if file missing/invalid
-
-
-def update_last_synthesis_time() -> None:
-    """Update .last-synthesis file with current UTC timestamp."""
-    last_synthesis_file = get_last_synthesis_file()
-    last_synthesis_file.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
-    last_synthesis_file.write_text(timestamp, encoding="utf-8")
 
 
 def load_global_memory() -> tuple[str, int]:
@@ -198,16 +192,31 @@ def load_project_history(
     return summaries, total_bytes
 
 
-def count_pending_transcripts() -> int:
+def count_pending_transcripts(exclude_session_id: str | None = None) -> int:
     """Count number of pending (unprocessed) session transcripts."""
     captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, min_file_size=1000)
+    pending = list_pending_sessions(captured, min_file_size=1000, exclude_session_id=exclude_session_id)
     return len(pending)
 
 
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
+
+    # Parse session_id and source from SessionStart hook stdin JSON
+    current_session_id = None
+    source = None
+    try:
+        if not sys.stdin.isatty():
+            hook_input = json.load(sys.stdin)
+            current_session_id = hook_input.get("session_id")
+            source = hook_input.get("source")
+    except (json.JSONDecodeError, IOError):
+        pass  # Not called from hook, or invalid input — safe to continue
+
+    # Auto-uncapture on session resume (user may add new content to resumed session)
+    if source == "resume" and current_session_id:
+        remove_captured_session(current_session_id)
 
     # Load settings
     settings = load_settings()
@@ -231,22 +240,28 @@ def main() -> None:
     print()
 
     # Check for pending transcripts (only if synthesis scheduling allows)
-    pending_count = count_pending_transcripts()
+    # Exclude current session — it's still active and shouldn't be synthesized
+    pending_count = count_pending_transcripts(exclude_session_id=current_session_id)
     if pending_count > 0 and should_synthesize(settings):
+        # Build exclude flag for subagent
+        exclude_flag = ""
+        if current_session_id:
+            exclude_flag = f" --exclude-session {current_session_id}"
+
         print("## AUTO-SYNTHESIZE REQUIRED")
         print(f"There are {pending_count} unprocessed session transcripts.")
         print()
         print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts:")
         print("```")
-        print('Use the Task tool with subagent_type="general-purpose", model="haiku" and this prompt:')
+        print('Use the Task tool with subagent_type="general-purpose", model="opus" and this prompt:')
         print('"Process pending memory transcripts using the /synthesize skill instructions.')
         print("Read ~/.claude/skills/synthesize/SKILL.md for the full process.")
-        print("Extract transcripts, create daily summaries, update long-term memory files,")
-        print('and delete processed transcript files. Return a brief summary of what was processed."')
+        print("Extract transcripts, create daily summaries, update long-term memory files.")
+        if current_session_id:
+            print(f"IMPORTANT: Exclude the active session from extraction using: --exclude-session {current_session_id}")
+        print('Return a brief summary of what was processed."')
         print("```")
         print()
-        # Update synthesis timestamp so we don't prompt again within interval
-        update_last_synthesis_time()
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()

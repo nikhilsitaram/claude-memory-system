@@ -21,7 +21,7 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
    ```
    Task(
      subagent_type: "general-purpose",
-     model: "haiku",
+     model: "opus",
      prompt: <include full SUBAGENT_PROMPT below with the pending dates>
    )
    ```
@@ -44,18 +44,38 @@ You are synthesizing memory transcripts for: {PENDING_DATES}
 - `Read(~/.claude/memory/global-long-term-memory.md)`
 - `Edit(~/.claude/memory/...)` for updates
 
-**Transcript operations** - use `$HOME` in bash:
-- `python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD` - Extract and mark as captured
-- `python3 $HOME/.claude/scripts/indexing.py extract --no-mark YYYY-MM-DD` - Preview only
+**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read:
+```
+python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD --exclude-session CURRENT_SESSION_ID --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
+```
+Then read the content and sidecar:
+```
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
+```
+After successful synthesis, mark captured:
+```
+python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions
+```
+
+**Other operations** - use `$HOME` in bash:
 - `python3 $HOME/.claude/scripts/decay.py` - Run decay after routing
 
 ## Process
 
-> **Note:** The subagent runs Phases 1-3 below. Additional infrastructure steps (indexing, migration, timestamp update) are handled by the calling script and `load_memory.py`, not the subagent.
+> **Note:** The subagent owns the full lifecycle: extraction, synthesis, marking captured, and timestamp update. The calling script (`load_memory.py`) only checks whether synthesis should run and passes the active session ID to exclude.
 
 ### Phase 1: Create Daily Summaries
 
-For each date, extract transcripts and create/update `~/.claude/memory/daily/YYYY-MM-DD.md`:
+For each pending date:
+
+1. **Extract** transcripts to temp file with `--output` and `--exclude-session` flags (creates `.sessions` sidecar automatically)
+2. **Read** transcript content from temp file using Read tool (avoids 30K Bash character limit)
+3. **Create/update** daily summary file `~/.claude/memory/daily/YYYY-MM-DD.md` (format below)
+4. **Mark captured** using `mark-captured --sidecar` (automatically skips today's sessions — they remain re-extractable)
+5. **Clean up** temp files
+
+Daily summary format:
 
 ```markdown
 # YYYY-MM-DD
