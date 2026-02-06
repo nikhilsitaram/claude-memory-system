@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Calculate memory system token usage."""
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -11,37 +10,41 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from memory_utils import filter_daily_content
+from memory_utils import (
+    filter_daily_content,
+    find_current_project,
+    get_daily_dir,
+    get_global_memory_file,
+    get_project_memory_dir,
+    get_projects_index_file,
+    load_json_file,
+    load_settings,
+    project_name_to_filename,
+)
 
 
 def calculate_usage():
     """Calculate token usage for all memory components."""
-    memory_dir = Path.home() / ".claude" / "memory"
     cwd = os.getcwd()
 
-    # Read settings
-    settings_file = memory_dir / "settings.json"
-    settings = json.loads(settings_file.read_text()) if settings_file.exists() else {}
+    # Load settings using shared utility (handles missing file + JSON errors)
+    settings = load_settings()
 
-    # Settings with defaults
-    global_short_days = settings.get("globalShortTerm", {}).get("workingDays", 2)
-    global_long_limit = settings.get("globalLongTerm", {}).get("tokenLimit", 5000)
-    project_short_days = settings.get("projectShortTerm", {}).get("workingDays", 7)
-    project_long_limit = settings.get("projectLongTerm", {}).get("tokenLimit", 5000)
-
-    # Short-term limits are calculated: workingDays × 750
-    global_short_limit = global_short_days * 750
-    project_short_limit = project_short_days * 750
-
-    # Total budget is sum of all 4 components
-    total_budget = global_long_limit + global_short_limit + project_long_limit + project_short_limit
+    global_short_days = settings["globalShortTerm"]["workingDays"]
+    global_long_limit = settings["globalLongTerm"]["tokenLimit"]
+    global_short_limit = settings["globalShortTerm"]["tokenLimit"]
+    project_short_days = settings["projectShortTerm"]["workingDays"]
+    project_long_limit = settings["projectLongTerm"]["tokenLimit"]
+    project_short_limit = settings["projectShortTerm"]["tokenLimit"]
+    total_budget = settings["totalTokenBudget"]
+    include_subdirs = settings["projectSettings"]["includeSubdirectories"]
 
     # Global long-term
-    global_memory = memory_dir / "global-long-term-memory.md"
+    global_memory = get_global_memory_file()
     global_long_term_tokens = global_memory.stat().st_size // 4 if global_memory.exists() else 0
 
     # Global short-term (daily files filtered to [global/*] tags)
-    daily_dir = memory_dir / "daily"
+    daily_dir = get_daily_dir()
     daily_files = sorted(daily_dir.glob("*.md"), reverse=True)[:global_short_days] if daily_dir.exists() else []
     global_short_term_bytes = 0
     for f in daily_files:
@@ -50,22 +53,15 @@ def calculate_usage():
         global_short_term_bytes += len(filtered.encode("utf-8"))
     global_short_term_tokens = global_short_term_bytes // 4
 
-    # Project: find by CWD match
-    project_name = None
-    project_days = []
-    projects_index = memory_dir / "projects-index.json"
-    if projects_index.exists():
-        idx = json.loads(projects_index.read_text())
-        for path, data in idx.get("projects", {}).items():
-            if cwd == path or cwd.startswith(path + "/"):
-                project_name = data.get("name")
-                project_days = data.get("workDays", [])[:project_short_days]
-                break
+    # Project: find by CWD match using shared utility (lowercases CWD correctly)
+    projects_index = load_json_file(get_projects_index_file(), {})
+    current_project = find_current_project(projects_index, cwd, include_subdirs)
+    project_name = current_project.get("name") if current_project else None
 
-    # Project long-term
+    # Project long-term (uses project_name_to_filename for correct kebab-case)
     project_long_term_tokens = 0
     if project_name:
-        project_file = memory_dir / "project-memory" / f"{project_name}-long-term-memory.md"
+        project_file = get_project_memory_dir() / project_name_to_filename(project_name)
         project_long_term_tokens = project_file.stat().st_size // 4 if project_file.exists() else 0
 
     # Project short-term (daily files filtered to [project/*] tags)
