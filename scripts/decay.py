@@ -16,7 +16,7 @@ Requirements: Python 3.9+
 import argparse
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Import from memory_utils
@@ -50,6 +50,9 @@ AUTO_PINNED_SECTIONS = {
     "## Patterns & Preferences",
     "## Pinned",
 }
+
+# Pattern to match archive section headers: ## Archived YYYY-MM-DD
+ARCHIVE_HEADER_PATTERN = re.compile(r"^## Archived (\d{4}-\d{2}-\d{2})$")
 
 # Decay-eligible sections (same for global and project)
 DECAY_ELIGIBLE_SECTIONS = {
@@ -130,7 +133,7 @@ def decay_file(filepath: Path, age_days: int, dry_run: bool = False) -> tuple[in
 
     content = filepath.read_text(encoding="utf-8")
     sections = parse_sections(content)
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     cutoff_date = today - timedelta(days=age_days)
 
     archived_learnings = []
@@ -194,7 +197,7 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
         return
 
     archive_file = get_memory_dir() / ".decay-archive.md"
-    today_header = f"## Archived {date.today().isoformat()}"
+    today_header = f"## Archived {datetime.now(timezone.utc).date().isoformat()}"
 
     if dry_run:
         return
@@ -245,7 +248,7 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
         return 0
 
     content = archive_file.read_text(encoding="utf-8")
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     cutoff_date = today - timedelta(days=retention_days)
 
     # Parse archive sections
@@ -254,10 +257,8 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
     skip_until_next_header = False
     purged_count = 0
 
-    archive_header_pattern = re.compile(r"^## Archived (\d{4}-\d{2}-\d{2})$")
-
     for line in lines:
-        match = archive_header_pattern.match(line.strip())
+        match = ARCHIVE_HEADER_PATTERN.match(line.strip())
         if match:
             try:
                 archive_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
