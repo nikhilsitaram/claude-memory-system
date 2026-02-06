@@ -51,6 +51,8 @@ You are synthesizing memory transcripts for: {PENDING_DATES}
 
 ## Process
 
+> **Note:** The subagent runs Phases 1-3 below. Additional infrastructure steps (indexing, migration, timestamp update) are handled by the calling script and `load_memory.py`, not the subagent.
+
 ### Phase 1: Create Daily Summaries
 
 For each date, extract transcripts and create/update `~/.claude/memory/daily/YYYY-MM-DD.md`:

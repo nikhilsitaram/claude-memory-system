@@ -53,9 +53,9 @@ Run `/settings usage` to see current token usage.
 1. Read the settings file for limits
 2. Calculate actual token usage:
    - global-long-term-memory.md: file size / 4
-   - Daily files (last N working days): sum of file sizes / 4
+   - Global daily files (last N working days): sum of filtered `[global/*]` content / 4
    - Project long-term memory (if applicable): file size / 4
-   - Project daily files (if applicable): sum of file sizes / 4
+   - Project daily files (if applicable): sum of filtered `[project/*]` content / 4
 3. Display usage report:
 
 ```
