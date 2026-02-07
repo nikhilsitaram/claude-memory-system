@@ -137,7 +137,6 @@ def copy_scripts(script_dir: Path) -> None:
         "memory_utils.py",
         "load_memory.py",
         "indexing.py",  # Session discovery, transcript extraction, project index
-        "load-project-memory.py",  # Keep the existing utility
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
         "token_usage.py",  # Token usage calculation for /settings

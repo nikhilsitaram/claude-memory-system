@@ -103,12 +103,6 @@ When you start a session in a project directory, the system automatically loads 
 
 **Why "project days"?** If you work on a project sporadically (e.g., Jan 25, then Feb 15), all project days of context come from meaningful work sessions - no wasted context on empty days.
 
-**Manual loading**: To load any project's history from anywhere:
-```bash
-python3 ~/.claude/scripts/load-project-memory.py --list  # See all projects
-python3 ~/.claude/scripts/load-project-memory.py ~/path/to/project  # Load specific project
-```
-
 ### Memory Structure
 
 ```
@@ -196,7 +190,7 @@ Synthesis is scheduled to balance freshness with efficiency:
 - **First session of day (UTC)**: Always prompts if transcripts pending
 - **Subsequent sessions**: Only prompts if more than `synthesis.intervalHours` since last synthesis
 
-Claude spawns a background Haiku subagent to process transcripts, keeping the main conversation context lean (~80% cost reduction vs. Sonnet).
+Claude spawns a background Sonnet subagent to process transcripts, keeping the main conversation context lean. The model is configurable via `synthesis.model` in settings.
 
 The synthesis process:
 

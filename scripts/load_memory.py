@@ -36,7 +36,6 @@ from memory_utils import (
     get_project_memory_dir,
     get_global_memory_file,
     get_projects_index_file,
-    get_captured_sessions,
     load_settings,
     load_json_file,
     project_name_to_filename,
@@ -44,7 +43,7 @@ from memory_utils import (
     remove_captured_session,
 )
 
-from indexing import list_pending_sessions
+from indexing import get_pending_days, extract_transcripts, format_transcripts_for_output
 
 
 def get_last_synthesis_file() -> Path:
@@ -192,63 +191,31 @@ def load_project_history(
     return summaries, total_bytes
 
 
-def count_pending_transcripts(exclude_session_id: str | None = None) -> int:
-    """Count number of pending (unprocessed) session transcripts."""
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, min_file_size=1000, exclude_session_id=exclude_session_id)
-    return len(pending)
-
-
-def _build_synthesis_prompt(exclude_flag: str) -> str:
+def _build_synthesis_prompt(
+    exclude_flag: str,
+    pending_dates: list[str],
+    extracted_files: dict[str, str] | None = None,
+) -> str:
     """
     Build the embedded synthesis prompt for the subagent.
 
-    This eliminates one round-trip (reading SKILL.md) by embedding
-    the full instructions directly.
+    Two modes:
+    - Pre-extracted (manual /synthesize): files already on disk, skip extraction
+    - Dates-only (auto-synthesis): subagent extracts each date
 
     Args:
         exclude_flag: The --exclude-session flag string (or empty)
+        pending_dates: List of pending date strings (YYYY-MM-DD)
+        extracted_files: Optional dict mapping date -> file path (pre-extracted)
     """
-    return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
+    dates_str = ", ".join(pending_dates)
 
-You own the full lifecycle: extraction, synthesis, marking captured, and timestamp update.
+    # Common synthesis instructions (shared by both paths)
+    synthesis_instructions = '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
-## Tool Guidelines
+ALWAYS Read the daily file BEFORE writing to it — it may already exist from an earlier synthesis run today. If it exists, merge new content into it rather than overwriting.
 
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
-
-**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read (Bash output truncates at 30K chars; temp file avoids this):
-```
-python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
-```
-Then read the content and sidecar:
-```
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
-```
-
-## Process
-
-First, run `python3 $HOME/.claude/scripts/indexing.py list-pending` to get the pending dates.
-
-For each pending date, do a **single combined pass** (extract + summarize + route + mark):
-
-### Step 1: Extract & Read
-
-Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
-- `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
-- `/tmp/memory-extract-YYYY-MM-DD-$$.sessions` (session IDs)
-- `~/.claude/memory/global-long-term-memory.md`
-- `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
-
-### Step 2: Summarize + Route + Write
-
-In **one reasoning step**, produce BOTH a daily summary AND any long-term routing edits. Then write/edit all files.
-
-**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
+Write the COMPLETE daily summary in a **single Write call**, not multiple Edits.
 
 ```markdown
 # YYYY-MM-DD
@@ -272,15 +239,113 @@ In **one reasoning step**, produce BOTH a daily summary AND any long-term routin
 - [scope/tip] Useful command or shortcut
 ```
 
-**Tag format:** `[scope/type]` where scope is `global` or `{{project-name}}`
+**Tag format:** `[scope/type]` where scope is `global` or `{project-name}`
 **Compactness:** Final solutions only, one learning per concept, omit routine details.
 
 **Long-term routing (be HIGHLY selective):**
 Route TO long-term memory ONLY: fundamental patterns, hard-won lessons, safety-critical info, non-obvious gotchas, architecture decisions with lasting impact.
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
-Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[project/*]` → `~/.claude/memory/project-memory/{{project}}-long-term-memory.md`
+Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[project/*]` → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
-Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
+Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.'''
+
+    if extracted_files:
+        # Pre-extracted path: files already on disk
+        file_list = "\n".join(
+            f"- **{date}**: transcript=`{path}`, sidecar=`{path.rsplit('.', 1)[0]}.sessions`"
+            for date, path in sorted(extracted_files.items())
+        )
+        return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
+
+**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
+
+Pending dates: {dates_str}
+
+Pre-extracted transcript files:
+{file_list}
+
+## Tool Guidelines
+
+**File operations** - use tilde paths (`~/.claude/...`):
+- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
+- `Read(~/.claude/memory/global-long-term-memory.md)`
+- `Edit(~/.claude/memory/...)` for updates
+
+## Process
+
+### Step 1: Read all inputs (single parallel tool call)
+
+Read ALL of these in one parallel call:
+{chr(10).join(f"- `{path}` (transcript for {date})" for date, path in sorted(extracted_files.items()))}
+{chr(10).join(f"- `{path.rsplit('.', 1)[0]}.sessions` (sidecar for {date})" for date, path in sorted(extracted_files.items()))}
+- `~/.claude/memory/global-long-term-memory.md`
+- Any existing daily files: {", ".join(f"`~/.claude/memory/daily/{d}.md`" for d in pending_dates)}
+- Any relevant project long-term memory files (check transcript content for project references)
+
+### Step 2: Synthesize + Route + Write
+
+In **one reasoning step**, produce daily summaries AND any long-term routing edits for ALL dates. Then write/edit all files.
+
+{synthesis_instructions}
+
+### Step 3: Mark captured & clean up
+
+Mark captured and remove temp files for ALL dates:
+```bash
+{chr(10).join(f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions' for date, path in sorted(extracted_files.items()))}
+```
+
+### Step 4: Finalize (after all dates)
+
+Run decay and update timestamp in a single call:
+```bash
+python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+```
+
+Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+    else:
+        # Dates-only path: subagent must extract
+        return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
+
+**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
+
+Pending dates to process: {dates_str}
+
+## Tool Guidelines
+
+**File operations** - use tilde paths (`~/.claude/...`):
+- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
+- `Read(~/.claude/memory/global-long-term-memory.md)`
+- `Edit(~/.claude/memory/...)` for updates
+
+**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read (Bash output truncates at 30K chars; temp file avoids this):
+```
+python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
+```
+Then read the content and sidecar:
+```
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
+```
+
+## Process
+
+For each pending date ({dates_str}), do a **single combined pass** (extract + summarize + route + mark):
+
+### Step 1: Extract & Read
+
+Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
+- `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
+- `/tmp/memory-extract-YYYY-MM-DD-$$.sessions` (session IDs)
+- `~/.claude/memory/global-long-term-memory.md`
+- Any existing daily file: `~/.claude/memory/daily/YYYY-MM-DD.md`
+- `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
+
+### Step 2: Summarize + Route + Write
+
+In **one reasoning step**, produce BOTH a daily summary AND any long-term routing edits. Then write/edit all files.
+
+{synthesis_instructions}
 
 ### Step 3: Mark captured & clean up
 
@@ -342,8 +407,8 @@ def main() -> None:
 
     # Check for pending transcripts (only if synthesis scheduling allows)
     # Exclude current session — it's still active and shouldn't be synthesized
-    pending_count = count_pending_transcripts(exclude_session_id=current_session_id)
-    if pending_count > 0 and should_synthesize(settings):
+    pending_dates = get_pending_days(exclude_session_id=current_session_id)
+    if pending_dates and should_synthesize(settings):
         synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
@@ -352,11 +417,11 @@ def main() -> None:
         if current_session_id:
             exclude_flag = f" --exclude-session {current_session_id}"
 
-        # Build the embedded synthesis prompt
-        synth_prompt = _build_synthesis_prompt(exclude_flag)
+        # Build the embedded synthesis prompt (dates-only, no pre-extraction for auto path)
+        synth_prompt = _build_synthesis_prompt(exclude_flag, pending_dates)
 
         print("## AUTO-SYNTHESIZE REQUIRED")
-        print(f"There are {pending_count} unprocessed session transcripts.")
+        print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
         print()
         if synthesis_background:
             print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
@@ -432,12 +497,48 @@ def main() -> None:
 if __name__ == "__main__":
     # --synthesis-prompt: output just the subagent prompt (for /synthesize skill)
     if len(sys.argv) > 1 and sys.argv[1] == "--synthesis-prompt":
+        exclude_id = None
         exclude_flag = ""
         if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
+            exclude_id = sys.argv[3]
             exclude_flag = f" --exclude-session {sys.argv[3]}"
+
         settings = load_settings()
         model = settings.get("synthesis", {}).get("model", "sonnet")
+
+        # Pre-compute pending dates
+        pending_dates = get_pending_days(exclude_session_id=exclude_id)
+        if not pending_dates:
+            print("No pending transcripts.")
+            sys.exit(0)
+
+        # Pre-extract transcripts (manual path — user is already waiting)
+        pid = os.getpid()
+        extracted_files: dict[str, str] = {}
+        for date in pending_dates:
+            daily_data = extract_transcripts(date, exclude_session_id=exclude_id)
+            if daily_data:
+                output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
+                Path(output_path).write_text(
+                    format_transcripts_for_output(daily_data), encoding="utf-8"
+                )
+                # Write sidecar with session IDs
+                sidecar_path = Path(output_path).with_suffix(".sessions")
+                session_ids = [
+                    s["session_id"]
+                    for sessions in daily_data.values()
+                    for s in sessions
+                ]
+                sidecar_path.write_text(
+                    "\n".join(session_ids) + "\n", encoding="utf-8"
+                )
+                extracted_files[date] = output_path
+
+        if not extracted_files:
+            print("No pending transcripts with content.")
+            sys.exit(0)
+
         print(f"model={model}")
-        print(_build_synthesis_prompt(exclude_flag))
+        print(_build_synthesis_prompt(exclude_flag, list(extracted_files.keys()), extracted_files))
     else:
         main()

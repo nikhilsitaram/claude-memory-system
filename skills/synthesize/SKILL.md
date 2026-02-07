@@ -12,29 +12,23 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
 
 **IMPORTANT:** This skill MUST be executed by launching a subagent. Do NOT run synthesis in the main context.
 
-1. Check for pending transcripts:
-   ```bash
-   python3 $HOME/.claude/scripts/indexing.py list-pending
-   ```
-
-2. If no pending transcripts, inform the user and stop.
-
-3. Get the synthesis prompt and model (single source of truth):
+1. Get the synthesis prompt, model, and pre-extracted data:
    ```bash
    python3 $HOME/.claude/scripts/load_memory.py --synthesis-prompt
    ```
-   The first line of output is `model=<model>`. The rest is the subagent prompt.
+   - If output says "No pending transcripts", inform the user and stop.
+   - First line of output: `model=<model>`. The rest is the subagent prompt (with dates and file paths already embedded).
 
-4. Launch a synthesis subagent (**foreground** — manual `/synthesize` always blocks so user sees results):
+2. Launch a synthesis subagent (**foreground** — manual `/synthesize` always blocks so user sees results):
    ```
    Task(
      subagent_type: "general-purpose",
-     model: <model from output>,
-     prompt: <rest of output>
+     model: <model from first line>,
+     prompt: <rest of output after first line>
    )
    ```
 
-5. Report the subagent's summary to the user.
+3. Report the subagent's summary to the user.
 
 ---
 

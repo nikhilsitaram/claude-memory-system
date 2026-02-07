@@ -186,25 +186,6 @@ def save_settings(settings: dict[str, Any]) -> None:
         json.dump(settings, f, indent=2)
 
 
-def get_setting(path: str, default: Any = None) -> Any:
-    """
-    Get a nested setting by dot-notation path.
-
-    Example: get_setting("projectShortTerm.workingDays", 7)
-    """
-    settings = load_settings()
-    parts = path.split(".")
-    value = settings
-
-    for part in parts:
-        if isinstance(value, dict) and part in value:
-            value = value[part]
-        else:
-            return default
-
-    return value
-
-
 def estimate_tokens(text: str) -> int:
     """
     Estimate token count from text.
@@ -213,21 +194,6 @@ def estimate_tokens(text: str) -> int:
     This is a rough estimate that works reasonably well for English text.
     """
     return len(text) // 4
-
-
-def estimate_file_tokens(filepath: Path) -> int:
-    """Estimate tokens in a file."""
-    if not filepath.exists():
-        return 0
-    try:
-        content = filepath.read_text(encoding="utf-8")
-        return estimate_tokens(content)
-    except (IOError, UnicodeDecodeError):
-        # Fall back to byte count
-        try:
-            return filepath.stat().st_size // 4
-        except OSError:
-            return 0
 
 
 class FileLock:
