@@ -39,6 +39,12 @@ if echo "$input" | grep -q '\.claude/scripts'; then
     reason="memory system script"
 fi
 
+# 5. Tmp directory operations (used for transcript extraction sidecar files, etc.)
+if echo "$input" | grep -qE '(/tmp/|"/tmp)'; then
+    should_allow=true
+    reason="tmp directory operation"
+fi
+
 # Output decision
 if [ "$should_allow" = true ]; then
     echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Memory system operation auto-approved"}}'
