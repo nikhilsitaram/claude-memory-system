@@ -252,7 +252,7 @@ Create missing project files from template at `~/.claude/memory/templates/projec
     if extracted_files:
         # Pre-extracted path: files already on disk
         file_list = "\n".join(
-            f"- **{date}**: transcript=`{path}`, sidecar=`{path.rsplit('.', 1)[0]}.sessions`"
+            f"- **{date}**: `{path}`"
             for date, path in sorted(extracted_files.items())
         )
         return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
@@ -277,7 +277,6 @@ Pre-extracted transcript files:
 
 Read ALL of these in one parallel call:
 {chr(10).join(f"- `{path}` (transcript for {date})" for date, path in sorted(extracted_files.items()))}
-{chr(10).join(f"- `{path.rsplit('.', 1)[0]}.sessions` (sidecar for {date})" for date, path in sorted(extracted_files.items()))}
 - `~/.claude/memory/global-long-term-memory.md`
 - Any existing daily files: {", ".join(f"`~/.claude/memory/daily/{d}.md`" for d in pending_dates)}
 - Any relevant project long-term memory files (check transcript content for project references)
@@ -288,17 +287,11 @@ In **one reasoning step**, produce daily summaries AND any long-term routing edi
 
 {synthesis_instructions}
 
-### Step 3: Mark captured & clean up
+### Step 3: Mark captured, clean up & finalize
 
-Mark captured and remove temp files for ALL dates:
+Run ALL of this in a **single Bash call**:
 ```bash
-{chr(10).join(f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions' for date, path in sorted(extracted_files.items()))}
-```
-
-### Step 4: Finalize (after all dates)
-
-Run decay and update timestamp in a single call:
-```bash
+{chr(10).join(f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&' for date, path in sorted(extracted_files.items()))}
 python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
@@ -325,7 +318,6 @@ python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --out
 Then read the content and sidecar:
 ```
 Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
 ```
 
 ## Process
@@ -336,7 +328,6 @@ For each pending date ({dates_str}), do a **single combined pass** (extract + su
 
 Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
 - `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
-- `/tmp/memory-extract-YYYY-MM-DD-$$.sessions` (session IDs)
 - `~/.claude/memory/global-long-term-memory.md`
 - Any existing daily file: `~/.claude/memory/daily/YYYY-MM-DD.md`
 - `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
@@ -347,19 +338,11 @@ In **one reasoning step**, produce BOTH a daily summary AND any long-term routin
 
 {synthesis_instructions}
 
-### Step 3: Mark captured & clean up
+### Step 3: Mark captured, clean up & finalize
 
-Mark captured (automatically skips today's sessions — they remain re-extractable):
-```
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions
-```
-Then remove temp files.
-
-### Step 4: Finalize (after all dates)
-
-Run decay and update timestamp in a single call:
+Run ALL of this in a **single Bash call** — mark captured, remove temp files, run decay, and update timestamp:
 ```bash
-python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
