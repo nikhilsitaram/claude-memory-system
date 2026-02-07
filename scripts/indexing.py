@@ -195,10 +195,30 @@ def list_all_sessions() -> list[SessionInfo]:
     return sessions
 
 
+def has_assistant_message(filepath: Path) -> bool:
+    """Quick check: does this JSONL have at least one assistant message?"""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") == "assistant":
+                        return True
+                except json.JSONDecodeError:
+                    continue
+    except IOError:
+        pass
+    return False
+
+
 def list_pending_sessions(
     captured: set[str],
     min_file_size: int = 1000,
     exclude_session_id: str | None = None,
+    verify_content: bool = False,
 ) -> list[SessionInfo]:
     """
     Filter to unprocessed sessions.
@@ -207,11 +227,13 @@ def list_pending_sessions(
         captured: Set of already-captured session IDs
         min_file_size: Minimum file size in bytes (default 1000 ≈ 2-3 messages)
         exclude_session_id: Optional session ID to exclude (e.g., the active session)
+        verify_content: If True, parse JSONL to verify at least one assistant message exists
 
     Returns list of SessionInfo for sessions that:
     - Have not been captured
     - Meet minimum file size threshold
     - Are not the excluded session
+    - (If verify_content) contain at least one assistant message
     """
     all_sessions = list_all_sessions()
 
@@ -221,6 +243,7 @@ def list_pending_sessions(
         if s.session_id not in captured
         and s.file_size >= min_file_size
         and s.session_id != exclude_session_id
+        and (not verify_content or has_assistant_message(s.transcript_path))
     ]
 
 
@@ -414,7 +437,9 @@ def get_pending_days(exclude_session_id: str | None = None) -> list[str]:
         exclude_session_id: Optional session ID to exclude
     """
     captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, min_file_size=1000, exclude_session_id=exclude_session_id)
+    pending = list_pending_sessions(
+        captured, min_file_size=1000, exclude_session_id=exclude_session_id, verify_content=True
+    )
 
     days = set()
     for session in pending:
