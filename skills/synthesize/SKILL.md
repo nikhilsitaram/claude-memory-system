@@ -17,133 +17,24 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
    python3 $HOME/.claude/scripts/indexing.py list-pending
    ```
 
-2. If transcripts exist, launch a synthesis subagent:
+2. If no pending transcripts, inform the user and stop.
+
+3. Get the synthesis prompt and model (single source of truth):
+   ```bash
+   python3 $HOME/.claude/scripts/load_memory.py --synthesis-prompt
+   ```
+   The first line of output is `model=<model>`. The rest is the subagent prompt.
+
+4. Launch a synthesis subagent (**foreground** — manual `/synthesize` always blocks so user sees results):
    ```
    Task(
      subagent_type: "general-purpose",
-     model: "opus",
-     prompt: <include full SUBAGENT_PROMPT below with the pending dates>
+     model: <model from output>,
+     prompt: <rest of output>
    )
    ```
 
-3. Report the subagent's summary to the user.
-
----
-
-## SUBAGENT_PROMPT
-
-Copy this entire prompt when launching the subagent, replacing `{PENDING_DATES}` with the actual dates:
-
-```
-You are synthesizing memory transcripts for: {PENDING_DATES}
-
-## Tool Guidelines
-
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
-
-**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read:
-```
-python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD --exclude-session CURRENT_SESSION_ID --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
-```
-Then read the content and sidecar:
-```
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
-```
-After successful synthesis, mark captured:
-```
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions
-```
-
-**Other operations** - use `$HOME` in bash:
-- `python3 $HOME/.claude/scripts/decay.py` - Run decay after routing
-
-## Process
-
-> **Note:** The subagent owns the full lifecycle: extraction, synthesis, marking captured, and timestamp update. The calling script (`load_memory.py`) only checks whether synthesis should run and passes the active session ID to exclude.
-
-### Phase 1: Create Daily Summaries
-
-For each pending date:
-
-1. **Extract** transcripts to temp file with `--output` and `--exclude-session` flags (creates `.sessions` sidecar automatically)
-2. **Read** transcript content from temp file using Read tool (avoids 30K Bash character limit)
-3. **Create/update** daily summary file `~/.claude/memory/daily/YYYY-MM-DD.md` (format below)
-4. **Mark captured** using `mark-captured --sidecar` (automatically skips today's sessions — they remain re-extractable)
-5. **Clean up** temp files
-
-Daily summary format:
-
-```markdown
-# YYYY-MM-DD
-
-## Actions
-<!-- What was done. Tag [scope/action]. -->
-- [project-name/implement] What was accomplished
-
-## Decisions
-<!-- Important choices and rationale. Tag [scope/decision]. -->
-- [project-name/design] Choice made and why
-
-## Learnings
-<!-- Patterns, gotchas, insights. Tag [scope/type]. -->
-- [scope/gotcha] Unexpected behavior discovered
-- [scope/pattern] Proven method or approach
-
-## Lessons
-<!-- Actionable takeaways. Tag [scope/type]. -->
-- [scope/insight] Mental model or understanding
-- [scope/tip] Useful command or shortcut
-```
-
-**Compactness rules:**
-- Final solutions only - no debugging narratives
-- One learning per concept - deduplicate
-- Omit routine details
-
-**Tag format:** `[scope/type]` where scope is `global` or `{project-name}`
-
-### Phase 2: Selective Long-Term Routing
-
-**CRITICAL: Be highly selective.** Long-term memory is for enduring knowledge, not a log of everything learned.
-
-**Route TO long-term memory (rare):**
-- Fundamental patterns that will apply for months/years
-- Hard-won lessons from multi-hour debugging
-- Safety-critical information (data loss, security)
-- Non-obvious gotchas that would be costly to rediscover
-- Architecture decisions with lasting impact
-
-**Do NOT route (most things):**
-- Routine implementation details
-- Version-specific fixes
-- One-time configuration steps
-- Things easily re-discoverable via search
-- Learnings that might not hold up over time
-
-**Routing destinations:**
-- Global (`[global/*]`) → `~/.claude/memory/global-long-term-memory.md`
-- Project (`[project/*]`) → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
-
-**Format when routing:**
-- Add date prefix: `(YYYY-MM-DD) [type] Description`
-- Remove scope from tag (file is already scoped)
-- Check for duplicates before adding
-
-**Create missing project files** from template at `~/.claude/memory/templates/project-long-term-memory.md`
-
-### Phase 3: Decay & Finalize
-
-1. Run decay: `python3 $HOME/.claude/scripts/decay.py`
-2. Update timestamp: `python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"`
-
-### Output
-
-Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."
-```
+5. Report the subagent's summary to the user.
 
 ---
 

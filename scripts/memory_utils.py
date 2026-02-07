@@ -105,6 +105,8 @@ DEFAULT_SETTINGS = {
     },
     "synthesis": {
         "intervalHours": 2,
+        "model": "sonnet",
+        "background": True,
     },
     "decay": {
         "ageDays": 30,

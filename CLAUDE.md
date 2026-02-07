@@ -126,6 +126,8 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `projectShortTerm.workingDays` | 7 | Days of project history |
 | `*LongTerm.tokenLimit` | 5,000 | Fixed limit per long-term file |
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
+| `synthesis.model` | sonnet | Model for synthesis subagent |
+| `synthesis.background` | true | Run auto-synthesis in background |
 | `decay.ageDays` | 30 | Archive learnings older than this |
 
 Short-term token limits calculated as `workingDays × 750` (reduced due to scope filtering).
@@ -140,4 +142,5 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Session exclusion | `--exclude-session` flag + auto-uncapture on resume prevent active session data loss |
 | Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
 | Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
+| Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |

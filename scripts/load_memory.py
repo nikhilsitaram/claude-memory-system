@@ -199,6 +199,107 @@ def count_pending_transcripts(exclude_session_id: str | None = None) -> int:
     return len(pending)
 
 
+def _build_synthesis_prompt(exclude_flag: str) -> str:
+    """
+    Build the embedded synthesis prompt for the subagent.
+
+    This eliminates one round-trip (reading SKILL.md) by embedding
+    the full instructions directly.
+
+    Args:
+        exclude_flag: The --exclude-session flag string (or empty)
+    """
+    return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
+
+You own the full lifecycle: extraction, synthesis, marking captured, and timestamp update.
+
+## Tool Guidelines
+
+**File operations** - use tilde paths (`~/.claude/...`):
+- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
+- `Read(~/.claude/memory/global-long-term-memory.md)`
+- `Edit(~/.claude/memory/...)` for updates
+
+**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read (Bash output truncates at 30K chars; temp file avoids this):
+```
+python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
+```
+Then read the content and sidecar:
+```
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
+Read(/tmp/memory-extract-YYYY-MM-DD-$$.sessions)       # session IDs (one per line)
+```
+
+## Process
+
+First, run `python3 $HOME/.claude/scripts/indexing.py list-pending` to get the pending dates.
+
+For each pending date, do a **single combined pass** (extract + summarize + route + mark):
+
+### Step 1: Extract & Read
+
+Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
+- `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
+- `/tmp/memory-extract-YYYY-MM-DD-$$.sessions` (session IDs)
+- `~/.claude/memory/global-long-term-memory.md`
+- `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
+
+### Step 2: Summarize + Route + Write
+
+In **one reasoning step**, produce BOTH a daily summary AND any long-term routing edits. Then write/edit all files.
+
+**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
+
+```markdown
+# YYYY-MM-DD
+
+## Actions
+<!-- What was done. Tag [scope/action]. -->
+- [scope/implement] What was accomplished
+
+## Decisions
+<!-- Important choices and rationale. Tag [scope/decision]. -->
+- [scope/design] Choice made and why
+
+## Learnings
+<!-- Patterns, gotchas, insights. Tag [scope/type]. -->
+- [scope/gotcha] Unexpected behavior discovered
+- [scope/pattern] Proven method or approach
+
+## Lessons
+<!-- Actionable takeaways. Tag [scope/type]. -->
+- [scope/insight] Mental model or understanding
+- [scope/tip] Useful command or shortcut
+```
+
+**Tag format:** `[scope/type]` where scope is `global` or `{{project-name}}`
+**Compactness:** Final solutions only, one learning per concept, omit routine details.
+
+**Long-term routing (be HIGHLY selective):**
+Route TO long-term memory ONLY: fundamental patterns, hard-won lessons, safety-critical info, non-obvious gotchas, architecture decisions with lasting impact.
+Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
+Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[project/*]` → `~/.claude/memory/project-memory/{{project}}-long-term-memory.md`
+Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
+Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
+
+### Step 3: Mark captured & clean up
+
+Mark captured (automatically skips today's sessions — they remain re-extractable):
+```
+python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions
+```
+Then remove temp files.
+
+### Step 4: Finalize (after all dates)
+
+Run decay and update timestamp in a single call:
+```bash
+python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+```
+
+Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+
+
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
@@ -243,23 +344,28 @@ def main() -> None:
     # Exclude current session — it's still active and shouldn't be synthesized
     pending_count = count_pending_transcripts(exclude_session_id=current_session_id)
     if pending_count > 0 and should_synthesize(settings):
+        synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
+        synthesis_background = settings.get("synthesis", {}).get("background", True)
+
         # Build exclude flag for subagent
         exclude_flag = ""
         if current_session_id:
             exclude_flag = f" --exclude-session {current_session_id}"
 
+        # Build the embedded synthesis prompt
+        synth_prompt = _build_synthesis_prompt(exclude_flag)
+
         print("## AUTO-SYNTHESIZE REQUIRED")
         print(f"There are {pending_count} unprocessed session transcripts.")
         print()
-        print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts:")
+        if synthesis_background:
+            print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
+        else:
+            print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
         print("```")
-        print('Use the Task tool with subagent_type="general-purpose", model="opus" and this prompt:')
-        print('"Process pending memory transcripts using the /synthesize skill instructions.')
-        print("Read ~/.claude/skills/synthesize/SKILL.md for the full process.")
-        print("Extract transcripts, create daily summaries, update long-term memory files.")
-        if current_session_id:
-            print(f"IMPORTANT: Exclude the active session from extraction using: --exclude-session {current_session_id}")
-        print('Return a brief summary of what was processed."')
+        print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
+              f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
+        print(synth_prompt)
         print("```")
         print()
 
@@ -324,4 +430,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # --synthesis-prompt: output just the subagent prompt (for /synthesize skill)
+    if len(sys.argv) > 1 and sys.argv[1] == "--synthesis-prompt":
+        exclude_flag = ""
+        if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
+            exclude_flag = f" --exclude-session {sys.argv[3]}"
+        settings = load_settings()
+        model = settings.get("synthesis", {}).get("model", "sonnet")
+        print(f"model={model}")
+        print(_build_synthesis_prompt(exclude_flag))
+    else:
+        main()

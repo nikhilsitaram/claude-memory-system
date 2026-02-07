@@ -40,6 +40,8 @@ When the user invokes this skill:
 | Project short-term token limit | 5,250 | Calculated: workingDays × 750 |
 | Include subdirectories | false | Match subdirs to parent project |
 | Synthesis interval (hours) | 2 | Hours between auto-synthesis prompts |
+| Synthesis model | sonnet | Model for synthesis subagent (sonnet/opus/haiku) |
+| Synthesis background | true | Run auto-synthesis in background (true/false) |
 | Decay age (days) | 30 | Archive learnings older than this |
 | Archive retention (days) | 365 | Purge archived items older than this |
 
@@ -93,6 +95,8 @@ Valid paths:
 - `projectLongTerm.tokenLimit` (integer, 1000-50000)
 - `projectSettings.includeSubdirectories` (boolean)
 - `synthesis.intervalHours` (integer, 1-24)
+- `synthesis.model` (string: "sonnet", "opus", or "haiku")
+- `synthesis.background` (boolean)
 - `decay.ageDays` (integer, 7-365)
 - `decay.archiveRetentionDays` (integer, 30-730)
 
@@ -117,6 +121,8 @@ Default values:
 - `projectShortTerm.workingDays`: 7
 - `projectSettings.includeSubdirectories`: false
 - `synthesis.intervalHours`: 2
+- `synthesis.model`: "sonnet"
+- `synthesis.background`: true
 - `decay.ageDays`: 30
 - `decay.archiveRetentionDays`: 365
 
@@ -156,12 +162,13 @@ When `projectSettings.includeSubdirectories` is `true`:
 
 **Warning**: May load excessive context for repos with many active subdirectories. Use with caution on large monorepos.
 
-## Synthesis Scheduling
+## Synthesis Settings
 
-The `synthesis.intervalHours` setting controls how often auto-synthesis prompts appear:
-- **First session of day (UTC)**: Always prompts for synthesis if transcripts pending
-- **Subsequent sessions**: Only prompts if more than N hours since last synthesis
-- **Default**: 2 hours
+The `synthesis.*` settings control auto-synthesis behavior:
+
+- **`synthesis.intervalHours`** (default: 2): Hours between auto-synthesis prompts. First session of day (UTC) always prompts if transcripts pending.
+- **`synthesis.model`** (default: "sonnet"): Model used for synthesis subagent. Sonnet is recommended (fast, cheap, sufficient for structured extraction). Use "opus" for highest quality.
+- **`synthesis.background`** (default: true): When true, auto-synthesis runs in background — user gets their response immediately, synthesis results appear next session. Manual `/synthesize` always runs in foreground.
 
 This prevents redundant synthesis prompts when starting multiple short sessions.
 
