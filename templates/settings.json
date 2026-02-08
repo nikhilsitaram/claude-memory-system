@@ -1,5 +1,6 @@
 {
   "version": 3,
+  "_templateVersion": "2026-02-07",
   "globalShortTerm": {
     "workingDays": 2,
     "_comment": "Global short-term filtered to [global/*] tags - tokenLimit: workingDays × 750"
