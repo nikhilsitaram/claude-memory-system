@@ -4,8 +4,9 @@ Indexing utilities for Claude Code Memory System.
 
 Provides:
 1. Session discovery (scanning ~/.claude/projects/ for transcripts)
-2. Transcript extraction (JSONL parsing for synthesis)
-3. Project index building (maps projects to their work days)
+2. Project index building (maps projects to their work days)
+
+Transcript extraction is in transcript_ops.py (split for smaller reads).
 
 Usage:
     # Extract transcripts for a specific day (pure read, no marking)
@@ -32,7 +33,6 @@ Requirements: Python 3.9+
 import argparse
 import json
 import sys
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +53,9 @@ from memory_utils import (
     add_captured_session,
     remove_captured_session,
 )
+
+# Sessions smaller than this are likely empty/metadata-only (2-3 messages ≈ 1000 bytes)
+MIN_SESSION_SIZE_BYTES = 1000
 
 
 # =============================================================================
@@ -216,7 +219,7 @@ def has_assistant_message(filepath: Path) -> bool:
 
 def list_pending_sessions(
     captured: set[str],
-    min_file_size: int = 1000,
+    min_file_size: int = MIN_SESSION_SIZE_BYTES,
     exclude_session_id: str | None = None,
     verify_content: bool = False,
 ) -> list[SessionInfo]:
@@ -225,7 +228,7 @@ def list_pending_sessions(
 
     Args:
         captured: Set of already-captured session IDs
-        min_file_size: Minimum file size in bytes (default 1000 ≈ 2-3 messages)
+        min_file_size: Minimum file size in bytes (default MIN_SESSION_SIZE_BYTES)
         exclude_session_id: Optional session ID to exclude (e.g., the active session)
         verify_content: If True, parse JSONL to verify at least one assistant message exists
 
@@ -256,196 +259,6 @@ def get_session_date(session: SessionInfo) -> str:
     if session.created:
         return session.created.strftime("%Y-%m-%d")
     return session.file_mtime.strftime("%Y-%m-%d")
-
-
-# =============================================================================
-# Transcript Extraction
-# =============================================================================
-
-
-def extract_text_content(content) -> str:
-    """Extract text from message content (handles string or list format)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        text_parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_parts.append(item.get("text", ""))
-        return "\n".join(text_parts)
-    return ""
-
-
-def should_skip_message(content: str) -> bool:
-    """
-    Filter out low-value messages from synthesis input.
-
-    Filters:
-    - Skill instruction injections (50%+ of typical extraction)
-    - System reminders (injected throughout sessions)
-    - User interruptions
-    """
-    # Skip skill instruction injections (major source of bloat)
-    if content.startswith("Base directory for this skill:"):
-        return True
-    if "<command-name>" in content[:200]:
-        return True
-
-    # Skip system reminders (auto-injected, not user content)
-    if "<system-reminder>" in content:
-        return True
-
-    # Skip interruptions (no useful content)
-    if content.strip() == "[Request interrupted by user]":
-        return True
-
-    return False
-
-
-def parse_jsonl_file(filepath: Path) -> list[dict]:
-    """Parse a JSONL transcript file and extract messages."""
-    messages = []
-
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-
-                    # Handle message objects - top level type is "user" or "assistant"
-                    obj_type = obj.get("type")
-                    if obj_type in ("user", "assistant"):
-                        msg = obj.get("message", {})
-                        role = msg.get("role", obj_type)
-                        content = extract_text_content(msg.get("content", ""))
-
-                        if content:
-                            # Skip all user messages - Claude echoes important context
-                            if role == "user":
-                                continue
-                            # Skip low-value messages (skill injections, system reminders)
-                            if should_skip_message(content):
-                                continue
-                            messages.append({"role": role, "content": content})
-
-                except json.JSONDecodeError as e:
-                    print(
-                        f"Warning: JSON parse error in {filepath} line {line_num}: {e}",
-                        file=sys.stderr,
-                    )
-                    continue
-    except IOError as e:
-        print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
-
-    return messages
-
-
-def extract_transcripts(
-    specific_day: str | None = None,
-    exclude_session_id: str | None = None,
-) -> dict[str, list[dict]]:
-    """
-    Extract pending transcripts directly from Claude Code's projects directory.
-
-    Reads from ~/.claude/projects/ (source of truth) instead of copied files.
-    Uses sessions-index.json for metadata enrichment when available.
-
-    Args:
-        specific_day: Optional specific day to extract (YYYY-MM-DD format)
-        exclude_session_id: Optional session ID to exclude (e.g., the active session)
-
-    Returns:
-        Dict mapping date strings to lists of session dicts:
-        {
-            "2026-02-02": [
-                {
-                    "session_id": "abc123",
-                    "filepath": "/path/to/file.jsonl",
-                    "project_path": "/home/user/project" or None,
-                    "message_count": 42,
-                    "messages": [{"role": "user", "content": "..."}, ...]
-                },
-                ...
-            ],
-            ...
-        }
-    """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, min_file_size=1000, exclude_session_id=exclude_session_id)
-
-    # Filter by specific day if requested
-    if specific_day:
-        pending = [s for s in pending if get_session_date(s) == specific_day]
-
-    if not pending:
-        return {}
-
-    daily_data: dict[str, list[dict]] = defaultdict(list)
-
-    for session in pending:
-        day = get_session_date(session)
-        messages = parse_jsonl_file(session.transcript_path)
-
-        if messages:
-            daily_data[day].append(
-                {
-                    "session_id": session.session_id,
-                    "filepath": str(session.transcript_path),
-                    "project_path": session.project_path,  # May be None
-                    "message_count": len(messages),
-                    "messages": messages,
-                }
-            )
-
-    return dict(daily_data)
-
-
-def format_transcripts_for_output(daily_data: dict[str, list[dict]]) -> str:
-    """Format extracted transcripts for human-readable output."""
-    output = []
-
-    for day in sorted(daily_data.keys()):
-        sessions = daily_data[day]
-        total_messages = sum(s["message_count"] for s in sessions)
-        output.append(f"\n{'='*70}")
-        output.append(f"DAY: {day} ({len(sessions)} sessions, {total_messages} messages)")
-        output.append(f"{'='*70}")
-
-        for session in sessions:
-            output.append(f"\n{'─'*70}")
-            output.append(f"Session: {session['session_id']}")
-            output.append(f"{'─'*70}")
-
-            for msg in session["messages"]:
-                role_label = "USER" if msg["role"] == "user" else "CLAUDE"
-                output.append(f"\n[{role_label}]")
-                output.append(msg["content"])
-
-    return "\n".join(output)
-
-
-def get_pending_days(exclude_session_id: str | None = None) -> list[str]:
-    """
-    List all days that have pending transcripts.
-
-    Uses lightweight session listing instead of full JSONL parsing.
-
-    Args:
-        exclude_session_id: Optional session ID to exclude
-    """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(
-        captured, min_file_size=1000, exclude_session_id=exclude_session_id, verify_content=True
-    )
-
-    days = set()
-    for session in pending:
-        days.add(get_session_date(session))
-
-    return sorted(days)
 
 
 # =============================================================================
@@ -601,6 +414,7 @@ def print_index_summary(index: dict) -> None:
 
 def cmd_extract(args: argparse.Namespace) -> int:
     """Handle extract command. Pure read operation — never marks sessions."""
+    from transcript_ops import extract_transcripts, format_transcripts_for_output
     exclude_id = getattr(args, "exclude_session", None)
     daily_data = extract_transcripts(args.day, exclude_session_id=exclude_id)
 
@@ -642,6 +456,7 @@ def cmd_build_index(args: argparse.Namespace) -> int:
 
 def cmd_list_pending(args: argparse.Namespace) -> int:
     """Handle list-pending command."""
+    from transcript_ops import get_pending_days
     days = get_pending_days()
     if days:
         print("Pending transcript days:")
