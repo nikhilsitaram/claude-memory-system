@@ -145,17 +145,20 @@ def purge_memory_data() -> None:
         claude_dir / "skills" / "projects",
         # Hook scripts
         claude_dir / "hooks" / "pretooluse-allow-memory.sh",
-        # Scripts
+        # Scripts (current)
         claude_dir / "scripts" / "memory_utils.py",
         claude_dir / "scripts" / "load_memory.py",
         claude_dir / "scripts" / "indexing.py",
+        claude_dir / "scripts" / "transcript_ops.py",
         claude_dir / "scripts" / "decay.py",
         claude_dir / "scripts" / "token_usage.py",
         claude_dir / "scripts" / "project_manager.py",
-        # Legacy scripts (from older versions)
-        claude_dir / "scripts" / "save_session.py",
-        claude_dir / "scripts" / "transcript_source.py",
-        claude_dir / "scripts" / "load-project-memory.py",
+        # Legacy scripts — removed in past versions but may still exist on disk
+        # for users who installed before the removal. Keep in purge list to ensure
+        # clean uninstall regardless of which version was originally installed.
+        claude_dir / "scripts" / "save_session.py",          # Removed: SessionEnd hook replaced by direct transcript reading (v2)
+        claude_dir / "scripts" / "transcript_source.py",     # Removed: consolidated into indexing.py (2026-02-05)
+        claude_dir / "scripts" / "load-project-memory.py",   # Removed: merged into load_memory.py (2026-02-07)
     ]
 
     removed = []
@@ -196,7 +199,7 @@ def print_cleanup_instructions() -> None:
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
-    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,decay,token_usage,project_manager}.py")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager}.py")
 
 
 def main() -> int:
