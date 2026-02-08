@@ -12,9 +12,11 @@ claude-memory-system/
 ├── scripts/
 │   ├── memory_utils.py         # Shared utilities: paths, settings, filtering, locking
 │   ├── load_memory.py          # SessionStart hook - loads memory
-│   ├── indexing.py             # Session discovery, transcript extraction, project index
+│   ├── indexing.py             # Session discovery, project index, CLI
+│   ├── transcript_ops.py      # Transcript parsing and extraction (split from indexing)
 │   ├── decay.py                # Age-based decay for long-term memory
-│   └── project_manager.py      # Project lifecycle management library
+│   ├── project_manager.py      # Project lifecycle management library
+│   └── devtools.py             # Repo-local dev diagnostics (not installed)
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
