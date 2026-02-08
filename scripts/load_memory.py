@@ -43,7 +43,7 @@ from memory_utils import (
     remove_captured_session,
 )
 
-from indexing import get_pending_days, extract_transcripts, format_transcripts_for_output
+from transcript_ops import get_pending_days, extract_transcripts, format_transcripts_for_output
 
 
 def get_last_synthesis_file() -> Path:
