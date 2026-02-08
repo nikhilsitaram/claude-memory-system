@@ -57,6 +57,20 @@ from memory_utils import (
 # Sessions smaller than this are likely empty/metadata-only (2-3 messages ≈ 1000 bytes)
 MIN_SESSION_SIZE_BYTES = 1000
 
+# =============================================================================
+# Key Interfaces
+# =============================================================================
+# Session discovery:
+#   SessionInfo                            dataclass: session_id, transcript_path, ...
+#   list_all_sessions() -> list[SessionInfo]
+#   list_pending_sessions(captured, ...) -> list[SessionInfo]
+#   has_assistant_message(filepath) -> bool
+#   get_session_date(session) -> str
+# Project index:
+#   build_projects_index() -> dict
+# CLI: python indexing.py {extract,mark-captured,uncapture,uncapture-date,build-index,list-pending}
+# =============================================================================
+
 
 # =============================================================================
 # Session Discovery

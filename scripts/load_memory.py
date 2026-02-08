@@ -45,6 +45,20 @@ from memory_utils import (
 
 from transcript_ops import get_pending_days, extract_transcripts, format_transcripts_for_output
 
+# =============================================================================
+# Key Interfaces
+# =============================================================================
+# Entry points:
+#   main()                                  SessionStart hook (stdout -> context)
+# Memory loading:
+#   load_global_memory() -> (str, int)
+#   load_project_memory(name) -> (str, int)
+#   load_daily_summaries(days, scope) -> (list[(date, content)], int)
+#   load_project_history(project, days) -> (list[(date, content)], int)
+# Scheduling:
+#   should_synthesize(settings) -> bool
+# =============================================================================
+
 
 def get_last_synthesis_file() -> Path:
     """Get the path to the .last-synthesis timestamp file."""

@@ -19,6 +19,32 @@ from typing import Any, Optional
 # Minimum Python version required
 MIN_PYTHON = (3, 9)
 
+# Lock configuration
+LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered stale
+
+# =============================================================================
+# Key Interfaces
+# =============================================================================
+# Path helpers:
+#   get_memory_dir() -> Path              get_daily_dir() -> Path
+#   get_project_memory_dir() -> Path      get_projects_dir() -> Path
+#   get_global_memory_file() -> Path      get_captured_file() -> Path
+#   get_settings_file() -> Path           get_projects_index_file() -> Path
+# Settings:
+#   load_settings() -> dict               save_settings(settings) -> None
+# Session tracking:
+#   get_captured_sessions() -> set[str]
+#   add_captured_session(session_id, captured_set?) -> None
+#   remove_captured_session(session_id) -> bool
+# Content:
+#   filter_daily_content(content, scope) -> str
+#   find_current_project(index, pwd, include_subdirs?) -> dict | None
+#   get_working_days(days_limit) -> list[str]
+# Utilities:
+#   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
+#   load_json_file(path, default?) -> Any  save_json_file(path, data) -> bool
+# =============================================================================
+
 
 def check_python_version() -> None:
     """Check that Python version meets minimum requirements."""
@@ -222,27 +248,61 @@ class FileLock:
         self.poll_interval = poll_interval
         self._acquired = False
 
+    def _is_owner_alive(self) -> bool:
+        """Check if the PID that owns the lock is still running."""
+        pid_file = self.lock_path / "pid"
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)  # Signal 0 = check existence, don't kill
+            return True
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+            return False
+
+    def _write_pid(self) -> None:
+        """Write current PID into the lock directory."""
+        pid_file = self.lock_path / "pid"
+        try:
+            pid_file.write_text(str(os.getpid()))
+        except OSError:
+            pass
+
+    def _remove_lock_dir(self) -> None:
+        """Remove lock directory and its contents."""
+        try:
+            pid_file = self.lock_path / "pid"
+            if pid_file.exists():
+                pid_file.unlink()
+            self.lock_path.rmdir()
+        except OSError:
+            pass
+
     def acquire(self) -> bool:
         """
         Attempt to acquire the lock.
 
         Returns True if acquired, False if timeout.
+        Checks PID liveness first, then falls back to time-based stale detection.
         """
         start_time = time.time()
 
         while time.time() - start_time < self.timeout:
             try:
                 self.lock_path.mkdir(parents=True, exist_ok=False)
+                self._write_pid()
                 self._acquired = True
                 return True
             except FileExistsError:
-                # Lock is held by another process
-                # Check if it's stale (older than 5 minutes)
+                # Lock is held — check if owner is still alive
+                if not self._is_owner_alive():
+                    # Owner process is dead — stale lock
+                    self._remove_lock_dir()
+                    continue
+
+                # Owner is alive (or PID check inconclusive) — fall back to age check
                 try:
                     lock_age = time.time() - self.lock_path.stat().st_mtime
-                    if lock_age > 300:  # 5 minutes
-                        # Stale lock, remove it
-                        self.lock_path.rmdir()
+                    if lock_age > LOCK_STALE_SECONDS:
+                        self._remove_lock_dir()
                         continue
                 except OSError:
                     pass
@@ -254,10 +314,7 @@ class FileLock:
     def release(self) -> None:
         """Release the lock."""
         if self._acquired:
-            try:
-                self.lock_path.rmdir()
-            except OSError:
-                pass
+            self._remove_lock_dir()
             self._acquired = False
 
     def __enter__(self) -> "FileLock":
