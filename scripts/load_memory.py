@@ -227,9 +227,9 @@ def _build_synthesis_prompt(
     # Common synthesis instructions (shared by both paths)
     synthesis_instructions = '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
-ALWAYS Read the daily file BEFORE writing to it — it may already exist from an earlier synthesis run today. If it exists, merge new content into it rather than overwriting.
-
-Write the COMPLETE daily summary in a **single Write call**, not multiple Edits.
+ALWAYS use a single **Write** call per daily file — even if the file already exists.
+If an earlier version exists (from Step 1 Read), merge its content into your output, then Write the complete file.
+Never use multiple Edit calls on daily files.
 
 ```markdown
 # YYYY-MM-DD
@@ -261,13 +261,26 @@ Route TO long-term memory ONLY: fundamental patterns, hard-won lessons, safety-c
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
 Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[project/*]` → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
-Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.'''
+Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
+
+**CRITICAL batching requirement**: Collect ALL items to route across all dates, then make ONE Edit call per target file with ALL new entries at once.
+Do NOT make separate Edit calls per learning — batch them into a single Edit per file.
+Example: old_string ends with section header + comment, new_string = same header + comment + all new entries appended.'''
 
     if extracted_files:
         # Pre-extracted path: files already on disk
+        # Count lines per file for Read limit hints
+        file_metadata: list[tuple[str, str, int]] = []
+        for date, path in sorted(extracted_files.items()):
+            try:
+                line_count = Path(path).read_text(encoding="utf-8").count("\n") + 1
+            except IOError:
+                line_count = 2000
+            file_metadata.append((date, path, line_count))
+
         file_list = "\n".join(
-            f"- **{date}**: `{path}`"
-            for date, path in sorted(extracted_files.items())
+            f"- **{date}**: `{path}` ({lines} lines)"
+            for date, path, lines in file_metadata
         )
         return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
 
@@ -287,17 +300,27 @@ Pre-extracted transcript files:
 
 ## Process
 
-### Step 1: Read all inputs (single parallel tool call)
+### Step 1: Read all inputs
 
-Read ALL of these in one parallel call:
-{chr(10).join(f"- `{path}` (transcript for {date})" for date, path in sorted(extracted_files.items()))}
-- `~/.claude/memory/global-long-term-memory.md`
-- Any existing daily files: {", ".join(f"`~/.claude/memory/daily/{d}.md`" for d in pending_dates)}
-- Any relevant project long-term memory files (check transcript content for project references)
+Make exactly ONE parallel tool call with ALL of these Read calls simultaneously:
+{chr(10).join(f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}" for date, path, lines in file_metadata)}
+- Read(`~/.claude/memory/global-long-term-memory.md`)
+{chr(10).join(f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected" for d in pending_dates)}
+
+If you already know which projects are referenced, include their LTM files in this SAME parallel call:
+- Read(`~/.claude/memory/project-memory/{{project}}-long-term-memory.md`)
+
+**Do NOT read files one at a time. All reads MUST be in a single parallel call.**
 
 ### Step 2: Synthesize + Route + Write
 
-In **one reasoning step**, produce daily summaries AND any long-term routing edits for ALL dates. Then write/edit all files.
+In **one reasoning step**, produce daily summaries AND long-term routing edits for ALL {len(pending_dates)} dates.
+Then make ALL file Write/Edit calls in a single parallel tool call:
+- Write each daily summary file (one per date)
+- Edit global LTM ONCE with ALL global-scope learnings from ALL dates batched together
+- Edit project LTM ONCE per project with ALL project-scope learnings batched together
+
+CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first, batch into one Edit per file.
 
 {synthesis_instructions}
 
@@ -348,7 +371,9 @@ Run Bash to extract transcripts to temp file. Then in a **single parallel tool c
 
 ### Step 2: Summarize + Route + Write
 
-In **one reasoning step**, produce BOTH a daily summary AND any long-term routing edits. Then write/edit all files.
+In **one reasoning step**, produce BOTH the daily summary AND any long-term routing edits.
+Then make ALL Write/Edit calls in a single parallel tool call.
+CRITICAL: Do NOT make separate Edit calls per learning — batch all items into one Edit per target file.
 
 {synthesis_instructions}
 
@@ -414,8 +439,37 @@ def main() -> None:
         if current_session_id:
             exclude_flag = f" --exclude-session {current_session_id}"
 
-        # Build the embedded synthesis prompt (dates-only, no pre-extraction for auto path)
-        synth_prompt = _build_synthesis_prompt(exclude_flag, pending_dates)
+        # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
+        pid = os.getpid()
+        extracted_files: dict[str, str] = {}
+        for date in pending_dates:
+            try:
+                daily_data = extract_transcripts(date, exclude_session_id=current_session_id)
+                if daily_data:
+                    output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
+                    Path(output_path).write_text(
+                        format_transcripts_for_output(daily_data, total_line_budget=1950), encoding="utf-8"
+                    )
+                    sidecar_path = output_path.rsplit(".", 1)[0] + ".sessions"
+                    session_ids = [
+                        s["session_id"]
+                        for sessions in daily_data.values()
+                        for s in sessions
+                    ]
+                    Path(sidecar_path).write_text(
+                        "\n".join(session_ids) + "\n", encoding="utf-8"
+                    )
+                    extracted_files[date] = output_path
+            except Exception:
+                pass  # Fall through — date will use dates-only path if all fail
+
+        if extracted_files:
+            synth_prompt = _build_synthesis_prompt(
+                exclude_flag, list(extracted_files.keys()), extracted_files
+            )
+        else:
+            # Fallback: subagent extracts (slower but handles edge cases)
+            synth_prompt = _build_synthesis_prompt(exclude_flag, pending_dates)
 
         print("## AUTO-SYNTHESIZE REQUIRED")
         print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
@@ -517,7 +571,7 @@ if __name__ == "__main__":
             if daily_data:
                 output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
                 Path(output_path).write_text(
-                    format_transcripts_for_output(daily_data), encoding="utf-8"
+                    format_transcripts_for_output(daily_data, total_line_budget=1950), encoding="utf-8"
                 )
                 # Write sidecar with session IDs
                 sidecar_path = Path(output_path).with_suffix(".sessions")

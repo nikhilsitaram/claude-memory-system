@@ -150,8 +150,25 @@ def extract_transcripts(
     return dict(daily_data)
 
 
-def format_transcripts_for_output(daily_data: dict[str, list[dict]]) -> str:
-    """Format extracted transcripts for human-readable output."""
+def format_transcripts_for_output(
+    daily_data: dict[str, list[dict]],
+    total_line_budget: int | None = None,
+) -> str:
+    """Format extracted transcripts for human-readable output.
+
+    Args:
+        daily_data: Dict mapping date strings to lists of session dicts.
+        total_line_budget: If set, cap total output lines by dividing budget
+            evenly across sessions. Sessions under the cap pass through
+            untouched; over-cap sessions keep first 1/3 + last 2/3.
+    """
+    # Count total sessions for budget calculation
+    all_sessions = [s for sessions in daily_data.values() for s in sessions]
+    max_lines_per_session = None
+    if total_line_budget and all_sessions:
+        max_lines_per_session = total_line_budget // len(all_sessions)
+        max_lines_per_session = max(max_lines_per_session, 15)  # floor
+
     output = []
 
     for day in sorted(daily_data.keys()):
@@ -166,10 +183,24 @@ def format_transcripts_for_output(daily_data: dict[str, list[dict]]) -> str:
             output.append(f"Session: {session['session_id']}")
             output.append(f"{'─'*70}")
 
+            session_parts: list[str] = []
             for msg in session["messages"]:
                 role_label = "USER" if msg["role"] == "user" else "CLAUDE"
-                output.append(f"\n[{role_label}]")
-                output.append(msg["content"])
+                session_parts.append(f"\n[{role_label}]")
+                session_parts.append(msg["content"])
+
+            session_text = "\n".join(session_parts)
+            actual_lines = session_text.split("\n")
+
+            if max_lines_per_session and len(actual_lines) > max_lines_per_session:
+                head = max_lines_per_session // 3
+                tail = max_lines_per_session - head
+                truncated = len(actual_lines) - head - tail
+                output.append("\n".join(actual_lines[:head]))
+                output.append(f"\n... [{truncated} lines truncated] ...")
+                output.append("\n".join(actual_lines[-tail:]))
+            else:
+                output.extend(session_parts)
 
     return "\n".join(output)
 
