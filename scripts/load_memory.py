@@ -227,6 +227,15 @@ def _build_synthesis_prompt(
     """
     dates_str = ", ".join(pending_dates)
 
+    # Load valid project names from index for scope tagging
+    projects_index = load_json_file(get_projects_index_file(), {})
+    project_names = sorted({
+        data.get("name", "")
+        for data in projects_index.get("projects", {}).values()
+        if data.get("name")
+    })
+    project_names_str = ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
+
     # Common synthesis instructions (shared by both paths)
     synthesis_instructions = '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
@@ -256,13 +265,15 @@ Never use multiple Edit calls on daily files.
 - [scope/tip] Useful command or shortcut
 ```
 
-**Tag format:** `[scope/type]` where scope is `global` or `{project-name}`
+**Tag format:** `[scope/type]` where scope is `global` or one of these registered project names: ''' + project_names_str + '''
+**IMPORTANT:** Only use the project names listed above. Do NOT invent new project names from context.
 **Compactness:** Final solutions only, one learning per concept, omit routine details.
 
 **Long-term routing (be HIGHLY selective):**
 Route TO long-term memory ONLY: fundamental patterns, hard-won lessons, safety-critical info, non-obvious gotchas, architecture decisions with lasting impact.
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
-Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[project/*]` → `~/.claude/memory/project-memory/{project}-long-term-memory.md`
+Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[{project-name}/*]` → `~/.claude/memory/project-memory/{project-name}-long-term-memory.md`
+Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
 Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
 

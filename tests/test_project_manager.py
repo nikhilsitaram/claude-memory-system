@@ -27,6 +27,7 @@ from project_manager import (
     validate_merge_orphan,
     merge_sessions_index,
     rewrite_paths_in_file,
+    update_session_index_paths,
     backup_files,
     restore_from_backup,
     list_projects,
@@ -618,6 +619,254 @@ class TestListProjects:
             assert projects[0].exists == False
             assert len(projects[0].issues) > 0
             assert "missing" in projects[0].issues[0].lower()
+
+
+# =============================================================================
+# Update Session Index Paths Tests
+# =============================================================================
+
+
+class TestUpdateSessionIndexPaths:
+    """Tests for update_session_index_paths function."""
+
+    def test_updates_matching_files(self):
+        """Should update sessions-index.json files containing old path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            # Create two project folders with sessions-index.json
+            folder1 = projects_dir / "-home-user-old-project"
+            folder1.mkdir()
+            (folder1 / "sessions-index.json").write_text(json.dumps({
+                "originalPath": "/home/user/old-project",
+                "entries": []
+            }))
+
+            folder2 = projects_dir / "-home-user-old-project-sub"
+            folder2.mkdir()
+            (folder2 / "sessions-index.json").write_text(json.dumps({
+                "originalPath": "/home/user/old-project/sub",
+                "entries": []
+            }))
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir:
+                mock_dir.return_value = projects_dir
+
+                count = update_session_index_paths(
+                    "/home/user/old-project", "/home/user/new-project"
+                )
+
+            assert count == 2
+
+            data1 = json.loads((folder1 / "sessions-index.json").read_text())
+            assert data1["originalPath"] == "/home/user/new-project"
+
+            data2 = json.loads((folder2 / "sessions-index.json").read_text())
+            assert data2["originalPath"] == "/home/user/new-project/sub"
+
+    def test_skips_non_matching_files(self):
+        """Should not modify files that don't contain old path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            folder = projects_dir / "-home-user-other"
+            folder.mkdir()
+            original = json.dumps({
+                "originalPath": "/home/user/other",
+                "entries": []
+            })
+            (folder / "sessions-index.json").write_text(original)
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir:
+                mock_dir.return_value = projects_dir
+
+                count = update_session_index_paths(
+                    "/home/user/old-project", "/home/user/new-project"
+                )
+
+            assert count == 0
+            assert (folder / "sessions-index.json").read_text() == original
+
+    def test_skips_folders_without_sessions_index(self):
+        """Should skip folders that don't have sessions-index.json."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            folder = projects_dir / "-home-user-old-project"
+            folder.mkdir()
+            # No sessions-index.json created
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir:
+                mock_dir.return_value = projects_dir
+
+                count = update_session_index_paths(
+                    "/home/user/old-project", "/home/user/new-project"
+                )
+
+            assert count == 0
+
+    def test_returns_zero_for_missing_projects_dir(self):
+        """Should return 0 if projects directory doesn't exist."""
+        with mock.patch("project_manager.get_projects_dir") as mock_dir:
+            mock_dir.return_value = Path("/nonexistent/projects")
+
+            count = update_session_index_paths("/old", "/new")
+
+        assert count == 0
+
+
+# =============================================================================
+# Find Orphaned Folders Tests
+# =============================================================================
+
+
+class TestFindOrphanedFolders:
+    """Tests for find_orphaned_folders function."""
+
+    def test_tracked_folder_not_orphan(self):
+        """Folder in encodedPaths should not be flagged as orphan,
+        even if sessions-index.json has stale originalPath."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            # Create a folder with stale originalPath
+            folder = projects_dir / "-home-user-new-project"
+            folder.mkdir()
+            (folder / "sessions-index.json").write_text(json.dumps({
+                "originalPath": "/home/user/old-project",  # Stale!
+                "entries": []
+            }))
+
+            index = {
+                "projects": {
+                    "/home/user/new-project": {
+                        "name": "new-project",
+                        "originalPath": "/home/user/new-project",
+                        "encodedPaths": ["-home-user-new-project"],
+                        "workDays": [],
+                    }
+                }
+            }
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
+                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+                 mock.patch("project_manager.load_json_file") as mock_load, \
+                 mock.patch("project_manager.get_claude_dir") as mock_claude:
+                mock_dir.return_value = projects_dir
+                mock_idx.return_value = Path(tmpdir) / "index.json"
+                mock_load.return_value = index
+                mock_claude.return_value = Path(tmpdir)
+
+                orphans = find_orphaned_folders()
+
+            assert len(orphans) == 0
+
+    def test_untracked_folder_with_stale_path_is_orphan(self):
+        """Folder not in encodedPaths with stale originalPath should be orphan."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            folder = projects_dir / "-home-user-old-project"
+            folder.mkdir()
+            (folder / "sessions-index.json").write_text(json.dumps({
+                "originalPath": "/home/user/old-project",  # Path doesn't exist
+                "entries": []
+            }))
+
+            index = {"projects": {}}  # Not tracked
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
+                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+                 mock.patch("project_manager.load_json_file") as mock_load, \
+                 mock.patch("project_manager.get_claude_dir") as mock_claude:
+                mock_dir.return_value = projects_dir
+                mock_idx.return_value = Path(tmpdir) / "index.json"
+                mock_load.return_value = index
+                mock_claude.return_value = Path(tmpdir)
+
+                orphans = find_orphaned_folders()
+
+            assert len(orphans) == 1
+            assert orphans[0].folder_name == "-home-user-old-project"
+
+    def test_folder_with_valid_path_not_orphan(self):
+        """Folder whose originalPath exists on disk should not be orphan."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            # Create the actual project directory so path exists
+            real_project = Path(tmpdir) / "my-project"
+            real_project.mkdir()
+
+            folder = projects_dir / "-tmp-my-project"
+            folder.mkdir()
+            (folder / "sessions-index.json").write_text(json.dumps({
+                "originalPath": str(real_project),
+                "entries": []
+            }))
+
+            index = {"projects": {}}  # Not tracked, but path exists
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
+                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+                 mock.patch("project_manager.load_json_file") as mock_load, \
+                 mock.patch("project_manager.get_claude_dir") as mock_claude:
+                mock_dir.return_value = projects_dir
+                mock_idx.return_value = Path(tmpdir) / "index.json"
+                mock_load.return_value = index
+                mock_claude.return_value = Path(tmpdir)
+
+                orphans = find_orphaned_folders()
+
+            assert len(orphans) == 0
+
+    def test_old_encoded_path_also_tracked(self):
+        """Old encoded path kept in encodedPaths should not be orphan."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+
+            # Simulate: folder was renamed from old to new,
+            # but old encoded name kept in encodedPaths for transcript discovery
+            folder = projects_dir / "-home-user-old-name"
+            folder.mkdir()
+            (folder / "sessions-index.json").write_text(json.dumps({
+                "originalPath": "/home/user/old-name",  # Stale
+                "entries": []
+            }))
+
+            index = {
+                "projects": {
+                    "/home/user/new-name": {
+                        "name": "new-name",
+                        "originalPath": "/home/user/new-name",
+                        "encodedPaths": [
+                            "-home-user-new-name",
+                            "-home-user-old-name",  # Old path kept
+                        ],
+                        "workDays": [],
+                    }
+                }
+            }
+
+            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
+                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+                 mock.patch("project_manager.load_json_file") as mock_load, \
+                 mock.patch("project_manager.get_claude_dir") as mock_claude:
+                mock_dir.return_value = projects_dir
+                mock_idx.return_value = Path(tmpdir) / "index.json"
+                mock_load.return_value = index
+                mock_claude.return_value = Path(tmpdir)
+
+                orphans = find_orphaned_folders()
+
+            assert len(orphans) == 0
 
 
 if __name__ == "__main__":

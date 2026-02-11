@@ -84,7 +84,18 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 3. If it needs a hook, add in `merge_hooks()` function
 
 ### Testing
+
+**Rule: Always add or update unit tests when adding new functions or modifying existing function behavior.** Tests live in `tests/test_<module>.py` matching the script they test. Run `python3 -m pytest tests/ -q` before considering any change complete.
+
+Test conventions:
+- Class per function/feature: `class TestFunctionName`
+- Use `tempfile.TemporaryDirectory` for filesystem isolation
+- Use `unittest.mock.patch` to mock path helpers (`get_projects_dir`, etc.)
+- Test happy path, edge cases, and error conditions
+
 ```bash
+python3 -m pytest tests/ -q                  # Run all unit tests (do this first)
+python3 -m pytest tests/ -v                  # Verbose output for debugging
 python3 install.py                           # Apply changes
 python3 ~/.claude/scripts/load_memory.py     # Test memory loading
 python3 ~/.claude/scripts/indexing.py list-pending  # Test indexing

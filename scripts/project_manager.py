@@ -264,15 +264,19 @@ def find_orphaned_folders() -> list[OrphanInfo]:
         original_path = get_original_path_from_folder(folder)
 
         # Determine if this is an orphan
+        # First check: if folder is tracked in our index, it's not an orphan
+        # (handles renames where sessions-index.json still has old path)
+        if folder_name in tracked_encoded:
+            continue
+
         is_orphan = False
         if original_path:
-            # Has sessions-index.json - check if path exists
+            # Has sessions-index.json - check if path exists on disk
             if not Path(original_path).exists():
                 is_orphan = True
         else:
-            # No sessions-index.json - check if we track this folder
-            if folder_name not in tracked_encoded:
-                is_orphan = True
+            # No sessions-index.json and not tracked - orphan
+            is_orphan = True
 
         if not is_orphan:
             continue
@@ -978,6 +982,43 @@ def get_memory_files_for_merge(source_name: str, dest_name: str) -> dict:
     }
 
 
+def update_session_index_paths(old_path: str, new_path: str) -> int:
+    """
+    Update originalPath in sessions-index.json files across all affected project folders.
+
+    When a project directory is renamed (e.g., ~/claude-code -> ~/swyfft),
+    the sessions-index.json files inside ~/.claude/projects/ still reference
+    the old path. This function updates them so find_orphaned_folders() doesn't
+    flag them as orphans.
+
+    Also updates sub-project folders (e.g., ~/claude-code/projects/foo).
+
+    Returns the number of files updated.
+    """
+    projects_dir = get_projects_dir()
+    if not projects_dir.exists():
+        return 0
+
+    updated = 0
+    for folder in projects_dir.iterdir():
+        if not folder.is_dir():
+            continue
+        sessions_file = folder / "sessions-index.json"
+        if not sessions_file.exists():
+            continue
+        try:
+            content = sessions_file.read_text(encoding="utf-8")
+            if old_path in content:
+                sessions_file.write_text(
+                    content.replace(old_path, new_path), encoding="utf-8"
+                )
+                updated += 1
+        except (IOError, UnicodeDecodeError):
+            continue
+
+    return updated
+
+
 # =============================================================================
 # Execution Functions
 # =============================================================================
@@ -1078,6 +1119,9 @@ def execute_move(
             history_file = get_claude_dir() / "history.jsonl"
             if history_file.exists():
                 rewrite_paths_in_file(history_file, str(old_path), str(new_path))
+
+            # Update sessions-index.json files in all affected project folders
+            update_session_index_paths(str(old_path), str(new_path))
 
             # Move the actual project directory
             if old_path.exists() and not new_path.exists():
