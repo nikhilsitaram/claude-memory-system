@@ -45,6 +45,9 @@ from memory_utils import (
 
 from transcript_ops import get_pending_days, extract_transcripts, format_transcripts_for_output
 
+# Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
+TRANSCRIPT_LINE_BUDGET = 1950
+
 # =============================================================================
 # Key Interfaces
 # =============================================================================
@@ -282,6 +285,18 @@ Example: old_string ends with section header + comment, new_string = same header
             f"- **{date}**: `{path}` ({lines} lines)"
             for date, path, lines in file_metadata
         )
+        read_transcript_lines = "\n".join(
+            f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}"
+            for date, path, lines in file_metadata
+        )
+        read_daily_lines = "\n".join(
+            f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected"
+            for d in pending_dates
+        )
+        mark_captured_lines = "\n".join(
+            f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&'
+            for date, path in sorted(extracted_files.items())
+        )
         return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
 
 **CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
@@ -303,9 +318,9 @@ Pre-extracted transcript files:
 ### Step 1: Read all inputs
 
 Make exactly ONE parallel tool call with ALL of these Read calls simultaneously:
-{chr(10).join(f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}" for date, path, lines in file_metadata)}
+{read_transcript_lines}
 - Read(`~/.claude/memory/global-long-term-memory.md`)
-{chr(10).join(f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected" for d in pending_dates)}
+{read_daily_lines}
 
 If you already know which projects are referenced, include their LTM files in this SAME parallel call:
 - Read(`~/.claude/memory/project-memory/{{project}}-long-term-memory.md`)
@@ -328,7 +343,7 @@ CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first,
 
 Run ALL of this in a **single Bash call**:
 ```bash
-{chr(10).join(f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&' for date, path in sorted(extracted_files.items()))}
+{mark_captured_lines}
 python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
@@ -448,7 +463,7 @@ def main() -> None:
                 if daily_data:
                     output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
                     Path(output_path).write_text(
-                        format_transcripts_for_output(daily_data, total_line_budget=1950), encoding="utf-8"
+                        format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET), encoding="utf-8"
                     )
                     sidecar_path = output_path.rsplit(".", 1)[0] + ".sessions"
                     session_ids = [
@@ -571,7 +586,7 @@ if __name__ == "__main__":
             if daily_data:
                 output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
                 Path(output_path).write_text(
-                    format_transcripts_for_output(daily_data, total_line_budget=1950), encoding="utf-8"
+                    format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET), encoding="utf-8"
                 )
                 # Write sidecar with session IDs
                 sidecar_path = Path(output_path).with_suffix(".sessions")

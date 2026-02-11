@@ -361,8 +361,7 @@ def project_name_to_filename(project_name: str) -> str:
     # Remove any characters that aren't alphanumeric or hyphens
     kebab = "".join(c for c in kebab if c.isalnum() or c == "-")
     # Remove consecutive hyphens
-    while "--" in kebab:
-        kebab = kebab.replace("--", "-")
+    kebab = re.sub(r"-+", "-", kebab)
     # Remove leading/trailing hyphens
     kebab = kebab.strip("-")
     return f"{kebab}-long-term-memory.md"
@@ -391,18 +390,24 @@ def add_captured_session(session_id: str, captured_set: Optional[set[str]] = Non
     captured_file = get_captured_file()
     captured_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if already captured (use provided set or load from file)
-    if captured_set is not None:
-        if session_id in captured_set:
-            return
-    else:
-        captured = get_captured_sessions()
-        if session_id in captured:
-            return
+    lock = FileLock(captured_file.parent / ".captured.lock", timeout=5.0)
+    try:
+        lock.acquire()
 
-    # Append to file
-    with open(captured_file, "a", encoding="utf-8") as f:
-        f.write(f"{session_id}\n")
+        # Check if already captured (use provided set or load from file)
+        if captured_set is not None:
+            if session_id in captured_set:
+                return
+        else:
+            captured = get_captured_sessions()
+            if session_id in captured:
+                return
+
+        # Append to file
+        with open(captured_file, "a", encoding="utf-8") as f:
+            f.write(f"{session_id}\n")
+    finally:
+        lock.release()
 
 
 def remove_captured_session(session_id: str) -> bool:
@@ -416,7 +421,10 @@ def remove_captured_session(session_id: str) -> bool:
     if not captured_file.exists():
         return False
 
+    lock = FileLock(captured_file.parent / ".captured.lock", timeout=5.0)
     try:
+        lock.acquire()
+
         lines = captured_file.read_text(encoding="utf-8").splitlines()
         new_lines = [line for line in lines if line.strip() != session_id]
 
@@ -427,6 +435,8 @@ def remove_captured_session(session_id: str) -> bool:
         return True
     except IOError:
         return False
+    finally:
+        lock.release()
 
 
 def get_working_days(days_limit: int) -> list[str]:

@@ -155,6 +155,22 @@ def copy_scripts(script_dir: Path) -> None:
     print("Copied scripts to ~/.claude/scripts/")
 
 
+def remove_legacy_scripts() -> None:
+    """Remove scripts from previous versions that are no longer installed."""
+    scripts_dir = get_claude_dir() / "scripts"
+    legacy_scripts = [
+        "save_session.py",          # Removed: SessionEnd hook replaced by direct reading
+        "transcript_source.py",     # Removed: consolidated into indexing.py
+        "load-project-memory.py",   # Removed: merged into load_memory.py
+    ]
+
+    for name in legacy_scripts:
+        path = scripts_dir / name
+        if path.exists():
+            path.unlink()
+            print(f"  Removed legacy script: {name}")
+
+
 def copy_hooks(script_dir: Path) -> None:
     """Copy hook scripts to ~/.claude/hooks/."""
     dest_dir = get_claude_dir() / "hooks"
@@ -485,6 +501,9 @@ def main() -> int:
     copy_hooks(script_dir)
     copy_skills(script_dir)
     copy_templates(script_dir)
+
+    # Clean up legacy scripts from previous versions
+    remove_legacy_scripts()
 
     # Update settings.json
     settings_file = claude_dir / "settings.json"
