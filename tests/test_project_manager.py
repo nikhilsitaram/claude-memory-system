@@ -208,6 +208,106 @@ class TestValidateMergeOrphan:
 
 
 # =============================================================================
+# Plan Merge Orphan Tests
+# =============================================================================
+
+
+class TestPlanMergeOrphan:
+    """Tests for plan_merge_orphan function."""
+
+    def test_same_encoded_path_skips_folder_operations(self):
+        """When orphan name equals target encoded path, no moves/merges/renames should be planned."""
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_dir = Path(tmp) / "projects"
+            projects_dir.mkdir()
+            memory_dir = Path(tmp) / "memory"
+            memory_dir.mkdir()
+            claude_dir = Path(tmp) / "claude"
+            claude_dir.mkdir()
+
+            # Orphan folder whose name matches the target's encoded path
+            target_path = Path("/home/user/personal/investing")
+            orphan_name = encode_path(str(target_path))  # -home-user-personal-investing
+            orphan_folder = projects_dir / orphan_name
+            orphan_folder.mkdir()
+
+            # Create a session file so it's not empty
+            (orphan_folder / "abc123.jsonl").write_text('{"type":"test"}\n')
+
+            # Create projects-index.json
+            index_file = memory_dir / "projects-index.json"
+            index_file.write_text('{"projects":{}}')
+
+            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
+                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
+                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
+                plan = plan_merge_orphan(orphan_name, target_path)
+
+            assert plan.moves == [], f"Expected no moves, got {plan.moves}"
+            assert plan.merges == [], f"Expected no merges, got {plan.merges}"
+            assert plan.renames == [], f"Expected no renames, got {plan.renames}"
+
+    def test_different_encoded_path_plans_move(self):
+        """When orphan name differs from target encoded path and target doesn't exist, should plan a move."""
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_dir = Path(tmp) / "projects"
+            projects_dir.mkdir()
+            memory_dir = Path(tmp) / "memory"
+            memory_dir.mkdir()
+            claude_dir = Path(tmp) / "claude"
+            claude_dir.mkdir()
+
+            # Orphan with old name, target has different encoded path
+            orphan_name = "-home-user-old-investing"
+            target_path = Path("/home/user/personal/investing")
+            orphan_folder = projects_dir / orphan_name
+            orphan_folder.mkdir()
+
+            index_file = memory_dir / "projects-index.json"
+            index_file.write_text('{"projects":{}}')
+
+            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
+                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
+                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
+                plan = plan_merge_orphan(orphan_name, target_path)
+
+            assert len(plan.moves) == 1, f"Expected 1 move, got {plan.moves}"
+            assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
+
+    def test_different_encoded_path_plans_merge_when_target_exists(self):
+        """When both orphan and target folders exist, should plan a merge + rename."""
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_dir = Path(tmp) / "projects"
+            projects_dir.mkdir()
+            memory_dir = Path(tmp) / "memory"
+            memory_dir.mkdir()
+            claude_dir = Path(tmp) / "claude"
+            claude_dir.mkdir()
+
+            orphan_name = "-home-user-old-investing"
+            target_path = Path("/home/user/personal/investing")
+            target_encoded = encode_path(str(target_path))
+
+            # Both folders exist
+            (projects_dir / orphan_name).mkdir()
+            (projects_dir / target_encoded).mkdir()
+
+            index_file = memory_dir / "projects-index.json"
+            index_file.write_text('{"projects":{}}')
+
+            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
+                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
+                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
+                plan = plan_merge_orphan(orphan_name, target_path)
+
+            assert len(plan.merges) == 1, f"Expected 1 merge, got {plan.merges}"
+            assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
+
+
+# =============================================================================
 # Merge Sessions Index Tests
 # =============================================================================
 

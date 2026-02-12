@@ -556,6 +556,9 @@ def plan_merge_orphan(orphan_name: str, target_path: Path) -> OperationPlan:
     orphan_folder = projects_dir / orphan_name
     target_folder = projects_dir / target_encoded
 
+    # If orphan IS the target (same encoded path), skip folder operations entirely
+    same_folder = (orphan_name == target_encoded)
+
     # Plan backups
     index_file = get_projects_index_file()
     if index_file.exists():
@@ -581,8 +584,8 @@ def plan_merge_orphan(orphan_name: str, target_path: Path) -> OperationPlan:
     if target_memory_file.exists():
         backups.append(str(target_memory_file))
 
-    # Plan folder operations
-    if orphan_folder.exists():
+    # Plan folder operations (skip if orphan IS the target - same encoded path)
+    if not same_folder and orphan_folder.exists():
         if target_folder.exists():
             merges.append((str(orphan_folder), str(target_folder)))
         else:
@@ -592,18 +595,19 @@ def plan_merge_orphan(orphan_name: str, target_path: Path) -> OperationPlan:
         renames.append((str(orphan_folder), f"{orphan_folder}.merged.bak"))
 
     # Plan other Claude subdirectory merges
-    for subdir in CLAUDE_SUBDIRS:
-        if subdir == "projects":
-            continue
-        subdir_path = get_claude_dir() / subdir
-        orphan_subdir = subdir_path / orphan_name
-        target_subdir = subdir_path / target_encoded
-        if orphan_subdir.exists():
-            if target_subdir.exists():
-                merges.append((str(orphan_subdir), str(target_subdir)))
-            else:
-                moves.append((str(orphan_subdir), str(target_subdir)))
-            renames.append((str(orphan_subdir), f"{orphan_subdir}.merged.bak"))
+    if not same_folder:
+        for subdir in CLAUDE_SUBDIRS:
+            if subdir == "projects":
+                continue
+            subdir_path = get_claude_dir() / subdir
+            orphan_subdir = subdir_path / orphan_name
+            target_subdir = subdir_path / target_encoded
+            if orphan_subdir.exists():
+                if target_subdir.exists():
+                    merges.append((str(orphan_subdir), str(target_subdir)))
+                else:
+                    moves.append((str(orphan_subdir), str(target_subdir)))
+                renames.append((str(orphan_subdir), f"{orphan_subdir}.merged.bak"))
 
     # Plan index changes
     index = load_json_file(index_file, {"projects": {}})
