@@ -276,6 +276,12 @@ Do NOT route: routine implementation, version-specific fixes, one-time configs, 
 Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[{project-name}/*]` → `~/.claude/memory/project-memory/{project-name}-long-term-memory.md`
 Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
+
+**Dedup marking:** When you route an entry from the daily summary to long-term memory, prefix that entry in the daily file with `[routed]`. Example:
+Before: `- [claude-memory-system/gotcha] Missing import crashed indexing`
+After routing to LTM: `- [routed][claude-memory-system/gotcha] Missing import crashed indexing`
+This prevents the entry from loading twice (once from LTM, once from short-term). Only prefix entries you actually route — leave non-routed entries unchanged.
+
 Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
 
 **Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.

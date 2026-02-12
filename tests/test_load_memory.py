@@ -20,6 +20,7 @@ scripts_dir = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(scripts_dir))
 
 from load_memory import (
+    _build_synthesis_prompt,
     load_daily_summaries,
     load_global_memory,
     load_project_history,
@@ -336,6 +337,21 @@ class TestLoadProjectHistory:
         summaries, total_bytes = load_project_history(project, days_limit=10)
         assert summaries == []
         assert total_bytes == 0
+
+
+# =============================================================================
+# Synthesis Prompt [routed] Marker Tests
+# =============================================================================
+
+
+class TestSynthesisPromptRoutedMarker:
+    """Verify synthesis prompt instructs subagent to prefix routed entries."""
+
+    def test_prompt_contains_routed_instruction(self):
+        """The synthesis prompt must tell the subagent to prefix routed entries."""
+        prompt = _build_synthesis_prompt("", ["2026-02-01"])
+        assert "[routed]" in prompt
+        assert "prefix" in prompt.lower() or "mark" in prompt.lower()
 
 
 if __name__ == "__main__":
