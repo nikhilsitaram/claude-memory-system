@@ -141,7 +141,8 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
 | `synthesis.model` | sonnet | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
-| `decay.ageDays` | 30 | Archive learnings older than this |
+| `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
+| `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
 
 Short-term token limits calculated as `workingDays × 750` (reduced due to scope filtering).
 

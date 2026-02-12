@@ -29,8 +29,9 @@
   },
   "decay": {
     "ageDays": 30,
+    "projectWorkingDays": 20,
     "archiveRetentionDays": 365,
-    "_comment": "Learnings older than ageDays are archived; archived items older than archiveRetentionDays are purged"
+    "_comment": "Global LTM: ageDays (calendar days). Project LTM: projectWorkingDays (project work days). Archive: purge after archiveRetentionDays."
   },
   "_tokenGuidance": {
     "estimation": "1 token ≈ 4 characters. File bytes / 4 = rough token count",
@@ -55,6 +56,7 @@
     "synthesis.model": "sonnet",
     "synthesis.background": true,
     "decay.ageDays": 30,
+    "decay.projectWorkingDays": 20,
     "decay.archiveRetentionDays": 365
   }
 }

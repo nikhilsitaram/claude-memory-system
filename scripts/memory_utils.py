@@ -136,6 +136,7 @@ DEFAULT_SETTINGS = {
     },
     "decay": {
         "ageDays": 30,
+        "projectWorkingDays": 20,
         "archiveRetentionDays": 365,
     },
     # totalTokenBudget calculated as sum of 4 components

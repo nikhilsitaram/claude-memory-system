@@ -20,6 +20,7 @@ scripts_dir = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(scripts_dir))
 
 from memory_utils import (
+    DEFAULT_SETTINGS,
     FileLock,
     LOCK_STALE_SECONDS,
     SHORT_TERM_TOKENS_PER_DAY,
@@ -70,9 +71,9 @@ class TestLoadSettings:
         with mock.patch("memory_utils.get_settings_file") as mock_sf:
             mock_sf.return_value = Path("/nonexistent/settings.json")
             settings = load_settings()
-            assert settings["globalShortTerm"]["workingDays"] == 2
-            assert settings["projectShortTerm"]["workingDays"] == 7
-            assert settings["globalLongTerm"]["tokenLimit"] == 5000
+            assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
+            assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+            assert settings["globalLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
 
     def test_calculated_token_limits(self):
         with mock.patch("memory_utils.get_settings_file") as mock_sf:
@@ -86,10 +87,10 @@ class TestLoadSettings:
             mock_sf.return_value = Path("/nonexistent/settings.json")
             settings = load_settings()
             expected = (
-                5000  # globalLongTerm
-                + 2 * SHORT_TERM_TOKENS_PER_DAY  # globalShortTerm
-                + 5000  # projectLongTerm
-                + 7 * SHORT_TERM_TOKENS_PER_DAY  # projectShortTerm
+                DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+                + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+                + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
+                + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
             )
             assert settings["totalTokenBudget"] == expected
 
@@ -105,7 +106,7 @@ class TestLoadSettings:
                     settings = load_settings()
                     assert settings["globalShortTerm"]["workingDays"] == 5
                     # Other defaults preserved
-                    assert settings["projectShortTerm"]["workingDays"] == 7
+                    assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
             finally:
                 os.unlink(f.name)
 
@@ -119,7 +120,7 @@ class TestLoadSettings:
                 with mock.patch("memory_utils.get_settings_file") as mock_sf:
                     mock_sf.return_value = Path(f.name)
                     settings = load_settings()
-                    assert settings["globalShortTerm"]["workingDays"] == 2
+                    assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
             finally:
                 os.unlink(f.name)
 

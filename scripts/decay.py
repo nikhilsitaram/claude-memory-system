@@ -26,7 +26,10 @@ try:
         get_memory_dir,
         get_project_memory_dir,
         get_global_memory_file,
+        get_projects_index_file,
+        load_json_file,
         load_settings,
+        project_name_to_filename,
     )
 except ImportError:
     # Support running from repo directory
@@ -36,8 +39,16 @@ except ImportError:
         get_memory_dir,
         get_project_memory_dir,
         get_global_memory_file,
+        get_projects_index_file,
+        load_json_file,
         load_settings,
+        project_name_to_filename,
     )
+
+# Default decay thresholds (used as fallbacks when settings.json missing)
+DEFAULT_AGE_DAYS = 30
+DEFAULT_PROJECT_WORKING_DAYS = 20
+DEFAULT_ARCHIVE_RETENTION_DAYS = 365
 
 # Pattern to extract date from learning: - (YYYY-MM-DD) [type] description
 DATE_PATTERN = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
@@ -122,9 +133,59 @@ def parse_learnings(section_content: str) -> list[tuple[str, date | None]]:
     return learnings
 
 
-def decay_file(filepath: Path, age_days: int, dry_run: bool = False) -> tuple[int, list[str]]:
+def should_decay_entry(
+    learning_date: date,
+    age_days: int,
+    today: date,
+    project_work_days: list[str] | None = None,
+    project_decay_threshold: int | None = None,
+) -> bool:
+    """Determine if a learning entry should be decayed.
+
+    For global LTM: calendar-day based (entry older than age_days).
+    For project LTM: working-day based (more than project_decay_threshold
+    project work days have occurred since the entry date).
+    """
+    if project_work_days is not None and project_decay_threshold is not None:
+        # Working-day decay: count project work days strictly after the learning date
+        learning_date_str = learning_date.isoformat()
+        days_after = sum(1 for d in project_work_days if d > learning_date_str)
+        return days_after >= project_decay_threshold
+    else:
+        # Calendar-day decay
+        cutoff_date = today - timedelta(days=age_days)
+        return learning_date < cutoff_date
+
+
+def build_project_work_days_map() -> dict[str, list[str]]:
+    """Build a mapping from project LTM filename to work days list.
+
+    Reads projects-index.json and maps each project's expected LTM filename
+    to its list of work days.
+    """
+    index = load_json_file(get_projects_index_file(), {})
+    mapping: dict[str, list[str]] = {}
+    for project_info in index.get("projects", {}).values():
+        name = project_info.get("name", "")
+        work_days = sorted(project_info.get("workDays", []))
+        if name:
+            filename = project_name_to_filename(name)
+            mapping[filename] = work_days
+    return mapping
+
+
+def decay_file(
+    filepath: Path,
+    age_days: int,
+    dry_run: bool = False,
+    project_work_days: list[str] | None = None,
+    project_decay_threshold: int | None = None,
+) -> tuple[int, list[str]]:
     """
     Process a memory file, archiving old learnings.
+
+    For project files, pass project_work_days and project_decay_threshold
+    to use working-day-based decay instead of calendar-day decay.
 
     Returns (archived_count, archived_learnings).
     """
@@ -134,7 +195,6 @@ def decay_file(filepath: Path, age_days: int, dry_run: bool = False) -> tuple[in
     content = filepath.read_text(encoding="utf-8")
     sections = parse_sections(content)
     today = datetime.now(timezone.utc).date()
-    cutoff_date = today - timedelta(days=age_days)
 
     archived_learnings = []
     modified_sections = []
@@ -158,7 +218,10 @@ def decay_file(filepath: Path, age_days: int, dry_run: bool = False) -> tuple[in
             if learning_date is None:
                 # No date = protected from decay
                 kept_learnings.append(learning_text)
-            elif learning_date >= cutoff_date:
+            elif not should_decay_entry(
+                learning_date, age_days, today,
+                project_work_days, project_decay_threshold,
+            ):
                 # Recent enough to keep
                 kept_learnings.append(learning_text)
             else:
@@ -295,20 +358,21 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = load_settings()
-    age_days = settings.get("decay", {}).get("ageDays", 30)
-    retention_days = settings.get("decay", {}).get("archiveRetentionDays", 365)
+    age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
+    project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)
+    retention_days = settings.get("decay", {}).get("archiveRetentionDays", DEFAULT_ARCHIVE_RETENTION_DAYS)
 
     if args.dry_run:
         print("DRY RUN - no changes will be made")
         print()
 
-    print(f"Decay settings: archive after {age_days} days, purge after {retention_days} days")
+    print(f"Decay settings: global={age_days} calendar days, project={project_working_days} working days, purge after {retention_days} days")
     print()
 
     total_archived = 0
     all_archived_learnings = []
 
-    # Process global memory
+    # Process global memory (calendar-day decay)
     global_file = get_global_memory_file()
     if global_file.exists():
         count, learnings = decay_file(global_file, age_days, args.dry_run)
@@ -317,11 +381,17 @@ def main() -> int:
             total_archived += count
             all_archived_learnings.extend(learnings)
 
-    # Process project memory files
+    # Process project memory files (working-day decay)
     project_dir = get_project_memory_dir()
     if project_dir.exists():
+        work_days_map = build_project_work_days_map()
         for project_file in project_dir.glob("*-long-term-memory.md"):
-            count, learnings = decay_file(project_file, age_days, args.dry_run)
+            work_days = work_days_map.get(project_file.name, [])
+            count, learnings = decay_file(
+                project_file, age_days, args.dry_run,
+                project_work_days=work_days if work_days else None,
+                project_decay_threshold=project_working_days if work_days else None,
+            )
             if count > 0:
                 print(f"{project_file.name}: archived {count} learning(s)")
                 total_archived += count

@@ -17,6 +17,7 @@ import pytest
 scripts_dir = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(scripts_dir))
 
+from memory_utils import load_settings
 from token_usage import calculate_usage
 
 
@@ -95,14 +96,10 @@ def _capture_usage(**overrides) -> dict[str, str]:
 
 
 def _default_settings() -> dict:
-    return {
-        "globalShortTerm": {"workingDays": 2, "tokenLimit": 1500},
-        "globalLongTerm": {"tokenLimit": 5000},
-        "projectShortTerm": {"workingDays": 7, "tokenLimit": 5250},
-        "projectLongTerm": {"tokenLimit": 5000},
-        "projectSettings": {"includeSubdirectories": False},
-        "totalTokenBudget": 16750,
-    }
+    """Get default settings from load_settings() to avoid hardcoding values."""
+    with mock.patch("memory_utils.get_settings_file") as mock_sf:
+        mock_sf.return_value = Path("/nonexistent/settings.json")
+        return load_settings()
 
 
 # =============================================================================

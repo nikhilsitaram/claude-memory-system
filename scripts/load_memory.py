@@ -267,6 +267,7 @@ Never use multiple Edit calls on daily files.
 
 **Tag format:** `[scope/type]` where scope is `global` or one of these registered project names: ''' + project_names_str + '''
 **IMPORTANT:** Only use the project names listed above. Do NOT invent new project names from context.
+**Scope rule:** Use `global` ONLY for learnings that apply across multiple projects (SQL patterns, MCP behavior, Claude Code tool usage, general dev practices). If a learning is specific to one project's codebase, architecture, or workflow, use that project's name even if the concept seems general.
 **Compactness:** Final solutions only, one learning per concept, omit routine details.
 
 **Long-term routing (be HIGHLY selective):**
@@ -276,6 +277,8 @@ Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[
 Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
 Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
+
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.
 
 **CRITICAL batching requirement**: Collect ALL items to route across all dates, then make ONE Edit call per target file with ALL new entries at once.
 Do NOT make separate Edit calls per learning — batch them into a single Edit per file.
