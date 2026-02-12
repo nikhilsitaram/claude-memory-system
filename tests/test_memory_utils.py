@@ -364,6 +364,39 @@ class TestFilterDailyContent:
         result = filter_daily_content(content, "global")
         assert "[Global/implement]" in result
 
+    def test_routed_entries_skipped(self):
+        content = """# 2026-02-01
+## Learnings
+- [routed][global/pattern] Already in LTM
+- [global/gotcha] Still only in STM
+"""
+        result = filter_daily_content(content, "global")
+        assert "[routed]" not in result
+        assert "[global/gotcha] Still only in STM" in result
+
+    def test_routed_entries_skipped_project_scope(self):
+        content = """# 2026-02-01
+## Learnings
+- [routed][myproject/pattern] Already routed
+- [myproject/gotcha] Not routed
+"""
+        result = filter_daily_content(content, "myproject")
+        assert "[routed]" not in result
+        assert "[myproject/gotcha] Not routed" in result
+
+    def test_routed_entries_not_counted_as_content(self):
+        """A section with only routed entries should not appear in output."""
+        content = """# 2026-02-01
+## Learnings
+- [routed][global/pattern] Already in LTM
+## Actions
+- [global/implement] Did something
+"""
+        result = filter_daily_content(content, "global")
+        assert "## Learnings" not in result
+        assert "## Actions" in result
+        assert "[global/implement]" in result
+
 
 # =============================================================================
 # Find Current Project Tests

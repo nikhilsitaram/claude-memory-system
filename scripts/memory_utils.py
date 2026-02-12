@@ -509,6 +509,10 @@ def filter_daily_content(content: str, scope: str) -> str:
 
         # If we're in a section, process the line
         if current_section:
+            # Skip entries marked as routed to LTM
+            if re.match(r"^\s*-\s*\[routed\]", line):
+                continue
+
             # Check if this is a tagged entry
             match = TAG_PATTERN.match(line)
             if match:
