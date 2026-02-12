@@ -222,6 +222,80 @@ def cmd_extract_debug(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mark_routed(args: argparse.Namespace) -> int:
+    """One-time migration: mark daily entries that exist in LTM with [routed] prefix."""
+    import re
+
+    sys.path.insert(0, str(REPO_DIR / "scripts"))
+    from memory_utils import (
+        get_global_memory_file, get_project_memory_dir, get_daily_dir,
+        extract_entry_keywords, is_routed_match,
+    )
+
+    dry_run = args.dry_run
+
+    # 1. Collect all LTM entries (global + all project files)
+    ltm_entries = []
+
+    global_ltm = get_global_memory_file()
+    if global_ltm.exists():
+        for line in global_ltm.read_text(encoding="utf-8").splitlines():
+            if re.match(r"^\s*-\s*\(", line):  # Lines starting with "- (YYYY-MM-DD)"
+                ltm_entries.append(line)
+
+    project_dir = get_project_memory_dir()
+    if project_dir.exists():
+        for pfile in project_dir.glob("*-long-term-memory.md"):
+            for line in pfile.read_text(encoding="utf-8").splitlines():
+                if re.match(r"^\s*-\s*\(", line):
+                    ltm_entries.append(line)
+
+    print(f"Collected {len(ltm_entries)} LTM entries across all files")
+
+    # 2. Process each daily file
+    daily_dir = get_daily_dir()
+    total_marked = 0
+
+    if not daily_dir.exists():
+        print("No daily directory found")
+        return 0
+
+    for daily_file in sorted(daily_dir.glob("*.md")):
+        lines = daily_file.read_text(encoding="utf-8").splitlines()
+        modified = False
+        file_marked = 0
+        new_lines = []
+
+        in_learnings_or_lessons = False
+        for line in lines:
+            # Track if we're in a Learnings or Lessons section
+            if line.startswith("## "):
+                section = line.strip("# ").strip()
+                in_learnings_or_lessons = section in ("Learnings", "Lessons")
+
+            # Only check entries in Learnings/Lessons sections
+            if (in_learnings_or_lessons
+                    and re.match(r"^\s*-\s*\[(?!routed)", line)  # tagged entry, not already routed
+                    and any(is_routed_match(line, ltm) for ltm in ltm_entries)):
+                new_lines.append(re.sub(r"^(\s*-\s*)", r"\1[routed]", line))
+                modified = True
+                file_marked += 1
+            else:
+                new_lines.append(line)
+
+        if modified:
+            if dry_run:
+                print(f"  {daily_file.name}: would mark {file_marked} entries")
+            else:
+                daily_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                print(f"  {daily_file.name}: marked {file_marked} entries")
+            total_marked += file_marked
+
+    action = "Would mark" if dry_run else "Marked"
+    print(f"\n{action} {total_marked} entries across all daily files")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Developer tools for Claude Code Memory System")
     sub = parser.add_subparsers(dest="command")
@@ -238,6 +312,10 @@ def main() -> int:
     ed.add_argument("day", nargs="?", help="Day to debug (default: today)")
     ed.add_argument("--mode", choices=["all", "sessions", "extract", "captured", "content"], default="all")
     ed.set_defaults(func=cmd_extract_debug)
+
+    mr = sub.add_parser("mark-routed", help="Mark daily entries that exist in LTM with [routed] prefix")
+    mr.add_argument("--dry-run", action="store_true", help="Preview changes without modifying files")
+    mr.set_defaults(func=cmd_mark_routed)
 
     args = parser.parse_args()
     if not args.command:
