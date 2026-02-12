@@ -27,10 +27,12 @@ from memory_utils import (
     _calculate_token_limits,
     _deep_merge,
     estimate_tokens,
+    extract_entry_keywords,
     filter_daily_content,
     find_current_project,
     get_captured_sessions,
     add_captured_session,
+    is_routed_match,
     remove_captured_session,
     get_working_days,
     load_json_file,
@@ -533,6 +535,45 @@ class TestFileLock:
             lock.acquire()
             lock.release()
             lock.release()  # Should not raise
+
+
+# =============================================================================
+# Routed Matching Tests
+# =============================================================================
+
+
+class TestRoutedMatching:
+    def test_extract_keywords_strips_tags_and_stopwords(self):
+        keywords = extract_entry_keywords(
+            "- [claude-memory-system/gotcha] Missing defaultdict import crashed build_projects_index()"
+        )
+        assert "defaultdict" in keywords
+        assert "crashed" in keywords
+        assert "claude-memory-system" not in keywords  # tag stripped
+        assert "the" not in keywords  # stopword stripped
+
+    def test_match_same_concept_different_wording(self):
+        stm = "- [claude-memory-system/gotcha] Missing defaultdict import crashed build_projects_index()"
+        ltm = "- (2026-02-12) [gotcha] Missing imports cause cascading failures in indexing — defaultdict missing from build_projects_index()"
+        assert is_routed_match(stm, ltm) is True
+
+    def test_no_match_different_concepts(self):
+        stm = "- [claude-memory-system/pattern] FileLock prevents concurrent file corruption"
+        ltm = "- (2026-02-12) [gotcha] Missing imports cause cascading failures in indexing"
+        assert is_routed_match(stm, ltm) is False
+
+    def test_match_with_high_keyword_overlap(self):
+        stm = "- [global/pattern] ETL schedule awareness - REBUILDDATAWAREHOUSE runs 6 PM CT"
+        ltm = "- (2026-01-28) [pattern] ETL schedule awareness - REBUILDDATAWAREHOUSE runs 6 PM CT"
+        assert is_routed_match(stm, ltm) is True
+
+    def test_already_routed_entry_ignored(self):
+        """extract_entry_keywords should handle [routed] prefix gracefully."""
+        keywords = extract_entry_keywords(
+            "- [routed][global/pattern] Already marked"
+        )
+        assert "already" in keywords
+        assert "routed" not in keywords
 
 
 if __name__ == "__main__":

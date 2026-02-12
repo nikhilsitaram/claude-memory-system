@@ -546,6 +546,66 @@ def filter_daily_content(content: str, scope: str) -> str:
     return ""
 
 
+# Stopwords for keyword extraction (common English words that don't help matching)
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "out", "off", "over",
+    "under", "again", "further", "then", "once", "that", "this", "these",
+    "those", "not", "no", "nor", "or", "and", "but", "if", "so", "than",
+    "too", "very", "just", "about", "up", "it", "its", "use", "when",
+})
+
+# Regex to strip tag prefixes: [routed], [scope/type], (YYYY-MM-DD)
+_ENTRY_PREFIX_PATTERN = re.compile(
+    r"^\s*-\s*(?:\[routed\])?\s*(?:\[[^\]]+\])?\s*(?:\(\d{4}-\d{2}-\d{2}\))?\s*(?:\[[^\]]+\])?\s*"
+)
+
+
+def extract_entry_keywords(entry: str) -> set[str]:
+    """
+    Extract meaningful keywords from a memory entry line.
+
+    Strips tag prefixes ([scope/type], [routed], (date)), stopwords,
+    and short tokens. Returns lowercase keyword set.
+    """
+    # Remove tag/date prefixes
+    text = _ENTRY_PREFIX_PATTERN.sub("", entry)
+    # Tokenize: split on non-alphanumeric, lowercase
+    tokens = re.findall(r"[a-z0-9_]+", text.lower())
+    # Filter stopwords and short tokens
+    return {t for t in tokens if t not in _STOPWORDS and len(t) > 2}
+
+
+def is_routed_match(stm_entry: str, ltm_entry: str, threshold: float = 0.5) -> bool:
+    """
+    Check if a short-term memory entry matches a long-term memory entry.
+
+    Uses keyword overlap: if >= threshold of the smaller set's keywords
+    appear in the larger set, it's a match.
+
+    Args:
+        stm_entry: Daily file entry line (e.g., "- [scope/type] Description")
+        ltm_entry: LTM entry line (e.g., "- (2026-02-12) [type] Description")
+        threshold: Minimum overlap ratio (0.0-1.0) to consider a match
+
+    Returns:
+        True if entries are conceptual duplicates
+    """
+    stm_kw = extract_entry_keywords(stm_entry)
+    ltm_kw = extract_entry_keywords(ltm_entry)
+
+    if not stm_kw or not ltm_kw:
+        return False
+
+    overlap = len(stm_kw & ltm_kw)
+    smaller = min(len(stm_kw), len(ltm_kw))
+
+    return overlap / smaller >= threshold
+
+
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
     """
     Find the project matching the current working directory.
