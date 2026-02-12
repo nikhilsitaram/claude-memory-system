@@ -66,6 +66,8 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 **Learning types:** `gotcha`, `pitfall`, `pattern`
 **Lesson types:** `insight`, `tip`, `workaround`
 
+**Routed entries:** Entries promoted to long-term memory during synthesis are prefixed with `[routed]` in the daily file (e.g., `- [routed][scope/type] Description`). These are skipped during short-term memory loading to avoid duplication with LTM.
+
 **Filtering:** Tags determine which short-term memory tier content appears in:
 - `[global/*]` → Global Short-Term Memory (loaded every session)
 - `[project-name/*]` → Project Short-Term Memory (loaded when in that project)
