@@ -281,12 +281,49 @@ def get_session_date(session: SessionInfo) -> str:
 # =============================================================================
 
 
+def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
+    """
+    Extract original path and work days from JSONL transcript files.
+
+    Reads the first line of each .jsonl file to get cwd and timestamp.
+    Returns (original_path, work_days_set). original_path may be empty
+    if no cwd field is found.
+    """
+    original_path = ""
+    work_days: set[str] = set()
+
+    for jsonl_file in sorted(folder.glob("*.jsonl")):
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    continue
+                data = json.loads(first_line)
+
+                # Extract cwd as original path (first valid one wins)
+                cwd = data.get("cwd", "")
+                if cwd and not original_path:
+                    original_path = cwd
+
+                # Extract timestamp as work day
+                timestamp = data.get("timestamp", "")
+                if timestamp:
+                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    work_days.add(dt.strftime("%Y-%m-%d"))
+        except (json.JSONDecodeError, IOError, ValueError):
+            continue
+
+    return original_path, work_days
+
+
 def build_projects_index() -> dict:
     """
-    Build a project-to-work-days index from Claude Code's sessions-index.json files.
+    Build a project-to-work-days index from Claude Code's project data.
 
-    Scans all sessions-index.json files in ~/.claude/projects/ and builds
-    a mapping of projects to the dates they have work sessions.
+    Scans sessions-index.json files and JSONL transcripts in ~/.claude/projects/
+    to build a mapping of projects to the dates they have work sessions.
+    JSONL files supplement sessions-index.json with missing work days and
+    serve as fallback when sessions-index.json doesn't exist.
 
     Returns the index dict and also saves it to projects-index.json.
     """
@@ -313,40 +350,42 @@ def build_projects_index() -> dict:
         if not project_folder.is_dir():
             continue
 
-        sessions_file = project_folder / "sessions-index.json"
-        if not sessions_file.exists():
-            continue
-
-        try:
-            with open(sessions_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"Warning: Could not read {sessions_file}: {e}", file=sys.stderr)
-            continue
-
-        # Get original path: try root-level first, then entries[0].projectPath
-        original_path = data.get("originalPath", "")
-        entries = data.get("entries", [])
-        if not original_path and entries:
-            original_path = entries[0].get("projectPath", "")
-        if not original_path:
-            continue
-        if not entries:
-            continue
-
-        # Extract work days from session entries
+        # Try sessions-index.json first
+        original_path = ""
         work_days: set[str] = set()
-        for entry in entries:
-            created = entry.get("created")
-            if created:
-                try:
-                    # Parse ISO format: "2026-01-25T21:48:21.826Z"
-                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    work_days.add(dt.strftime("%Y-%m-%d"))
-                except ValueError:
-                    continue
 
-        if not work_days:
+        sessions_file = project_folder / "sessions-index.json"
+        if sessions_file.exists():
+            try:
+                with open(sessions_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Warning: Could not read {sessions_file}: {e}", file=sys.stderr)
+                data = {}
+
+            # Get original path: try root-level first, then entries[0].projectPath
+            original_path = data.get("originalPath", "")
+            entries = data.get("entries", [])
+            if not original_path and entries:
+                original_path = entries[0].get("projectPath", "")
+
+            # Extract work days from session entries
+            for entry in entries:
+                created = entry.get("created")
+                if created:
+                    try:
+                        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        work_days.add(dt.strftime("%Y-%m-%d"))
+                    except ValueError:
+                        continue
+
+        # Supplement with JSONL transcripts (fallback for path, additional work days)
+        jsonl_path, jsonl_days = _extract_from_jsonl(project_folder)
+        if not original_path:
+            original_path = jsonl_path
+        work_days.update(jsonl_days)
+
+        if not original_path or not work_days:
             continue
 
         # Use lowercase path as the canonical key for lookups

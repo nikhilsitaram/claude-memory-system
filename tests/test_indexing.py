@@ -678,6 +678,161 @@ class TestBuildProjectsIndex:
             data = list(result["projects"].values())[0]
             assert data["name"] == "fallback-proj"
 
+    # --- JSONL fallback tests ---
+
+    def _make_jsonl_file(self, folder, session_id, cwd, timestamp):
+        """Create a JSONL file with cwd and timestamp in first message."""
+        line = json.dumps({
+            "cwd": cwd,
+            "timestamp": timestamp,
+            "type": "user",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "hello"},
+        })
+        jsonl_path = folder / f"{session_id}.jsonl"
+        jsonl_path.write_text(line + "\n", encoding="utf-8")
+        return jsonl_path
+
+    def test_jsonl_fallback_discovers_project_without_sessions_index(self):
+        """Folders with JSONL files but no sessions-index.json are discovered."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            # Folder with JSONL but NO sessions-index.json
+            folder = projects_dir / "-home-user-swyfft-projects-tableau"
+            folder.mkdir(parents=True)
+            self._make_jsonl_file(
+                folder, "sess-1",
+                "/home/user/swyfft/projects/tableau",
+                "2026-02-12T10:00:00Z",
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 1
+            data = list(result["projects"].values())[0]
+            assert data["name"] == "tableau"
+            assert data["originalPath"] == "/home/user/swyfft/projects/tableau"
+            assert "2026-02-12" in data["workDays"]
+
+    def test_jsonl_fallback_extracts_multiple_work_days(self):
+        """Multiple JSONL files produce multiple work days."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            folder = projects_dir / "-home-user-proj"
+            folder.mkdir(parents=True)
+            self._make_jsonl_file(folder, "s1", "/home/user/proj", "2026-02-10T10:00:00Z")
+            self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-11T14:00:00Z")
+            self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-12T09:00:00Z")
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            data = list(result["projects"].values())[0]
+            assert data["workDays"] == ["2026-02-10", "2026-02-11", "2026-02-12"]
+
+    def test_jsonl_supplements_sessions_index_work_days(self):
+        """JSONL files add work days that sessions-index.json missed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            # Sessions-index with only one day
+            self._setup_project(
+                projects_dir,
+                "-home-user-proj",
+                "/home/user/proj",
+                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+            )
+
+            # Additional JSONL files for days not in the index
+            folder = projects_dir / "-home-user-proj"
+            self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-05T10:00:00Z")
+            self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-10T10:00:00Z")
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            data = list(result["projects"].values())[0]
+            assert "2026-02-01" in data["workDays"]  # from sessions-index
+            assert "2026-02-05" in data["workDays"]  # from JSONL
+            assert "2026-02-10" in data["workDays"]  # from JSONL
+
+    def test_jsonl_fallback_skips_empty_files(self):
+        """Empty or tiny JSONL files are skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            folder = projects_dir / "-home-user-proj"
+            folder.mkdir(parents=True)
+            # Empty file
+            (folder / "empty.jsonl").write_text("", encoding="utf-8")
+            # Valid file
+            self._make_jsonl_file(folder, "valid", "/home/user/proj", "2026-02-12T10:00:00Z")
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 1
+            data = list(result["projects"].values())[0]
+            assert data["workDays"] == ["2026-02-12"]
+
+    def test_jsonl_fallback_handles_malformed_json(self):
+        """Malformed JSONL lines are skipped gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            folder = projects_dir / "-home-user-proj"
+            folder.mkdir(parents=True)
+            (folder / "bad.jsonl").write_text("not valid json\n", encoding="utf-8")
+            self._make_jsonl_file(folder, "good", "/home/user/proj", "2026-02-12T10:00:00Z")
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 1
+
+    def test_jsonl_only_folder_no_cwd_is_skipped(self):
+        """JSONL files without cwd field cannot determine project path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            folder = projects_dir / "-home-user-proj"
+            folder.mkdir(parents=True)
+            # JSONL with no cwd
+            line = json.dumps({"type": "user", "timestamp": "2026-02-12T10:00:00Z"})
+            (folder / "no-cwd.jsonl").write_text(line + "\n", encoding="utf-8")
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 0
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
