@@ -22,6 +22,7 @@ sys.path.insert(0, str(scripts_dir))
 from indexing import (
     MIN_SESSION_SIZE_BYTES,
     SessionInfo,
+    build_projects_index,
     get_session_date,
     has_assistant_message,
     list_pending_sessions,
@@ -375,6 +376,307 @@ class TestFormatTranscriptsForOutput:
         output = format_transcripts_for_output(daily_data)
         # Day 1 should appear before Day 3
         assert output.index("2026-02-01") < output.index("2026-02-03")
+
+
+# =============================================================================
+# build_projects_index Tests
+# =============================================================================
+
+
+def _make_sessions_index(original_path, entries):
+    """Helper to create a sessions-index.json dict."""
+    return {
+        "version": 1,
+        "originalPath": original_path,
+        "entries": entries,
+    }
+
+
+def _make_session_entry(session_id, created, project_path=None):
+    """Helper to create a session entry."""
+    entry = {
+        "sessionId": session_id,
+        "fullPath": f"/tmp/{session_id}.jsonl",
+        "fileMtime": 1770000000000,
+        "firstPrompt": "test",
+        "summary": "test",
+        "messageCount": 5,
+        "created": created,
+        "modified": created,
+        "gitBranch": "",
+        "isSidechain": False,
+    }
+    if project_path:
+        entry["projectPath"] = project_path
+    return entry
+
+
+class TestBuildProjectsIndex:
+    def _setup_project(self, projects_dir, folder_name, original_path, entries):
+        """Create a project folder with sessions-index.json."""
+        folder = projects_dir / folder_name
+        folder.mkdir(parents=True, exist_ok=True)
+        index_data = _make_sessions_index(original_path, entries)
+        (folder / "sessions-index.json").write_text(
+            json.dumps(index_data), encoding="utf-8"
+        )
+
+    def test_basic_project_discovery(self):
+        """Smoke test: function runs and finds a project."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir,
+                "-home-user-myproject",
+                "/home/user/myproject",
+                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            projects = result["projects"]
+            assert len(projects) == 1
+            data = list(projects.values())[0]
+            assert data["name"] == "myproject"
+            assert "2026-02-01" in data["workDays"]
+
+    def test_extracts_project_name_from_path(self):
+        """Project name is the last component of originalPath."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir,
+                "-home-user-swyfft-projects-tableau-agency-overview",
+                "/home/user/swyfft/projects/tableau/agency-overview",
+                [_make_session_entry("s1", "2026-02-06T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            projects = result["projects"]
+            data = list(projects.values())[0]
+            assert data["name"] == "agency-overview"
+
+    def test_multiple_work_days(self):
+        """Sessions on different days produce multiple work days."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir,
+                "-home-user-proj",
+                "/home/user/proj",
+                [
+                    _make_session_entry("s1", "2026-02-01T10:00:00Z"),
+                    _make_session_entry("s2", "2026-02-01T14:00:00Z"),
+                    _make_session_entry("s3", "2026-02-03T09:00:00Z"),
+                ],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            data = list(result["projects"].values())[0]
+            assert data["workDays"] == ["2026-02-01", "2026-02-03"]
+
+    def test_multiple_projects(self):
+        """Discovers multiple projects from separate folders."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir, "-proj-a", "/home/user/proj-a",
+                [_make_session_entry("s1", "2026-01-15T10:00:00Z")],
+            )
+            self._setup_project(
+                projects_dir, "-proj-b", "/home/user/proj-b",
+                [_make_session_entry("s2", "2026-01-20T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 2
+            names = {d["name"] for d in result["projects"].values()}
+            assert names == {"proj-a", "proj-b"}
+
+    def test_skips_folder_without_sessions_index(self):
+        """Folders without sessions-index.json are ignored."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            # Folder with no sessions-index.json
+            (projects_dir / "empty-folder").mkdir(parents=True)
+            # Folder with sessions-index.json
+            self._setup_project(
+                projects_dir, "-real-proj", "/home/user/real-proj",
+                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 1
+
+    def test_skips_entries_without_created(self):
+        """Entries missing created timestamp are skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            entry_no_created = {
+                "sessionId": "s1",
+                "fullPath": "/tmp/s1.jsonl",
+                "fileMtime": 1770000000000,
+            }
+            self._setup_project(
+                projects_dir, "-proj", "/home/user/proj",
+                [entry_no_created],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            # No work days extracted -> project skipped
+            assert len(result["projects"]) == 0
+
+    def test_empty_projects_dir(self):
+        """Empty projects directory returns no projects."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            projects_dir.mkdir()
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 0
+
+    def test_nonexistent_projects_dir(self):
+        """Missing projects directory returns empty result."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "nonexistent"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert result == {"projects": {}}
+
+    def test_case_insensitive_path_merging(self):
+        """Same project path with different cases merges work days."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir, "-folder-a", "/home/user/MyProject",
+                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+            )
+            self._setup_project(
+                projects_dir, "-folder-b", "/home/user/myproject",
+                [_make_session_entry("s2", "2026-02-03T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            assert len(result["projects"]) == 1
+            data = list(result["projects"].values())[0]
+            assert len(data["workDays"]) == 2
+            assert len(data["encodedPaths"]) == 2
+
+    def test_writes_index_file(self):
+        """Result is written to projects-index.json."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            self._setup_project(
+                projects_dir, "-proj", "/home/user/proj",
+                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                build_projects_index()
+
+            assert index_file.exists()
+            saved = json.loads(index_file.read_text(encoding="utf-8"))
+            assert saved["version"] == 1
+            assert "lastUpdated" in saved
+            assert len(saved["projects"]) == 1
+
+    def test_fallback_to_entry_project_path(self):
+        """Uses entries[0].projectPath when root originalPath is missing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir) / "projects"
+            memory_dir = Path(tmpdir) / "memory"
+            index_file = memory_dir / "projects-index.json"
+
+            folder = projects_dir / "-proj"
+            folder.mkdir(parents=True)
+            index_data = {
+                "version": 1,
+                "entries": [
+                    {
+                        "sessionId": "s1",
+                        "fullPath": "/tmp/s1.jsonl",
+                        "fileMtime": 1770000000000,
+                        "created": "2026-02-01T10:00:00Z",
+                        "projectPath": "/home/user/fallback-proj",
+                    }
+                ],
+            }
+            (folder / "sessions-index.json").write_text(
+                json.dumps(index_data), encoding="utf-8"
+            )
+
+            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
+                result = build_projects_index()
+
+            data = list(result["projects"].values())[0]
+            assert data["name"] == "fallback-proj"
 
 
 if __name__ == "__main__":
