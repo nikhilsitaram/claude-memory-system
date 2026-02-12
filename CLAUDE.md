@@ -92,6 +92,7 @@ Test conventions:
 - Use `tempfile.TemporaryDirectory` for filesystem isolation
 - Use `unittest.mock.patch` to mock path helpers (`get_projects_dir`, etc.)
 - Test happy path, edge cases, and error conditions
+- Never hardcode configurable values — import constants (`DEFAULT_AGE_DAYS`, `DEFAULT_SETTINGS`, etc.) and make test data relative to them (e.g., `timedelta(days=DEFAULT_AGE_DAYS * 2)` not `timedelta(days=60)`)
 
 ```bash
 python3 -m pytest tests/ -q                  # Run all unit tests (do this first)
