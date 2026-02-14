@@ -77,12 +77,12 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 
 ### Adding a Skill
 1. Create `skills/<name>/SKILL.md` with frontmatter
-2. Update `install.py`: add to `create_directories()` and `copy_skills()`
+2. Update `install.py`: add to `create_directories()` and `link_skills()`
 3. Update `uninstall.py`: add to cleanup instructions
 
 ### Adding a Script
 1. Create `scripts/<name>.py`
-2. Add to `copy_scripts()` in `install.py`
+2. Add to `link_scripts()` in `install.py`
 3. If it needs a hook, add in `merge_hooks()` function
 
 ### Testing

@@ -7,7 +7,7 @@ This script:
 2. Detects available Python command (python3 vs python)
 3. Backs up existing settings.json
 4. Creates directory structure
-5. Copies scripts and skills
+5. Symlinks scripts, hooks, and skills (auto-applies repo changes)
 6. Merges hooks into settings.json (with absolute paths)
 7. Adds permissions
 8. Builds project index
@@ -20,7 +20,6 @@ Requirements: Python 3.9+
 """
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -129,11 +128,18 @@ def create_directories() -> None:
     print("Created directory structure")
 
 
-def copy_scripts(script_dir: Path) -> None:
-    """Copy Python scripts to ~/.claude/scripts/."""
+def link_file(src: Path, dest: Path) -> None:
+    """Create a symlink from dest -> src, replacing any existing file or link."""
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    dest.symlink_to(src)
+
+
+def link_scripts(script_dir: Path) -> None:
+    """Symlink Python scripts to ~/.claude/scripts/."""
     dest_dir = get_claude_dir() / "scripts"
 
-    scripts_to_copy = [
+    scripts_to_link = [
         "memory_utils.py",
         "load_memory.py",
         "indexing.py",  # Session discovery, transcript extraction, project index
@@ -143,16 +149,12 @@ def copy_scripts(script_dir: Path) -> None:
         "token_usage.py",  # Token usage calculation for /settings
     ]
 
-    for script_name in scripts_to_copy:
+    for script_name in scripts_to_link:
         src = script_dir / "scripts" / script_name
         if src.exists():
-            dest = dest_dir / script_name
-            shutil.copy2(src, dest)
-            # Make executable on Unix
-            if os.name != "nt":
-                dest.chmod(dest.stat().st_mode | 0o755)
+            link_file(src, dest_dir / script_name)
 
-    print("Copied scripts to ~/.claude/scripts/")
+    print("Linked scripts to ~/.claude/scripts/")
 
 
 def remove_legacy_scripts() -> None:
@@ -171,28 +173,24 @@ def remove_legacy_scripts() -> None:
             print(f"  Removed legacy script: {name}")
 
 
-def copy_hooks(script_dir: Path) -> None:
-    """Copy hook scripts to ~/.claude/hooks/."""
+def link_hooks(script_dir: Path) -> None:
+    """Symlink hook scripts to ~/.claude/hooks/."""
     dest_dir = get_claude_dir() / "hooks"
 
-    hooks_to_copy = [
+    hooks_to_link = [
         "pretooluse-allow-memory.sh",
     ]
 
-    for hook_name in hooks_to_copy:
+    for hook_name in hooks_to_link:
         src = script_dir / "hooks" / hook_name
         if src.exists():
-            dest = dest_dir / hook_name
-            shutil.copy2(src, dest)
-            # Make executable on Unix
-            if os.name != "nt":
-                dest.chmod(dest.stat().st_mode | 0o755)
+            link_file(src, dest_dir / hook_name)
 
-    print("Copied hooks to ~/.claude/hooks/")
+    print("Linked hooks to ~/.claude/hooks/")
 
 
-def copy_skills(script_dir: Path) -> None:
-    """Copy skill files to ~/.claude/skills/."""
+def link_skills(script_dir: Path) -> None:
+    """Symlink skill files to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
     skills = ["remember", "synthesize", "recall", "settings", "projects"]
@@ -202,13 +200,12 @@ def copy_skills(script_dir: Path) -> None:
         dest_dir = skills_dir / skill
 
         if src_dir.exists():
-            # Copy SKILL.md
             src_skill = src_dir / "SKILL.md"
             if src_skill.exists():
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_skill, dest_dir / "SKILL.md")
+                link_file(src_skill, dest_dir / "SKILL.md")
 
-    print("Copied skills to ~/.claude/skills/")
+    print("Linked skills to ~/.claude/skills/")
 
 
 def copy_templates(script_dir: Path) -> None:
@@ -496,10 +493,10 @@ def main() -> int:
     # Create directories
     create_directories()
 
-    # Copy files
-    copy_scripts(script_dir)
-    copy_hooks(script_dir)
-    copy_skills(script_dir)
+    # Link scripts, hooks, and skills (symlinks for auto-apply on repo changes)
+    link_scripts(script_dir)
+    link_hooks(script_dir)
+    link_skills(script_dir)
     copy_templates(script_dir)
 
     # Clean up legacy scripts from previous versions
