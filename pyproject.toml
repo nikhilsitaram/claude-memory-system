@@ -1,0 +1,9 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E402",  # Module imports after sys.path.insert() are intentional
+    "E501",  # Line length handled by formatter; too noisy for embedded prompt strings
+]

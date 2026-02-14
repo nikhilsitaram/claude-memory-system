@@ -16,7 +16,6 @@ Usage (from Claude Code):
 
 import json
 import os
-import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -30,15 +29,15 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (
+    FileLock,
     get_claude_dir,
     get_memory_dir,
+    get_project_memory_dir,
     get_projects_dir,
     get_projects_index_file,
-    get_project_memory_dir,
     load_json_file,
-    save_json_file,
     project_name_to_filename,
-    FileLock,
+    save_json_file,
 )
 
 # Claude Code subdirectories that contain project-specific data

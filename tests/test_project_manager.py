@@ -19,25 +19,22 @@ scripts_dir = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(scripts_dir))
 
 from project_manager import (
-    encode_path,
+    backup_files,
     decode_path_best_effort,
+    encode_path,
+    find_orphaned_folders,
     get_original_path_from_folder,
-    ValidationResult,
-    validate_move,
-    validate_merge_orphan,
+    list_projects,
     merge_sessions_index,
+    plan_cleanup,
+    plan_merge_orphan,
+    plan_move,
+    restore_from_backup,
     rewrite_paths_in_file,
     update_session_index_paths,
-    backup_files,
-    restore_from_backup,
-    list_projects,
-    find_orphaned_folders,
-    find_stale_entries,
-    plan_move,
-    plan_merge_orphan,
-    plan_cleanup,
+    validate_merge_orphan,
+    validate_move,
 )
-
 
 # =============================================================================
 # Path Encoding Tests
@@ -691,7 +688,7 @@ class TestListProjects:
 
                 assert len(projects) == 1
                 assert projects[0].name == "my-project"
-                assert projects[0].exists == True
+                assert projects[0].exists is True
                 assert len(projects[0].issues) == 0
 
     def test_with_missing_path(self):
@@ -716,7 +713,7 @@ class TestListProjects:
             projects = list_projects()
 
             assert len(projects) == 1
-            assert projects[0].exists == False
+            assert projects[0].exists is False
             assert len(projects[0].issues) > 0
             assert "missing" in projects[0].issues[0].lower()
 

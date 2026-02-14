@@ -22,8 +22,8 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
+from indexing import get_session_date, list_pending_sessions
 from memory_utils import get_captured_sessions
-from indexing import SessionInfo, list_pending_sessions, get_session_date
 
 # =============================================================================
 # Key Interfaces

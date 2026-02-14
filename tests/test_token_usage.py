@@ -20,7 +20,6 @@ sys.path.insert(0, str(scripts_dir))
 from memory_utils import load_settings
 from token_usage import calculate_usage
 
-
 # =============================================================================
 # Helpers
 # =============================================================================

@@ -19,9 +19,7 @@ sys.path.insert(0, str(scripts_dir))
 
 from decay import (
     ARCHIVE_HEADER_PATTERN,
-    AUTO_PINNED_SECTIONS,
     DATE_PATTERN,
-    DECAY_ELIGIBLE_SECTIONS,
     DEFAULT_AGE_DAYS,
     DEFAULT_ARCHIVE_RETENTION_DAYS,
     DEFAULT_PROJECT_WORKING_DAYS,
@@ -36,7 +34,6 @@ from decay import (
     purge_old_archives,
     should_decay_entry,
 )
-
 
 # =============================================================================
 # Date Parsing Tests

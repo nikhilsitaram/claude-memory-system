@@ -23,9 +23,9 @@ from pathlib import Path
 try:
     from memory_utils import (
         check_python_version,
+        get_global_memory_file,
         get_memory_dir,
         get_project_memory_dir,
-        get_global_memory_file,
         get_projects_index_file,
         load_json_file,
         load_settings,
@@ -36,9 +36,9 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).parent))
     from memory_utils import (
         check_python_version,
+        get_global_memory_file,
         get_memory_dir,
         get_project_memory_dir,
-        get_global_memory_file,
         get_projects_index_file,
         load_json_file,
         load_settings,
@@ -236,7 +236,7 @@ def decay_file(
         else:
             # Keep section header comment if present
             lines = section_content.split("\n")
-            comment_lines = [l for l in lines if l.strip().startswith("<!--")]
+            comment_lines = [line for line in lines if line.strip().startswith("<!--")]
             new_content = "\n".join(comment_lines) if comment_lines else ""
 
         modified_sections.append((header, new_content))
@@ -276,12 +276,9 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
         # Append to existing section
         lines = content.split("\n")
         new_lines = []
-        found_today = False
-
         for line in lines:
             new_lines.append(line)
             if line.strip() == today_header:
-                found_today = True
                 # Add learnings after header
                 for learning in learnings:
                     new_lines.append(learning)

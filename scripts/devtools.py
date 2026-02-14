@@ -113,7 +113,7 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
     do_all = args.mode == "all"
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
-    from memory_utils import get_memory_dir, get_daily_dir, load_settings
+    from memory_utils import get_daily_dir, get_memory_dir, load_settings
 
     settings = load_settings()
 
@@ -173,8 +173,8 @@ def cmd_extract_debug(args: argparse.Namespace) -> int:
     day = args.day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
+    from indexing import get_session_date, list_all_sessions
     from memory_utils import get_captured_sessions
-    from indexing import list_all_sessions, get_session_date
 
     captured = get_captured_sessions()
 
@@ -228,8 +228,10 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from memory_utils import (
-        get_global_memory_file, get_project_memory_dir, get_daily_dir,
-        extract_entry_keywords, is_routed_match,
+        get_daily_dir,
+        get_global_memory_file,
+        get_project_memory_dir,
+        is_routed_match,
     )
 
     dry_run = args.dry_run

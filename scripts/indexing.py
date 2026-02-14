@@ -45,13 +45,12 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (
+    add_captured_session,
     check_python_version,
+    get_captured_sessions,
     get_memory_dir,
     get_projects_dir,
     get_projects_index_file,
-    get_captured_sessions,
-    get_captured_file,
-    add_captured_session,
     remove_captured_session,
 )
 

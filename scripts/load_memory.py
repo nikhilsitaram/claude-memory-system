@@ -31,19 +31,18 @@ from memory_utils import (
     check_python_version,
     filter_daily_content,
     find_current_project,
-    get_memory_dir,
     get_daily_dir,
-    get_project_memory_dir,
     get_global_memory_file,
+    get_memory_dir,
+    get_project_memory_dir,
     get_projects_index_file,
-    load_settings,
-    load_json_file,
-    project_name_to_filename,
     get_working_days,
+    load_json_file,
+    load_settings,
+    project_name_to_filename,
     remove_captured_session,
 )
-
-from transcript_ops import get_pending_days, extract_transcripts, format_transcripts_for_output
+from transcript_ops import extract_transcripts, format_transcripts_for_output, get_pending_days
 
 # Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
 TRANSCRIPT_LINE_BUDGET = 1950

@@ -5,8 +5,6 @@ Unit tests for load_memory.py
 Run with: python -m pytest tests/test_load_memory.py -v
 """
 
-import json
-import os
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -27,7 +25,6 @@ from load_memory import (
     load_project_memory,
     should_synthesize,
 )
-
 
 # =============================================================================
 # should_synthesize Tests

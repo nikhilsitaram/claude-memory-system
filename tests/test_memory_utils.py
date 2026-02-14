@@ -9,7 +9,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 from pathlib import Path
 from unittest import mock
 
@@ -21,26 +20,23 @@ sys.path.insert(0, str(scripts_dir))
 
 from memory_utils import (
     DEFAULT_SETTINGS,
-    FileLock,
-    LOCK_STALE_SECONDS,
     SHORT_TERM_TOKENS_PER_DAY,
-    _calculate_token_limits,
+    FileLock,
     _deep_merge,
+    add_captured_session,
     estimate_tokens,
     extract_entry_keywords,
     filter_daily_content,
     find_current_project,
     get_captured_sessions,
-    add_captured_session,
-    is_routed_match,
-    remove_captured_session,
     get_working_days,
+    is_routed_match,
     load_json_file,
     load_settings,
     project_name_to_filename,
+    remove_captured_session,
     save_json_file,
 )
-
 
 # =============================================================================
 # Token Estimation Tests
@@ -259,7 +255,7 @@ class TestCapturedSessions:
                 mock_cf.return_value = captured_file
                 add_captured_session("existing")
                 # Should not have duplicate
-                lines = [l for l in captured_file.read_text().splitlines() if l.strip()]
+                lines = [line for line in captured_file.read_text().splitlines() if line.strip()]
                 assert lines.count("existing") == 1
 
     def test_remove_captured(self):
@@ -492,7 +488,7 @@ class TestFileLock:
     def test_context_manager(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = Path(tmpdir) / "test.lock"
-            with FileLock(lock_path, timeout=2.0) as lock:
+            with FileLock(lock_path, timeout=2.0):
                 assert lock_path.exists()
             assert not lock_path.exists()
 
