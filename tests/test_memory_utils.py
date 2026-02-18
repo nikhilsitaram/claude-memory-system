@@ -362,6 +362,28 @@ class TestFilterDailyContent:
         result = filter_daily_content(content, "global")
         assert "[Global/implement]" in result
 
+    def test_html_comments_stripped(self):
+        content = """# 2026-02-01
+## Actions
+<!-- What was done. Tag [scope/action]. -->
+- [global/implement] Set up new hooks
+"""
+        result = filter_daily_content(content, "global")
+        assert "<!--" not in result
+        assert "[global/implement]" in result
+
+    def test_html_comments_dont_count_as_content(self):
+        """Section with only comments and no entries should not appear."""
+        content = """# 2026-02-01
+## Actions
+<!-- What was done. Tag [scope/action]. -->
+## Learnings
+- [global/pattern] Some pattern
+"""
+        result = filter_daily_content(content, "global")
+        assert "## Actions" not in result
+        assert "## Learnings" in result
+
     def test_routed_entries_skipped(self):
         content = """# 2026-02-01
 ## Learnings

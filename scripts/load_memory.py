@@ -276,11 +276,6 @@ Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[
 Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
 
-**Dedup marking:** When you route an entry from the daily summary to long-term memory, prefix that entry in the daily file with `[routed]`. Example:
-Before: `- [claude-memory-system/gotcha] Missing import crashed indexing`
-After routing to LTM: `- [routed][claude-memory-system/gotcha] Missing import crashed indexing`
-This prevents the entry from loading twice (once from LTM, once from short-term). Only prefix entries you actually route — leave non-routed entries unchanged.
-
 Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
 
 **Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.
@@ -363,7 +358,7 @@ CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first,
 Run ALL of this in a **single Bash call**:
 ```bash
 {mark_captured_lines}
-python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
@@ -415,7 +410,7 @@ CRITICAL: Do NOT make separate Edit calls per learning — batch all items into 
 
 Run ALL of this in a **single Bash call** — mark captured, remove temp files, run decay, and update timestamp:
 ```bash
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''

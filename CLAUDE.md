@@ -16,7 +16,7 @@ claude-memory-system/
 │   ├── transcript_ops.py      # Transcript parsing and extraction (split from indexing)
 │   ├── decay.py                # Age-based decay for long-term memory
 │   ├── project_manager.py      # Project lifecycle management library
-│   └── devtools.py             # Repo-local dev diagnostics (not installed)
+│   └── devtools.py             # Dev diagnostics + mark-routed dedup migration
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
@@ -66,7 +66,7 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 **Learning types:** `gotcha`, `pitfall`, `pattern`
 **Lesson types:** `insight`, `tip`, `workaround`
 
-**Routed entries:** Entries promoted to long-term memory during synthesis are prefixed with `[routed]` in the daily file (e.g., `- [routed][scope/type] Description`). These are skipped during short-term memory loading to avoid duplication with LTM.
+**Routed entries:** Entries that exist in both daily files and LTM are prefixed with `[routed]` (e.g., `- [routed][scope/type] Description`) and skipped at load time. Marking is handled deterministically by `devtools.py mark-routed` (runs post-synthesis), not by the synthesis subagent.
 
 **Filtering:** Tags determine which short-term memory tier content appears in:
 - `[global/*]` → Global Short-Term Memory (loaded every session)
