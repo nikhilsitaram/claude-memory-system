@@ -1,7 +1,7 @@
 ---
 name: projects
 description: Manage Claude Code projects - list status, move/rename, merge orphans, cleanup stale data
-user-invocable: true
+user-invokable: true
 ---
 
 # Project Management
