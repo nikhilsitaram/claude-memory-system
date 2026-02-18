@@ -207,36 +207,20 @@ def load_project_history(
     return summaries, total_bytes
 
 
-def _build_synthesis_prompt(
-    exclude_flag: str,
-    pending_dates: list[str],
-    extracted_files: dict[str, str] | None = None,
-) -> str:
-    """
-    Build the embedded synthesis prompt for the subagent.
-
-    Two modes:
-    - Pre-extracted (manual /synthesize): files already on disk, skip extraction
-    - Dates-only (auto-synthesis): subagent extracts each date
-
-    Args:
-        exclude_flag: The --exclude-session flag string (or empty)
-        pending_dates: List of pending date strings (YYYY-MM-DD)
-        extracted_files: Optional dict mapping date -> file path (pre-extracted)
-    """
-    dates_str = ", ".join(pending_dates)
-
-    # Load valid project names from index for scope tagging
+def _get_project_names_str() -> str:
+    """Load registered project names from index, formatted for prompt insertion."""
     projects_index = load_json_file(get_projects_index_file(), {})
     project_names = sorted({
         data.get("name", "")
         for data in projects_index.get("projects", {}).values()
         if data.get("name")
     })
-    project_names_str = ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
+    return ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
 
-    # Common synthesis instructions (shared by both paths)
-    synthesis_instructions = '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
+
+def _build_synthesis_instructions(project_names_str: str) -> str:
+    """Build the shared synthesis instructions block (tagging, routing, dedup, batching)."""
+    return '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
 
 ALWAYS use a single **Write** call per daily file — even if the file already exists.
 If an earlier version exists (from Step 1 Read), merge its content into your output, then Write the complete file.
@@ -292,34 +276,41 @@ Create missing project files from template at `~/.claude/memory/templates/projec
 Do NOT make separate Edit calls per learning — batch them into a single Edit per file.
 Example: old_string ends with section header + comment, new_string = same header + comment + all new entries appended.'''
 
-    if extracted_files:
-        # Pre-extracted path: files already on disk
-        # Count lines per file for Read limit hints
-        file_metadata: list[tuple[str, str, int]] = []
-        for date, path in sorted(extracted_files.items()):
-            try:
-                line_count = Path(path).read_text(encoding="utf-8").count("\n") + 1
-            except IOError:
-                line_count = 2000
-            file_metadata.append((date, path, line_count))
 
-        file_list = "\n".join(
-            f"- **{date}**: `{path}` ({lines} lines)"
-            for date, path, lines in file_metadata
-        )
-        read_transcript_lines = "\n".join(
-            f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}"
-            for date, path, lines in file_metadata
-        )
-        read_daily_lines = "\n".join(
-            f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected"
-            for d in pending_dates
-        )
-        mark_captured_lines = "\n".join(
-            f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&'
-            for date, path in sorted(extracted_files.items())
-        )
-        return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
+def _build_preextracted_prompt(
+    pending_dates: list[str],
+    extracted_files: dict[str, str],
+    synthesis_instructions: str,
+) -> str:
+    """Build synthesis prompt for pre-extracted mode (manual /synthesize)."""
+    dates_str = ", ".join(pending_dates)
+
+    # Count lines per file for Read limit hints
+    file_metadata: list[tuple[str, str, int]] = []
+    for date, path in sorted(extracted_files.items()):
+        try:
+            line_count = Path(path).read_text(encoding="utf-8").count("\n") + 1
+        except IOError:
+            line_count = 2000
+        file_metadata.append((date, path, line_count))
+
+    file_list = "\n".join(
+        f"- **{date}**: `{path}` ({lines} lines)"
+        for date, path, lines in file_metadata
+    )
+    read_transcript_lines = "\n".join(
+        f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}"
+        for date, path, lines in file_metadata
+    )
+    read_daily_lines = "\n".join(
+        f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected"
+        for d in pending_dates
+    )
+    mark_captured_lines = "\n".join(
+        f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&'
+        for date, path in sorted(extracted_files.items())
+    )
+    return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
 
 **CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
 
@@ -370,9 +361,17 @@ python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/s
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
-    else:
-        # Dates-only path: subagent must extract
-        return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
+
+
+def _build_autoextract_prompt(
+    exclude_flag: str,
+    pending_dates: list[str],
+    synthesis_instructions: str,
+) -> str:
+    """Build synthesis prompt for auto-extract mode (auto-synthesis)."""
+    dates_str = ", ".join(pending_dates)
+
+    return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
 
 **CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
 
@@ -422,6 +421,32 @@ python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-ex
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+
+
+def _build_synthesis_prompt(
+    exclude_flag: str,
+    pending_dates: list[str],
+    extracted_files: dict[str, str] | None = None,
+) -> str:
+    """
+    Build the embedded synthesis prompt for the subagent.
+
+    Two modes:
+    - Pre-extracted (manual /synthesize): files already on disk, skip extraction
+    - Dates-only (auto-synthesis): subagent extracts each date
+
+    Args:
+        exclude_flag: The --exclude-session flag string (or empty)
+        pending_dates: List of pending date strings (YYYY-MM-DD)
+        extracted_files: Optional dict mapping date -> file path (pre-extracted)
+    """
+    project_names_str = _get_project_names_str()
+    synthesis_instructions = _build_synthesis_instructions(project_names_str)
+
+    if extracted_files:
+        return _build_preextracted_prompt(pending_dates, extracted_files, synthesis_instructions)
+    else:
+        return _build_autoextract_prompt(exclude_flag, pending_dates, synthesis_instructions)
 
 
 def pre_extract_transcripts(
