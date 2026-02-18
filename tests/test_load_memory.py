@@ -342,13 +342,17 @@ class TestLoadProjectHistory:
 
 
 class TestSynthesisPromptRoutedMarker:
-    """Verify synthesis prompt instructs subagent to prefix routed entries."""
+    """Verify [routed] marking is handled by post-synthesis mark-routed script, not subagent."""
 
-    def test_prompt_contains_routed_instruction(self):
-        """The synthesis prompt must tell the subagent to prefix routed entries."""
+    def test_prompt_does_not_contain_routed_instruction(self):
+        """Subagent should NOT be told to mark [routed] — devtools.py mark-routed handles it."""
         prompt = _build_synthesis_prompt("", ["2026-02-01"])
-        assert "[routed]" in prompt
-        assert "prefix" in prompt.lower() or "mark" in prompt.lower()
+        assert "Dedup marking" not in prompt
+
+    def test_prompt_contains_mark_routed_in_cleanup(self):
+        """Step 3 bash command should run mark-routed after synthesis."""
+        prompt = _build_synthesis_prompt("", ["2026-02-01"])
+        assert "devtools.py mark-routed" in prompt
 
 
 if __name__ == "__main__":

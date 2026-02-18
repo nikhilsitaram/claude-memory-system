@@ -146,6 +146,7 @@ def link_scripts(script_dir: Path) -> None:
         "transcript_ops.py",  # Transcript parsing and extraction (split from indexing)
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
+        "devtools.py",  # Dev diagnostics and mark-routed migration
         "token_usage.py",  # Token usage calculation for /settings
     ]
 

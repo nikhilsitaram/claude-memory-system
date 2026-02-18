@@ -268,15 +268,15 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
         file_marked = 0
         new_lines = []
 
-        in_learnings_or_lessons = False
+        in_routable_section = False
         for line in lines:
-            # Track if we're in a Learnings or Lessons section
+            # Track if we're in a routable section
             if line.startswith("## "):
                 section = line.strip("# ").strip()
-                in_learnings_or_lessons = section in ("Learnings", "Lessons")
+                in_routable_section = section in ("Actions", "Decisions", "Learnings", "Lessons")
 
-            # Only check entries in Learnings/Lessons sections
-            if (in_learnings_or_lessons
+            # Only check entries in routable sections
+            if (in_routable_section
                     and re.match(r"^\s*-\s*\[(?!routed)", line)  # tagged entry, not already routed
                     and any(is_routed_match(line, ltm) for ltm in ltm_entries)):
                 new_lines.append(re.sub(r"^(\s*-\s*)", r"\1[routed]", line))
@@ -295,6 +295,43 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
     action = "Would mark" if dry_run else "Marked"
     print(f"\n{action} {total_marked} entries across all daily files")
+
+    # 3. Deduplicate within each LTM file
+    ltm_files = []
+    if global_ltm.exists():
+        ltm_files.append(global_ltm)
+    if project_dir.exists():
+        ltm_files.extend(project_dir.glob("*-long-term-memory.md"))
+
+    total_deduped = 0
+    for ltm_file in ltm_files:
+        lines = ltm_file.read_text(encoding="utf-8").splitlines()
+        seen_entries: set[str] = set()
+        new_lines = []
+        file_deduped = 0
+
+        for line in lines:
+            # Only dedup dated entry lines
+            if re.match(r"^\s*-\s*\(", line):
+                normalized = line.strip()
+                if normalized in seen_entries:
+                    file_deduped += 1
+                    continue
+                seen_entries.add(normalized)
+            new_lines.append(line)
+
+        if file_deduped:
+            if dry_run:
+                print(f"  {ltm_file.name}: would remove {file_deduped} duplicate entries")
+            else:
+                ltm_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                print(f"  {ltm_file.name}: removed {file_deduped} duplicate entries")
+            total_deduped += file_deduped
+
+    if total_deduped:
+        action = "Would remove" if dry_run else "Removed"
+        print(f"\n{action} {total_deduped} duplicate LTM entries")
+
     return 0
 
 
