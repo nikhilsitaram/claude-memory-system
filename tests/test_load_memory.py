@@ -10,9 +10,12 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-
-from load_memory import (  # noqa: I001
+from load_memory import (
+    _build_autoextract_prompt,
+    _build_preextracted_prompt,
+    _build_synthesis_instructions,
     _build_synthesis_prompt,
+    _get_project_names_str,
     load_daily_summaries,
     load_global_memory,
     load_project_history,
@@ -405,6 +408,202 @@ class TestSynthesisPromptRoutedMarker:
         """Step 3 bash command should run mark-routed after synthesis."""
         prompt = _build_synthesis_prompt("", ["2026-02-01"])
         assert "devtools.py mark-routed" in prompt
+
+
+# =============================================================================
+# _get_project_names_str Tests
+# =============================================================================
+
+
+class TestGetProjectNamesStr:
+    def test_returns_formatted_names(self):
+        index = {"projects": {
+            "/path/a": {"name": "alpha"},
+            "/path/b": {"name": "beta"},
+        }}
+        with mock.patch("load_memory.load_json_file", return_value=index):
+            result = _get_project_names_str()
+        assert "`alpha`" in result
+        assert "`beta`" in result
+        # Sorted order
+        assert result.index("`alpha`") < result.index("`beta`")
+
+    def test_returns_none_registered_when_empty(self):
+        with mock.patch("load_memory.load_json_file", return_value={}):
+            result = _get_project_names_str()
+        assert result == "(none registered)"
+
+    def test_deduplicates_names(self):
+        index = {"projects": {
+            "/path/a": {"name": "same"},
+            "/path/b": {"name": "same"},
+        }}
+        with mock.patch("load_memory.load_json_file", return_value=index):
+            result = _get_project_names_str()
+        assert result.count("`same`") == 1
+
+    def test_skips_entries_without_name(self):
+        index = {"projects": {
+            "/path/a": {"name": "valid"},
+            "/path/b": {},
+            "/path/c": {"name": ""},
+        }}
+        with mock.patch("load_memory.load_json_file", return_value=index):
+            result = _get_project_names_str()
+        assert "`valid`" in result
+        assert result.count("`") == 2  # only `valid`
+
+
+# =============================================================================
+# _build_synthesis_instructions Tests
+# =============================================================================
+
+
+class TestBuildSynthesisInstructions:
+    def test_contains_tag_format(self):
+        instructions = _build_synthesis_instructions("`alpha`, `beta`")
+        assert "[scope/type]" in instructions
+        assert "`alpha`, `beta`" in instructions
+
+    def test_contains_routing_rules(self):
+        instructions = _build_synthesis_instructions("(none registered)")
+        assert "Long-term routing" in instructions
+        assert "DEDUP REQUIREMENT" in instructions
+        assert "GRANULARITY CAP" in instructions
+
+    def test_contains_batching_requirement(self):
+        instructions = _build_synthesis_instructions("`proj`")
+        assert "CRITICAL batching requirement" in instructions
+
+    def test_contains_daily_summary_template(self):
+        instructions = _build_synthesis_instructions("`proj`")
+        assert "## Actions" in instructions
+        assert "## Decisions" in instructions
+        assert "## Learnings" in instructions
+        assert "## Lessons" in instructions
+
+
+# =============================================================================
+# _build_preextracted_prompt Tests
+# =============================================================================
+
+
+class TestBuildPreextractedPrompt:
+    def test_contains_file_references(self, tmp_path):
+        transcript = tmp_path / "extract-2026-02-01.txt"
+        transcript.write_text("line1\nline2\nline3\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(transcript)},
+            "SYNTHESIS_INSTRUCTIONS_PLACEHOLDER",
+        )
+        assert str(transcript) in prompt
+        assert "4 lines" in prompt  # 3 newlines + 1
+
+    def test_contains_synthesis_instructions(self, tmp_path):
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(transcript)},
+            "MY_CUSTOM_INSTRUCTIONS",
+        )
+        assert "MY_CUSTOM_INSTRUCTIONS" in prompt
+
+    def test_contains_mark_captured_commands(self, tmp_path):
+        transcript = tmp_path / "extract-2026-02-01.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(transcript)},
+            "instructions",
+        )
+        assert "mark-captured --sidecar" in prompt
+
+    def test_contains_read_instructions_for_all_dates(self, tmp_path):
+        f1 = tmp_path / "extract-01.txt"
+        f2 = tmp_path / "extract-02.txt"
+        f1.write_text("a\n")
+        f2.write_text("b\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01", "2026-02-02"],
+            {"2026-02-01": str(f1), "2026-02-02": str(f2)},
+            "instructions",
+        )
+        assert "2026-02-01" in prompt
+        assert "2026-02-02" in prompt
+        assert "Read(`~/.claude/memory/daily/2026-02-01.md`)" in prompt
+        assert "Read(`~/.claude/memory/daily/2026-02-02.md`)" in prompt
+
+    def test_handles_unreadable_file(self, tmp_path):
+        """Falls back to 2000 line count when file is unreadable."""
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": "/nonexistent/file.txt"},
+            "instructions",
+        )
+        assert "2000 lines" in prompt
+
+
+# =============================================================================
+# _build_autoextract_prompt Tests
+# =============================================================================
+
+
+class TestBuildAutoextractPrompt:
+    def test_contains_extract_command(self):
+        prompt = _build_autoextract_prompt(" --exclude-session abc", ["2026-02-01"], "instructions")
+        assert "indexing.py extract" in prompt
+        assert "--exclude-session abc" in prompt
+
+    def test_contains_synthesis_instructions(self):
+        prompt = _build_autoextract_prompt("", ["2026-02-01"], "MY_INSTRUCTIONS")
+        assert "MY_INSTRUCTIONS" in prompt
+
+    def test_contains_all_dates(self):
+        prompt = _build_autoextract_prompt("", ["2026-02-01", "2026-02-02"], "instructions")
+        assert "2026-02-01, 2026-02-02" in prompt
+
+    def test_contains_mark_captured_and_cleanup(self):
+        prompt = _build_autoextract_prompt("", ["2026-02-01"], "instructions")
+        assert "mark-captured --sidecar" in prompt
+        assert "devtools.py mark-routed" in prompt
+        assert "decay.py" in prompt
+
+
+# =============================================================================
+# _build_synthesis_prompt integration Tests
+# =============================================================================
+
+
+class TestBuildSynthesisPromptIntegration:
+    """Test the orchestrator dispatches correctly to sub-functions."""
+
+    def test_autoextract_path(self):
+        """Without extracted_files, returns autoextract prompt."""
+        prompt = _build_synthesis_prompt("", ["2026-02-01"])
+        assert "indexing.py extract" in prompt
+        assert "Pre-extracted transcript files" not in prompt
+
+    def test_preextracted_path(self, tmp_path):
+        """With extracted_files, returns preextracted prompt."""
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_synthesis_prompt(
+            "", ["2026-02-01"],
+            extracted_files={"2026-02-01": str(transcript)},
+        )
+        assert "Pre-extracted transcript files" in prompt
+        assert "indexing.py extract YYYY-MM-DD" not in prompt
+
+    def test_exclude_flag_passed_to_autoextract(self):
+        prompt = _build_synthesis_prompt(" --exclude-session xyz", ["2026-02-01"])
+        assert "--exclude-session xyz" in prompt
 
 
 if __name__ == "__main__":
