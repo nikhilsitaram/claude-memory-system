@@ -2,6 +2,7 @@
 .claude/
 .agents/
 .opencode/
+.worktrees/
 
 # Python
 __pycache__/
