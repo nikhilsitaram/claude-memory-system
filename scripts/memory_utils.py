@@ -44,6 +44,8 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Utilities:
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
 #   load_json_file(path, default?) -> Any  save_json_file(path, data) -> bool
+# Sessions index:
+#   load_sessions_index(folder) -> dict    get_sessions_original_path(data) -> str
 # =============================================================================
 
 
@@ -382,6 +384,32 @@ def save_json_file(filepath: Path, data: Any, indent: int = 2) -> bool:
     except IOError as e:
         print(f"Error: Could not save {filepath}: {e}", file=sys.stderr)
         return False
+
+
+def load_sessions_index(folder_path: Path) -> dict:
+    """
+    Load and parse sessions-index.json from a Claude Code project folder.
+
+    Returns the parsed JSON dict, or empty dict if missing/invalid.
+    """
+    return load_json_file(folder_path / "sessions-index.json", default={})
+
+
+def get_sessions_original_path(data: dict) -> str:
+    """
+    Extract the original project path from parsed sessions-index data.
+
+    Tries root-level 'originalPath' first (legacy/manual format),
+    falls back to entries[0].projectPath (Claude Code's actual format).
+
+    Returns empty string if not found.
+    """
+    original_path = data.get("originalPath", "")
+    if not original_path:
+        entries = data.get("entries", [])
+        if entries:
+            original_path = entries[0].get("projectPath", "")
+    return original_path
 
 
 def project_name_to_filename(project_name: str) -> str:
