@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""
-Unit tests for devtools.py — keyword dedup and validate-ltm.
-
-Run with: python -m pytest tests/test_devtools.py -v
-"""
+"""Unit tests for devtools.py — keyword dedup and validate-ltm."""
 
 import argparse
-import sys
-import tempfile
-from pathlib import Path
 from unittest import mock
 
 import pytest
-
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from memory_utils import (  # noqa: E402
+from devtools import cmd_mark_routed, cmd_validate_ltm
+from memory_utils import (
     extract_entry_keywords,
     is_routed_match,
 )
@@ -88,11 +77,8 @@ class TestKeywordDedupEdgeCases:
         """Short entries with one shared keyword — should depend on threshold."""
         entry1 = "- (2026-01-01) [gotcha] SQLAlchemy needs commit"
         entry2 = "- (2026-01-01) [gotcha] SQLAlchemy requires flush"
-        # Both have "sqlalchemy", one has "commit", other has "flush"+"requires"
         assert "sqlalchemy" in extract_entry_keywords(entry1)
         assert "sqlalchemy" in extract_entry_keywords(entry2)
-        # Low overlap ratio — only "sqlalchemy"+"needs"/"requires" overlap
-        # Should not match at 0.6 threshold
         assert is_routed_match(entry1, entry2, threshold=0.6) is False
 
     def test_threshold_boundary(self):
@@ -117,12 +103,20 @@ class TestKeywordDedupEdgeCases:
 class TestMarkRoutedKeywordDedup:
     """Test that cmd_mark_routed removes near-duplicates within LTM files."""
 
-    def _make_ltm_file(self, tmpdir, filename, content):
-        p = Path(tmpdir) / filename
-        p.write_text(content, encoding="utf-8")
-        return p
+    def _run_mark_routed(self, tmp_path, ltm_content, dry_run=False):
+        """Write LTM content, run cmd_mark_routed, return result text."""
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(ltm_content, encoding="utf-8")
+        (tmp_path / "project-memory").mkdir(exist_ok=True)
+        (tmp_path / "daily").mkdir(exist_ok=True)
+        with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             mock.patch("memory_utils.get_daily_dir", return_value=tmp_path / "daily"):
+            args = argparse.Namespace(dry_run=dry_run)
+            cmd_mark_routed(args)
+        return ltm.read_text(encoding="utf-8")
 
-    def test_exact_duplicates_removed(self):
+    def test_exact_duplicates_removed(self, tmp_path):
         """Exact duplicate lines within LTM should be removed."""
         content = """# Test
 ## Key Learnings
@@ -131,26 +125,11 @@ class TestMarkRoutedKeywordDedup:
 - (2026-02-15) [gotcha] First entry about something
 - (2026-02-16) [pattern] Different entry
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = self._make_ltm_file(tmpdir, "global-long-term-memory.md", content)
+        result = self._run_mark_routed(tmp_path, content)
+        assert result.count("First entry about something") == 1
+        assert "Different entry" in result
 
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=Path(tmpdir) / "project-memory"), \
-                 mock.patch("memory_utils.get_daily_dir", return_value=Path(tmpdir) / "daily"):
-                # Create empty dirs so they exist
-                (Path(tmpdir) / "project-memory").mkdir()
-                (Path(tmpdir) / "daily").mkdir()
-
-                from devtools import cmd_mark_routed
-                args = argparse.Namespace(dry_run=False)
-                cmd_mark_routed(args)
-
-                result = ltm.read_text(encoding="utf-8")
-                # Should only have one copy of the duplicate
-                assert result.count("First entry about something") == 1
-                assert "Different entry" in result
-
-    def test_near_duplicates_removed(self):
+    def test_near_duplicates_removed(self, tmp_path):
         """Near-duplicate lines (high keyword overlap above 0.7) should be removed."""
         content = """# Test
 ## Key Learnings
@@ -159,27 +138,13 @@ class TestMarkRoutedKeywordDedup:
 - (2026-02-15) [gotcha] Running commands from wrong directory in worktree setups causes script and output mismatch using worktree edits instead
 - (2026-02-16) [pattern] Something completely unrelated about databases
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = self._make_ltm_file(tmpdir, "global-long-term-memory.md", content)
+        result = self._run_mark_routed(tmp_path, content)
+        lines = [ln for ln in result.splitlines() if ln.startswith("- (")]
+        assert len(lines) == 2
+        assert "main repo" in lines[0]
+        assert "databases" in lines[1]
 
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=Path(tmpdir) / "project-memory"), \
-                 mock.patch("memory_utils.get_daily_dir", return_value=Path(tmpdir) / "daily"):
-                (Path(tmpdir) / "project-memory").mkdir()
-                (Path(tmpdir) / "daily").mkdir()
-
-                from devtools import cmd_mark_routed
-                args = argparse.Namespace(dry_run=False)
-                cmd_mark_routed(args)
-
-                result = ltm.read_text(encoding="utf-8")
-                # First entry kept, near-dup removed, unrelated kept
-                lines = [ln for ln in result.splitlines() if ln.startswith("- (")]
-                assert len(lines) == 2
-                assert "main repo" in lines[0]
-                assert "databases" in lines[1]
-
-    def test_different_entries_kept(self):
+    def test_different_entries_kept(self, tmp_path):
         """Genuinely different entries should all be kept."""
         content = """# Test
 ## Key Learnings
@@ -188,24 +153,11 @@ class TestMarkRoutedKeywordDedup:
 - (2026-02-16) [pattern] Git merge strategies and rebase workflow
 - (2026-02-17) [tip] WSL2 idle timeout configuration
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = self._make_ltm_file(tmpdir, "global-long-term-memory.md", content)
+        result = self._run_mark_routed(tmp_path, content)
+        lines = [ln for ln in result.splitlines() if ln.startswith("- (")]
+        assert len(lines) == 3
 
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=Path(tmpdir) / "project-memory"), \
-                 mock.patch("memory_utils.get_daily_dir", return_value=Path(tmpdir) / "daily"):
-                (Path(tmpdir) / "project-memory").mkdir()
-                (Path(tmpdir) / "daily").mkdir()
-
-                from devtools import cmd_mark_routed
-                args = argparse.Namespace(dry_run=False)
-                cmd_mark_routed(args)
-
-                result = ltm.read_text(encoding="utf-8")
-                lines = [ln for ln in result.splitlines() if ln.startswith("- (")]
-                assert len(lines) == 3
-
-    def test_dry_run_does_not_modify(self):
+    def test_dry_run_does_not_modify(self, tmp_path):
         """Dry run should not modify the file."""
         content = """# Test
 ## Key Learnings
@@ -213,21 +165,10 @@ class TestMarkRoutedKeywordDedup:
 - (2026-02-15) [gotcha] First entry about something
 - (2026-02-15) [gotcha] First entry about something
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = self._make_ltm_file(tmpdir, "global-long-term-memory.md", content)
-            original = ltm.read_text(encoding="utf-8")
-
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=Path(tmpdir) / "project-memory"), \
-                 mock.patch("memory_utils.get_daily_dir", return_value=Path(tmpdir) / "daily"):
-                (Path(tmpdir) / "project-memory").mkdir()
-                (Path(tmpdir) / "daily").mkdir()
-
-                from devtools import cmd_mark_routed
-                args = argparse.Namespace(dry_run=True)
-                cmd_mark_routed(args)
-
-                assert ltm.read_text(encoding="utf-8") == original
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(content, encoding="utf-8")
+        result = self._run_mark_routed(tmp_path, content, dry_run=True)
+        assert result == content
 
 
 # ── validate-ltm integration ──
@@ -236,7 +177,24 @@ class TestMarkRoutedKeywordDedup:
 class TestValidateLtm:
     """Test the validate-ltm command."""
 
-    def test_clean_file_no_issues(self):
+    def _validate(self, tmp_path, global_content, project_files=None):
+        """Set up LTM environment and run validate, return exit code."""
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(global_content, encoding="utf-8")
+        project_dir = tmp_path / "project-memory"
+        project_dir.mkdir(exist_ok=True)
+        if project_files:
+            for name, file_content in project_files.items():
+                (project_dir / name).write_text(file_content, encoding="utf-8")
+        index_file = tmp_path / "projects-index.json"
+        index_file.write_text('{"projects": {}}', encoding="utf-8")
+        with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=project_dir), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=index_file):
+            args = argparse.Namespace()
+            return cmd_validate_ltm(args)
+
+    def test_clean_file_no_issues(self, tmp_path):
         """A clean LTM file should report no issues."""
         content = """# Test
 ## Key Learnings
@@ -244,69 +202,28 @@ class TestValidateLtm:
 - (2026-02-15) [gotcha] MCP resource handlers block server initialization if slow
 - (2026-02-16) [pattern] Git merge strategies include squash rebase and merge commit
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = Path(tmpdir) / "global-long-term-memory.md"
-            ltm.write_text(content, encoding="utf-8")
-            project_dir = Path(tmpdir) / "project-memory"
-            project_dir.mkdir()
-            index_file = Path(tmpdir) / "projects-index.json"
-            index_file.write_text('{"projects": {}}', encoding="utf-8")
+        assert self._validate(tmp_path, content) == 0
 
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=project_dir), \
-                 mock.patch("memory_utils.get_projects_index_file", return_value=index_file):
-                from devtools import cmd_validate_ltm
-                args = argparse.Namespace()
-                result = cmd_validate_ltm(args)
-                assert result == 0
-
-    def test_exact_duplicate_detected(self):
+    def test_exact_duplicate_detected(self, tmp_path):
         content = """# Test
 ## Key Learnings
 
 - (2026-02-15) [gotcha] Same entry here
 - (2026-02-15) [gotcha] Same entry here
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = Path(tmpdir) / "global-long-term-memory.md"
-            ltm.write_text(content, encoding="utf-8")
-            project_dir = Path(tmpdir) / "project-memory"
-            project_dir.mkdir()
-            index_file = Path(tmpdir) / "projects-index.json"
-            index_file.write_text('{"projects": {}}', encoding="utf-8")
+        assert self._validate(tmp_path, content) == 1
 
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=project_dir), \
-                 mock.patch("memory_utils.get_projects_index_file", return_value=index_file):
-                from devtools import cmd_validate_ltm
-                args = argparse.Namespace()
-                result = cmd_validate_ltm(args)
-                assert result == 1  # Issues found
-
-    def test_unregistered_project_detected(self):
-        content = """# Test
+    def test_unregistered_project_detected(self, tmp_path):
+        project_content = """# Test
 ## Key Learnings
 
 - (2026-02-15) [gotcha] Some entry
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ltm = Path(tmpdir) / "global-long-term-memory.md"
-            ltm.write_text("# Empty\n", encoding="utf-8")
-            project_dir = Path(tmpdir) / "project-memory"
-            project_dir.mkdir()
-            # Create a project file that's NOT in the index
-            orphan = project_dir / "fake-project-long-term-memory.md"
-            orphan.write_text(content, encoding="utf-8")
-            index_file = Path(tmpdir) / "projects-index.json"
-            index_file.write_text('{"projects": {}}', encoding="utf-8")
-
-            with mock.patch("memory_utils.get_global_memory_file", return_value=ltm), \
-                 mock.patch("memory_utils.get_project_memory_dir", return_value=project_dir), \
-                 mock.patch("memory_utils.get_projects_index_file", return_value=index_file):
-                from devtools import cmd_validate_ltm
-                args = argparse.Namespace()
-                result = cmd_validate_ltm(args)
-                assert result == 1
+        assert self._validate(
+            tmp_path,
+            "# Empty\n",
+            project_files={"fake-project-long-term-memory.md": project_content},
+        ) == 1
 
 
 if __name__ == "__main__":

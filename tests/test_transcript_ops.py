@@ -5,20 +5,11 @@ Unit tests for transcript_ops.py
 Run with: python -m pytest tests/test_transcript_ops.py -v
 """
 
-import json
-import sys
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest import mock
 
 import pytest
-
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from indexing import SessionInfo
+from helpers import make_jsonl_content, make_session_info  # noqa: I001
 from transcript_ops import (
     extract_transcripts,
     format_transcripts_for_output,
@@ -26,68 +17,32 @@ from transcript_ops import (
 )
 
 # =============================================================================
-# Helpers
-# =============================================================================
-
-
-def make_session_info(
-    session_id: str = "test-session",
-    transcript_path: Path = Path("/tmp/test.jsonl"),
-    file_size: int = 2000,
-    project_path: str | None = None,
-    created: datetime | None = None,
-    file_mtime: datetime | None = None,
-) -> SessionInfo:
-    return SessionInfo(
-        session_id=session_id,
-        transcript_path=transcript_path,
-        project_hash="test-hash",
-        file_mtime=file_mtime or datetime.now(timezone.utc),
-        file_size=file_size,
-        project_path=project_path,
-        created=created,
-    )
-
-
-def make_jsonl_content(messages: list[tuple[str, str]]) -> str:
-    """Create JSONL content from (role, text) pairs."""
-    lines = []
-    for role, text in messages:
-        lines.append(json.dumps({
-            "type": role,
-            "message": {"role": role, "content": text},
-        }))
-    return "\n".join(lines) + "\n"
-
-
-# =============================================================================
 # extract_transcripts Tests
 # =============================================================================
 
 
 class TestExtractTranscripts:
-    def test_extracts_specific_day(self):
+    def test_extracts_specific_day(self, tmp_path):
         """Filters to only the requested day."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a transcript file with assistant content
-            transcript = Path(tmpdir) / "session.jsonl"
-            transcript.write_text(make_jsonl_content([
-                ("assistant", "I found the bug in the code"),
-            ]))
+        # Create a transcript file with assistant content
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "I found the bug in the code"),
+        ]))
 
-            session = make_session_info(
-                session_id="s1",
-                transcript_path=transcript,
-                created=datetime(2026, 2, 5, 12, 0, tzinfo=timezone.utc),
-            )
+        session = make_session_info(
+            session_id="s1",
+            transcript_path=transcript,
+            created=datetime(2026, 2, 5, 12, 0, tzinfo=timezone.utc),
+        )
 
-            with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-                 mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
-                 mock.patch("transcript_ops.get_session_date", return_value="2026-02-05"):
-                result = extract_transcripts(specific_day="2026-02-05")
-                assert "2026-02-05" in result
-                assert len(result["2026-02-05"]) == 1
-                assert result["2026-02-05"][0]["session_id"] == "s1"
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-05"):
+            result = extract_transcripts(specific_day="2026-02-05")
+            assert "2026-02-05" in result
+            assert len(result["2026-02-05"]) == 1
+            assert result["2026-02-05"][0]["session_id"] == "s1"
 
     def test_excludes_non_matching_day(self):
         """Sessions from other days are excluded when specific_day is set."""
@@ -150,7 +105,7 @@ class TestGetPendingDays:
 
 
 class TestFormatWithLineBudget:
-    def _make_daily_data(self, num_messages: int, content_lines: int = 1) -> dict:
+    def _make_daily_data(self, num_messages, content_lines=1):
         """Create daily_data with one session containing N messages."""
         msg_content = "\n".join(f"Line {i}" for i in range(content_lines))
         messages = [

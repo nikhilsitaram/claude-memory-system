@@ -6,22 +6,14 @@ Run with: python -m pytest tests/test_indexing.py -v
 """
 
 import json
-import os
-import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
-
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
+from helpers import make_jsonl_line, make_session_info  # noqa: I001
 from indexing import (
     MIN_SESSION_SIZE_BYTES,
-    SessionInfo,
     build_projects_index,
     get_session_date,
     has_assistant_message,
@@ -33,36 +25,6 @@ from transcript_ops import (
     parse_jsonl_file,
     should_skip_message,
 )
-
-# =============================================================================
-# Helper to create JSONL content
-# =============================================================================
-
-
-def make_jsonl_line(role: str, content: str) -> str:
-    return json.dumps({
-        "type": role,
-        "message": {"role": role, "content": content},
-    })
-
-
-def make_session_info(
-    session_id: str = "test-session",
-    transcript_path: Path = Path("/tmp/test.jsonl"),
-    file_size: int = 2000,
-    project_path: str | None = None,
-    created: datetime | None = None,
-) -> SessionInfo:
-    return SessionInfo(
-        session_id=session_id,
-        transcript_path=transcript_path,
-        project_hash="test-hash",
-        file_mtime=datetime.now(timezone.utc),
-        file_size=file_size,
-        project_path=project_path,
-        created=created,
-    )
-
 
 # =============================================================================
 # Content Extraction Tests
@@ -106,24 +68,22 @@ class TestExtractTextContent:
 # =============================================================================
 
 
-class TestShouldSkipMessage:
-    def test_skill_injection(self):
-        assert should_skip_message("Base directory for this skill: /home/user/.claude/skills/test")
+@pytest.mark.parametrize("content", [
+    "Base directory for this skill: /home/user/.claude/skills/test",
+    "<command-name>/synthesize</command-name> some content",
+    "Some text with <system-reminder> embedded",
+    "[Request interrupted by user]",
+])
+def test_should_skip(content):
+    assert should_skip_message(content)
 
-    def test_command_name_tag(self):
-        assert should_skip_message("<command-name>/synthesize</command-name> some content")
 
-    def test_system_reminder(self):
-        assert should_skip_message("Some text with <system-reminder> embedded")
-
-    def test_user_interruption(self):
-        assert should_skip_message("[Request interrupted by user]")
-
-    def test_normal_content(self):
-        assert not should_skip_message("I've analyzed the codebase and found the following patterns")
-
-    def test_empty_content(self):
-        assert not should_skip_message("")
+@pytest.mark.parametrize("content", [
+    "I've analyzed the codebase and found the following patterns",
+    "",
+])
+def test_should_not_skip(content):
+    assert not should_skip_message(content)
 
 
 # =============================================================================
@@ -132,67 +92,43 @@ class TestShouldSkipMessage:
 
 
 class TestHasAssistantMessage:
-    def test_with_assistant_message(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(make_jsonl_line("user", "hello") + "\n")
-            f.write(make_jsonl_line("assistant", "hi there") + "\n")
-            f.flush()
-            try:
-                assert has_assistant_message(Path(f.name)) is True
-            finally:
-                os.unlink(f.name)
+    def test_with_assistant_message(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(
+            make_jsonl_line("user", "hello") + "\n"
+            + make_jsonl_line("assistant", "hi there") + "\n"
+        )
+        assert has_assistant_message(f) is True
 
-    def test_without_assistant_message(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(make_jsonl_line("user", "hello") + "\n")
-            f.flush()
-            try:
-                assert has_assistant_message(Path(f.name)) is False
-            finally:
-                os.unlink(f.name)
+    def test_without_assistant_message(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(make_jsonl_line("user", "hello") + "\n")
+        assert has_assistant_message(f) is False
 
-    def test_empty_file(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write("")
-            f.flush()
-            try:
-                assert has_assistant_message(Path(f.name)) is False
-            finally:
-                os.unlink(f.name)
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text("")
+        assert has_assistant_message(f) is False
 
-    def test_metadata_only(self):
+    def test_metadata_only(self, tmp_path):
         """Sessions with only metadata (file-history-snapshot, progress) should return False."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(json.dumps({"type": "progress", "data": {}}) + "\n")
-            f.write(json.dumps({"type": "file-history-snapshot", "files": []}) + "\n")
-            f.flush()
-            try:
-                assert has_assistant_message(Path(f.name)) is False
-            finally:
-                os.unlink(f.name)
+        f = tmp_path / "test.jsonl"
+        f.write_text(
+            json.dumps({"type": "progress", "data": {}}) + "\n"
+            + json.dumps({"type": "file-history-snapshot", "files": []}) + "\n"
+        )
+        assert has_assistant_message(f) is False
 
     def test_nonexistent_file(self):
         assert has_assistant_message(Path("/nonexistent/file.jsonl")) is False
 
-    def test_invalid_json_lines(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write("not json\n")
-            f.write(make_jsonl_line("assistant", "valid") + "\n")
-            f.flush()
-            try:
-                assert has_assistant_message(Path(f.name)) is True
-            finally:
-                os.unlink(f.name)
+    def test_invalid_json_lines(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(
+            "not json\n"
+            + make_jsonl_line("assistant", "valid") + "\n"
+        )
+        assert has_assistant_message(f) is True
 
 
 # =============================================================================
@@ -201,58 +137,39 @@ class TestHasAssistantMessage:
 
 
 class TestParseJsonlFile:
-    def test_parses_assistant_messages(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(make_jsonl_line("assistant", "I found the bug") + "\n")
-            f.flush()
-            try:
-                messages = parse_jsonl_file(Path(f.name))
-                assert len(messages) == 1
-                assert messages[0]["role"] == "assistant"
-                assert "bug" in messages[0]["content"]
-            finally:
-                os.unlink(f.name)
+    def test_parses_assistant_messages(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(make_jsonl_line("assistant", "I found the bug") + "\n")
+        messages = parse_jsonl_file(f)
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert "bug" in messages[0]["content"]
 
-    def test_skips_user_messages(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(make_jsonl_line("user", "Fix the bug") + "\n")
-            f.write(make_jsonl_line("assistant", "I found the issue") + "\n")
-            f.flush()
-            try:
-                messages = parse_jsonl_file(Path(f.name))
-                assert len(messages) == 1
-                assert messages[0]["role"] == "assistant"
-            finally:
-                os.unlink(f.name)
+    def test_skips_user_messages(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(
+            make_jsonl_line("user", "Fix the bug") + "\n"
+            + make_jsonl_line("assistant", "I found the issue") + "\n"
+        )
+        messages = parse_jsonl_file(f)
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
 
-    def test_skips_system_reminders(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.write(make_jsonl_line("assistant", "Normal response") + "\n")
-            f.write(make_jsonl_line("assistant", "Response with <system-reminder> injected") + "\n")
-            f.flush()
-            try:
-                messages = parse_jsonl_file(Path(f.name))
-                assert len(messages) == 1
-                assert "Normal response" in messages[0]["content"]
-            finally:
-                os.unlink(f.name)
+    def test_skips_system_reminders(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text(
+            make_jsonl_line("assistant", "Normal response") + "\n"
+            + make_jsonl_line("assistant", "Response with <system-reminder> injected") + "\n"
+        )
+        messages = parse_jsonl_file(f)
+        assert len(messages) == 1
+        assert "Normal response" in messages[0]["content"]
 
-    def test_empty_file(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
-            f.flush()
-            try:
-                messages = parse_jsonl_file(Path(f.name))
-                assert messages == []
-            finally:
-                os.unlink(f.name)
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "test.jsonl"
+        f.write_text("")
+        messages = parse_jsonl_file(f)
+        assert messages == []
 
     def test_nonexistent_file(self):
         messages = parse_jsonl_file(Path("/nonexistent/file.jsonl"))
@@ -265,7 +182,7 @@ class TestParseJsonlFile:
 
 
 class TestListPendingSessions:
-    def _make_sessions(self) -> list[SessionInfo]:
+    def _make_sessions(self):
         return [
             make_session_info("captured-1", file_size=2000),
             make_session_info("pending-1", file_size=2000),
@@ -411,6 +328,16 @@ def _make_session_entry(session_id, created, project_path=None):
 
 
 class TestBuildProjectsIndex:
+    @pytest.fixture()
+    def env(self, tmp_path):
+        projects_dir = tmp_path / "projects"
+        memory_dir = tmp_path / "memory"
+        index_file = memory_dir / "projects-index.json"
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+             mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+             mock.patch("indexing.get_projects_index_file", return_value=index_file):
+            yield projects_dir, memory_dir, index_file
+
     def _setup_project(self, projects_dir, folder_name, original_path, entries):
         """Create a project folder with sessions-index.json."""
         folder = projects_dir / folder_name
@@ -420,262 +347,194 @@ class TestBuildProjectsIndex:
             json.dumps(index_data), encoding="utf-8"
         )
 
-    def test_basic_project_discovery(self):
+    def test_basic_project_discovery(self, env):
         """Smoke test: function runs and finds a project."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir,
-                "-home-user-myproject",
-                "/home/user/myproject",
-                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
-            )
+        self._setup_project(
+            projects_dir,
+            "-home-user-myproject",
+            "/home/user/myproject",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            projects = result["projects"]
-            assert len(projects) == 1
-            data = list(projects.values())[0]
-            assert data["name"] == "myproject"
-            assert "2026-02-01" in data["workDays"]
+        projects = result["projects"]
+        assert len(projects) == 1
+        data = list(projects.values())[0]
+        assert data["name"] == "myproject"
+        assert "2026-02-01" in data["workDays"]
 
-    def test_extracts_project_name_from_path(self):
+    def test_extracts_project_name_from_path(self, env):
         """Project name is the last component of originalPath."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir,
-                "-home-user-swyfft-projects-tableau-agency-overview",
-                "/home/user/swyfft/projects/tableau/agency-overview",
-                [_make_session_entry("s1", "2026-02-06T10:00:00Z")],
-            )
+        self._setup_project(
+            projects_dir,
+            "-home-user-swyfft-projects-tableau-agency-overview",
+            "/home/user/swyfft/projects/tableau/agency-overview",
+            [_make_session_entry("s1", "2026-02-06T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            projects = result["projects"]
-            data = list(projects.values())[0]
-            assert data["name"] == "agency-overview"
+        projects = result["projects"]
+        data = list(projects.values())[0]
+        assert data["name"] == "agency-overview"
 
-    def test_multiple_work_days(self):
+    def test_multiple_work_days(self, env):
         """Sessions on different days produce multiple work days."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir,
-                "-home-user-proj",
-                "/home/user/proj",
-                [
-                    _make_session_entry("s1", "2026-02-01T10:00:00Z"),
-                    _make_session_entry("s2", "2026-02-01T14:00:00Z"),
-                    _make_session_entry("s3", "2026-02-03T09:00:00Z"),
-                ],
-            )
+        self._setup_project(
+            projects_dir,
+            "-home-user-proj",
+            "/home/user/proj",
+            [
+                _make_session_entry("s1", "2026-02-01T10:00:00Z"),
+                _make_session_entry("s2", "2026-02-01T14:00:00Z"),
+                _make_session_entry("s3", "2026-02-03T09:00:00Z"),
+            ],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            data = list(result["projects"].values())[0]
-            assert data["workDays"] == ["2026-02-01", "2026-02-03"]
+        data = list(result["projects"].values())[0]
+        assert data["workDays"] == ["2026-02-01", "2026-02-03"]
 
-    def test_multiple_projects(self):
+    def test_multiple_projects(self, env):
         """Discovers multiple projects from separate folders."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir, "-proj-a", "/home/user/proj-a",
-                [_make_session_entry("s1", "2026-01-15T10:00:00Z")],
-            )
-            self._setup_project(
-                projects_dir, "-proj-b", "/home/user/proj-b",
-                [_make_session_entry("s2", "2026-01-20T10:00:00Z")],
-            )
+        self._setup_project(
+            projects_dir, "-proj-a", "/home/user/proj-a",
+            [_make_session_entry("s1", "2026-01-15T10:00:00Z")],
+        )
+        self._setup_project(
+            projects_dir, "-proj-b", "/home/user/proj-b",
+            [_make_session_entry("s2", "2026-01-20T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 2
-            names = {d["name"] for d in result["projects"].values()}
-            assert names == {"proj-a", "proj-b"}
+        assert len(result["projects"]) == 2
+        names = {d["name"] for d in result["projects"].values()}
+        assert names == {"proj-a", "proj-b"}
 
-    def test_skips_folder_without_sessions_index(self):
+    def test_skips_folder_without_sessions_index(self, env):
         """Folders without sessions-index.json are ignored."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            # Folder with no sessions-index.json
-            (projects_dir / "empty-folder").mkdir(parents=True)
-            # Folder with sessions-index.json
-            self._setup_project(
-                projects_dir, "-real-proj", "/home/user/real-proj",
-                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
-            )
+        # Folder with no sessions-index.json
+        (projects_dir / "empty-folder").mkdir(parents=True)
+        # Folder with sessions-index.json
+        self._setup_project(
+            projects_dir, "-real-proj", "/home/user/real-proj",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 1
+        assert len(result["projects"]) == 1
 
-    def test_skips_entries_without_created(self):
+    def test_skips_entries_without_created(self, env):
         """Entries missing created timestamp are skipped."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            entry_no_created = {
-                "sessionId": "s1",
-                "fullPath": "/tmp/s1.jsonl",
-                "fileMtime": 1770000000000,
-            }
-            self._setup_project(
-                projects_dir, "-proj", "/home/user/proj",
-                [entry_no_created],
-            )
+        entry_no_created = {
+            "sessionId": "s1",
+            "fullPath": "/tmp/s1.jsonl",
+            "fileMtime": 1770000000000,
+        }
+        self._setup_project(
+            projects_dir, "-proj", "/home/user/proj",
+            [entry_no_created],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            # No work days extracted -> project skipped
-            assert len(result["projects"]) == 0
+        # No work days extracted -> project skipped
+        assert len(result["projects"]) == 0
 
-    def test_empty_projects_dir(self):
+    def test_empty_projects_dir(self, env):
         """Empty projects directory returns no projects."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
+        projects_dir.mkdir()
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 0
+        assert len(result["projects"]) == 0
 
-    def test_nonexistent_projects_dir(self):
+    def test_nonexistent_projects_dir(self, env):
         """Missing projects directory returns empty result."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "nonexistent"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        result = build_projects_index()
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        assert result == {"projects": {}}
 
-            assert result == {"projects": {}}
-
-    def test_case_insensitive_path_merging(self):
+    def test_case_insensitive_path_merging(self, env):
         """Same project path with different cases merges work days."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir, "-folder-a", "/home/user/MyProject",
-                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
-            )
-            self._setup_project(
-                projects_dir, "-folder-b", "/home/user/myproject",
-                [_make_session_entry("s2", "2026-02-03T10:00:00Z")],
-            )
+        self._setup_project(
+            projects_dir, "-folder-a", "/home/user/MyProject",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
+        self._setup_project(
+            projects_dir, "-folder-b", "/home/user/myproject",
+            [_make_session_entry("s2", "2026-02-03T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 1
-            data = list(result["projects"].values())[0]
-            assert len(data["workDays"]) == 2
-            assert len(data["encodedPaths"]) == 2
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert len(data["workDays"]) == 2
+        assert len(data["encodedPaths"]) == 2
 
-    def test_writes_index_file(self):
+    def test_writes_index_file(self, env):
         """Result is written to projects-index.json."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            self._setup_project(
-                projects_dir, "-proj", "/home/user/proj",
-                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
-            )
+        self._setup_project(
+            projects_dir, "-proj", "/home/user/proj",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                build_projects_index()
+        build_projects_index()
 
-            assert index_file.exists()
-            saved = json.loads(index_file.read_text(encoding="utf-8"))
-            assert saved["version"] == 1
-            assert "lastUpdated" in saved
-            assert len(saved["projects"]) == 1
+        assert index_file.exists()
+        saved = json.loads(index_file.read_text(encoding="utf-8"))
+        assert saved["version"] == 1
+        assert "lastUpdated" in saved
+        assert len(saved["projects"]) == 1
 
-    def test_fallback_to_entry_project_path(self):
+    def test_fallback_to_entry_project_path(self, env):
         """Uses entries[0].projectPath when root originalPath is missing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            folder = projects_dir / "-proj"
-            folder.mkdir(parents=True)
-            index_data = {
-                "version": 1,
-                "entries": [
-                    {
-                        "sessionId": "s1",
-                        "fullPath": "/tmp/s1.jsonl",
-                        "fileMtime": 1770000000000,
-                        "created": "2026-02-01T10:00:00Z",
-                        "projectPath": "/home/user/fallback-proj",
-                    }
-                ],
-            }
-            (folder / "sessions-index.json").write_text(
-                json.dumps(index_data), encoding="utf-8"
-            )
+        folder = projects_dir / "-proj"
+        folder.mkdir(parents=True)
+        index_data = {
+            "version": 1,
+            "entries": [
+                {
+                    "sessionId": "s1",
+                    "fullPath": "/tmp/s1.jsonl",
+                    "fileMtime": 1770000000000,
+                    "created": "2026-02-01T10:00:00Z",
+                    "projectPath": "/home/user/fallback-proj",
+                }
+            ],
+        }
+        (folder / "sessions-index.json").write_text(
+            json.dumps(index_data), encoding="utf-8"
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            data = list(result["projects"].values())[0]
-            assert data["name"] == "fallback-proj"
+        data = list(result["projects"].values())[0]
+        assert data["name"] == "fallback-proj"
 
     # --- JSONL fallback tests ---
 
@@ -692,145 +551,109 @@ class TestBuildProjectsIndex:
         jsonl_path.write_text(line + "\n", encoding="utf-8")
         return jsonl_path
 
-    def test_jsonl_fallback_discovers_project_without_sessions_index(self):
+    def test_jsonl_fallback_discovers_project_without_sessions_index(self, env):
         """Folders with JSONL files but no sessions-index.json are discovered."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            # Folder with JSONL but NO sessions-index.json
-            folder = projects_dir / "-home-user-swyfft-projects-tableau"
-            folder.mkdir(parents=True)
-            self._make_jsonl_file(
-                folder, "sess-1",
-                "/home/user/swyfft/projects/tableau",
-                "2026-02-12T10:00:00Z",
-            )
+        # Folder with JSONL but NO sessions-index.json
+        folder = projects_dir / "-home-user-swyfft-projects-tableau"
+        folder.mkdir(parents=True)
+        self._make_jsonl_file(
+            folder, "sess-1",
+            "/home/user/swyfft/projects/tableau",
+            "2026-02-12T10:00:00Z",
+        )
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 1
-            data = list(result["projects"].values())[0]
-            assert data["name"] == "tableau"
-            assert data["originalPath"] == "/home/user/swyfft/projects/tableau"
-            assert "2026-02-12" in data["workDays"]
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert data["name"] == "tableau"
+        assert data["originalPath"] == "/home/user/swyfft/projects/tableau"
+        assert "2026-02-12" in data["workDays"]
 
-    def test_jsonl_fallback_extracts_multiple_work_days(self):
+    def test_jsonl_fallback_extracts_multiple_work_days(self, env):
         """Multiple JSONL files produce multiple work days."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            folder = projects_dir / "-home-user-proj"
-            folder.mkdir(parents=True)
-            self._make_jsonl_file(folder, "s1", "/home/user/proj", "2026-02-10T10:00:00Z")
-            self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-11T14:00:00Z")
-            self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-12T09:00:00Z")
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        self._make_jsonl_file(folder, "s1", "/home/user/proj", "2026-02-10T10:00:00Z")
+        self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-11T14:00:00Z")
+        self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-12T09:00:00Z")
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            data = list(result["projects"].values())[0]
-            assert data["workDays"] == ["2026-02-10", "2026-02-11", "2026-02-12"]
+        data = list(result["projects"].values())[0]
+        assert data["workDays"] == ["2026-02-10", "2026-02-11", "2026-02-12"]
 
-    def test_jsonl_supplements_sessions_index_work_days(self):
+    def test_jsonl_supplements_sessions_index_work_days(self, env):
         """JSONL files add work days that sessions-index.json missed."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            # Sessions-index with only one day
-            self._setup_project(
-                projects_dir,
-                "-home-user-proj",
-                "/home/user/proj",
-                [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
-            )
+        # Sessions-index with only one day
+        self._setup_project(
+            projects_dir,
+            "-home-user-proj",
+            "/home/user/proj",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
 
-            # Additional JSONL files for days not in the index
-            folder = projects_dir / "-home-user-proj"
-            self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-05T10:00:00Z")
-            self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-10T10:00:00Z")
+        # Additional JSONL files for days not in the index
+        folder = projects_dir / "-home-user-proj"
+        self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-05T10:00:00Z")
+        self._make_jsonl_file(folder, "s3", "/home/user/proj", "2026-02-10T10:00:00Z")
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            data = list(result["projects"].values())[0]
-            assert "2026-02-01" in data["workDays"]  # from sessions-index
-            assert "2026-02-05" in data["workDays"]  # from JSONL
-            assert "2026-02-10" in data["workDays"]  # from JSONL
+        data = list(result["projects"].values())[0]
+        assert "2026-02-01" in data["workDays"]  # from sessions-index
+        assert "2026-02-05" in data["workDays"]  # from JSONL
+        assert "2026-02-10" in data["workDays"]  # from JSONL
 
-    def test_jsonl_fallback_skips_empty_files(self):
+    def test_jsonl_fallback_skips_empty_files(self, env):
         """Empty or tiny JSONL files are skipped."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            folder = projects_dir / "-home-user-proj"
-            folder.mkdir(parents=True)
-            # Empty file
-            (folder / "empty.jsonl").write_text("", encoding="utf-8")
-            # Valid file
-            self._make_jsonl_file(folder, "valid", "/home/user/proj", "2026-02-12T10:00:00Z")
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        # Empty file
+        (folder / "empty.jsonl").write_text("", encoding="utf-8")
+        # Valid file
+        self._make_jsonl_file(folder, "valid", "/home/user/proj", "2026-02-12T10:00:00Z")
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 1
-            data = list(result["projects"].values())[0]
-            assert data["workDays"] == ["2026-02-12"]
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert data["workDays"] == ["2026-02-12"]
 
-    def test_jsonl_fallback_handles_malformed_json(self):
+    def test_jsonl_fallback_handles_malformed_json(self, env):
         """Malformed JSONL lines are skipped gracefully."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            folder = projects_dir / "-home-user-proj"
-            folder.mkdir(parents=True)
-            (folder / "bad.jsonl").write_text("not valid json\n", encoding="utf-8")
-            self._make_jsonl_file(folder, "good", "/home/user/proj", "2026-02-12T10:00:00Z")
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        (folder / "bad.jsonl").write_text("not valid json\n", encoding="utf-8")
+        self._make_jsonl_file(folder, "good", "/home/user/proj", "2026-02-12T10:00:00Z")
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 1
+        assert len(result["projects"]) == 1
 
-    def test_jsonl_only_folder_no_cwd_is_skipped(self):
+    def test_jsonl_only_folder_no_cwd_is_skipped(self, env):
         """JSONL files without cwd field cannot determine project path."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            memory_dir = Path(tmpdir) / "memory"
-            index_file = memory_dir / "projects-index.json"
+        projects_dir, memory_dir, index_file = env
 
-            folder = projects_dir / "-home-user-proj"
-            folder.mkdir(parents=True)
-            # JSONL with no cwd
-            line = json.dumps({"type": "user", "timestamp": "2026-02-12T10:00:00Z"})
-            (folder / "no-cwd.jsonl").write_text(line + "\n", encoding="utf-8")
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        # JSONL with no cwd
+        line = json.dumps({"type": "user", "timestamp": "2026-02-12T10:00:00Z"})
+        (folder / "no-cwd.jsonl").write_text(line + "\n", encoding="utf-8")
 
-            with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
-                 mock.patch("indexing.get_projects_index_file", return_value=index_file):
-                result = build_projects_index()
+        result = build_projects_index()
 
-            assert len(result["projects"]) == 0
+        assert len(result["projects"]) == 0
 
 
 if __name__ == "__main__":
