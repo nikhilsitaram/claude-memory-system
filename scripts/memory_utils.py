@@ -57,6 +57,24 @@ def from_iso_z(date_str: str) -> datetime:
     return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
 
 
+# Pattern matching LTM dated entries: - (YYYY-MM-DD) [type] description
+# Note: decay.py has its own DATE_PATTERN that captures the date group for
+# computation. LTM_ENTRY_PATTERN is for detection/matching only.
+LTM_ENTRY_PATTERN = re.compile(r"^\s*-\s*\(\d{4}-\d{2}-\d{2}\)")
+
+
+def collect_ltm_files() -> list[Path]:
+    """Collect all LTM files (global + all project files)."""
+    files: list[Path] = []
+    global_f = get_global_memory_file()
+    if global_f.exists():
+        files.append(global_f)
+    proj_dir = get_project_memory_dir()
+    if proj_dir.exists():
+        files.extend(proj_dir.glob("*-long-term-memory.md"))
+    return files
+
+
 def check_python_version() -> None:
     """Check that Python version meets minimum requirements."""
     if sys.version_info < MIN_PYTHON:

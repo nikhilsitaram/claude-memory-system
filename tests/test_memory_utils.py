@@ -593,5 +593,109 @@ class TestIsoDatetimeHelpers:
         assert from_iso_z(to_iso_z(dt)) == dt
 
 
+# =============================================================================
+# LTM Entry Pattern Tests
+# =============================================================================
+
+
+class TestLtmEntryPattern:
+    def test_matches_dated_entry(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert LTM_ENTRY_PATTERN.match("- (2026-02-18) [pattern] Some text")
+
+    def test_matches_indented_dated_entry(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert LTM_ENTRY_PATTERN.match("  - (2026-01-01) [gotcha] Indented")
+
+    def test_rejects_non_dated_tagged(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("- [scope/type] No date")
+
+    def test_rejects_section_header(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("## Section header")
+
+    def test_rejects_plain_text(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("Just plain text without bullet")
+
+    def test_rejects_empty_string(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("")
+
+
+# =============================================================================
+# Collect LTM Files Tests
+# =============================================================================
+
+
+class TestCollectLtmFiles:
+    def test_collects_global_and_project_files(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        proj_f = proj_dir / "foo-long-term-memory.md"
+        proj_f.write_text("# Foo\n")
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert len(files) == 2
+        assert global_f in files
+        assert proj_f in files
+
+    def test_only_global_when_no_project_dir(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"  # does not exist
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert files == [global_f]
+
+    def test_empty_when_nothing_exists(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"  # does not exist
+        proj_dir = tmp_path / "project-memory"  # does not exist
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert files == []
+
+    def test_multiple_project_files(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "foo-long-term-memory.md").write_text("# Foo\n")
+        (proj_dir / "bar-long-term-memory.md").write_text("# Bar\n")
+        # Non-LTM file should be excluded
+        (proj_dir / "notes.md").write_text("# Notes\n")
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert len(files) == 3  # global + 2 project files
+        assert global_f in files
+        filenames = {f.name for f in files}
+        assert "foo-long-term-memory.md" in filenames
+        assert "bar-long-term-memory.md" in filenames
+        assert "notes.md" not in filenames
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

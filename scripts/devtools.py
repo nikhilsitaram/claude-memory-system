@@ -228,9 +228,9 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from memory_utils import (
+        LTM_ENTRY_PATTERN,
+        collect_ltm_files,
         get_daily_dir,
-        get_global_memory_file,
-        get_project_memory_dir,
         is_routed_match,
     )
 
@@ -238,19 +238,10 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
     # 1. Collect all LTM entries (global + all project files)
     ltm_entries = []
-
-    global_ltm = get_global_memory_file()
-    if global_ltm.exists():
-        for line in global_ltm.read_text(encoding="utf-8").splitlines():
-            if re.match(r"^\s*-\s*\(", line):  # Lines starting with "- (YYYY-MM-DD)"
+    for ltm_file in collect_ltm_files():
+        for line in ltm_file.read_text(encoding="utf-8").splitlines():
+            if LTM_ENTRY_PATTERN.match(line):
                 ltm_entries.append(line)
-
-    project_dir = get_project_memory_dir()
-    if project_dir.exists():
-        for pfile in project_dir.glob("*-long-term-memory.md"):
-            for line in pfile.read_text(encoding="utf-8").splitlines():
-                if re.match(r"^\s*-\s*\(", line):
-                    ltm_entries.append(line)
 
     print(f"Collected {len(ltm_entries)} LTM entries across all files")
 
@@ -297,14 +288,8 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
     print(f"\n{action} {total_marked} entries across all daily files")
 
     # 3. Deduplicate within each LTM file (exact match + keyword similarity)
-    ltm_files = []
-    if global_ltm.exists():
-        ltm_files.append(global_ltm)
-    if project_dir.exists():
-        ltm_files.extend(project_dir.glob("*-long-term-memory.md"))
-
     total_deduped = 0
-    for ltm_file in ltm_files:
+    for ltm_file in collect_ltm_files():
         lines = ltm_file.read_text(encoding="utf-8").splitlines()
         seen_exact: set[str] = set()
         seen_keyword_entries: list[str] = []
@@ -313,7 +298,7 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
         for line in lines:
             # Only dedup dated entry lines
-            if re.match(r"^\s*-\s*\(", line):
+            if LTM_ENTRY_PATTERN.match(line):
                 normalized = line.strip()
                 # Exact match dedup
                 if normalized in seen_exact:
@@ -347,12 +332,11 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
 
 def cmd_validate_ltm(args: argparse.Namespace) -> int:
     """Validate LTM files for duplicates, misrouted entries, and entry count."""
-    import re
-
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from memory_utils import (
+        LTM_ENTRY_PATTERN,
+        collect_ltm_files,
         get_global_memory_file,
-        get_project_memory_dir,
         get_projects_index_file,
         is_routed_match,
         load_json_file,
@@ -368,18 +352,15 @@ def cmd_validate_ltm(args: argparse.Namespace) -> int:
         if data.get("name")
     }
 
-    # Collect all LTM files
-    ltm_files: list[tuple[str, Path]] = []
+    # Collect all LTM files with scope labels
     global_ltm = get_global_memory_file()
-    if global_ltm.exists():
-        ltm_files.append(("global", global_ltm))
-
-    project_dir = get_project_memory_dir()
-    if project_dir.exists():
-        for pfile in project_dir.glob("*-long-term-memory.md"):
-            # Extract project name from filename
-            pname = pfile.stem.replace("-long-term-memory", "")
-            ltm_files.append((pname, pfile))
+    ltm_files: list[tuple[str, Path]] = []
+    for ltm_file in collect_ltm_files():
+        if ltm_file == global_ltm:
+            ltm_files.append(("global", ltm_file))
+        else:
+            pname = ltm_file.stem.replace("-long-term-memory", "")
+            ltm_files.append((pname, ltm_file))
 
     for scope, ltm_file in ltm_files:
         lines = ltm_file.read_text(encoding="utf-8").splitlines()
@@ -387,7 +368,7 @@ def cmd_validate_ltm(args: argparse.Namespace) -> int:
         entry_count = 0
 
         for line in lines:
-            if re.match(r"^\s*-\s*\(", line):
+            if LTM_ENTRY_PATTERN.match(line):
                 normalized = line.strip()
                 entry_count += 1
                 # Check exact duplicates
@@ -414,7 +395,7 @@ def cmd_validate_ltm(args: argparse.Namespace) -> int:
                 in_decay_section = section in (
                     "Key Actions", "Key Decisions", "Key Learnings", "Key Lessons"
                 )
-            elif in_decay_section and re.match(r"^\s*-\s*\(", line):
+            elif in_decay_section and LTM_ENTRY_PATTERN.match(line):
                 decay_count += 1
 
         if decay_count > 40:
