@@ -26,6 +26,17 @@ if str(script_dir) not in sys.path:
 from indexing import get_session_date, list_pending_sessions
 from memory_utils import get_captured_sessions
 
+__all__ = [
+    # Parsing
+    "extract_text_content",
+    "should_skip_message",
+    "parse_jsonl_file",
+    # Extraction
+    "extract_transcripts",
+    "format_transcripts_for_output",
+    "get_pending_days",
+]
+
 # =============================================================================
 # Key Interfaces
 # =============================================================================

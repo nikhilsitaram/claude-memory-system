@@ -47,6 +47,43 @@ from memory_utils import (
 # Claude Code subdirectories that contain project-specific data
 CLAUDE_SUBDIRS = ["projects", "file-history", "todos", "shell-snapshots", "debug"]
 
+__all__ = [
+    # Data classes
+    "ProjectStatus",
+    "OrphanInfo",
+    "ValidationResult",
+    "OperationPlan",
+    # Path encoding
+    "encode_path",
+    "decode_path_best_effort",
+    "get_original_path_from_folder",
+    # Discovery
+    "list_projects",
+    "find_orphaned_folders",
+    "find_stale_entries",
+    # Validation
+    "validate_move",
+    "validate_merge_orphan",
+    # Planning
+    "plan_move",
+    "plan_merge_orphan",
+    "plan_cleanup",
+    # Execution
+    "execute_move",
+    "execute_merge_orphan",
+    "execute_cleanup",
+    # Backup
+    "backup_files",
+    "restore_from_backup",
+    "list_backups",
+    # Index operations
+    "rebuild_sessions_index",
+    "merge_sessions_index",
+    "rewrite_paths_in_file",
+    "get_memory_files_for_merge",
+    "update_session_index_paths",
+]
+
 
 # =============================================================================
 # Data Classes (for structured returns)
