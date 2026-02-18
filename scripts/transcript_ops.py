@@ -200,7 +200,7 @@ def format_transcripts_for_output(
                 output.append(f"\n... [{truncated} lines truncated] ...")
                 output.append("\n".join(actual_lines[-tail:]))
             else:
-                output.extend(session_parts)
+                output.append(session_text)
 
     return "\n".join(output)
 
