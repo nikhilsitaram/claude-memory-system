@@ -21,9 +21,11 @@ from memory_utils import (
     find_current_project,
     from_iso_z,
     get_captured_sessions,
+    get_sessions_original_path,
     get_working_days,
     is_routed_match,
     load_json_file,
+    load_sessions_index,
     load_settings,
     project_name_to_filename,
     remove_captured_session,
@@ -695,6 +697,87 @@ class TestCollectLtmFiles:
         assert "foo-long-term-memory.md" in filenames
         assert "bar-long-term-memory.md" in filenames
         assert "notes.md" not in filenames
+
+
+# =============================================================================
+# Sessions Index Tests
+# =============================================================================
+
+
+class TestLoadSessionsIndex:
+    """Tests for load_sessions_index function."""
+
+    def test_valid_file(self, tmp_path):
+        """Should return parsed dict from sessions-index.json."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/proj",
+            "entries": [{"sessionId": "abc"}],
+        }))
+        result = load_sessions_index(folder)
+        assert result["originalPath"] == "/home/user/proj"
+        assert len(result["entries"]) == 1
+
+    def test_missing_file(self, tmp_path):
+        """Should return empty dict when file doesn't exist."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        result = load_sessions_index(folder)
+        assert result == {}
+
+    def test_invalid_json(self, tmp_path):
+        """Should return empty dict on malformed JSON."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text("not json{{{")
+        result = load_sessions_index(folder)
+        assert result == {}
+
+    def test_empty_file(self, tmp_path):
+        """Should return empty dict on empty file."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text("")
+        result = load_sessions_index(folder)
+        assert result == {}
+
+
+class TestGetSessionsOriginalPath:
+    """Tests for get_sessions_original_path function."""
+
+    def test_root_level_original_path(self):
+        """Should prefer root-level originalPath."""
+        data = {
+            "originalPath": "/home/user/proj",
+            "entries": [{"projectPath": "/other/path"}],
+        }
+        assert get_sessions_original_path(data) == "/home/user/proj"
+
+    def test_fallback_to_entries(self):
+        """Should fall back to entries[0].projectPath."""
+        data = {
+            "entries": [{"projectPath": "/home/user/proj", "sessionId": "abc"}],
+        }
+        assert get_sessions_original_path(data) == "/home/user/proj"
+
+    def test_empty_original_path_falls_back(self):
+        """Should fall back when originalPath is empty string."""
+        data = {
+            "originalPath": "",
+            "entries": [{"projectPath": "/fallback"}],
+        }
+        assert get_sessions_original_path(data) == "/fallback"
+
+    def test_no_path_anywhere(self):
+        """Should return empty string when no path found."""
+        assert get_sessions_original_path({}) == ""
+        assert get_sessions_original_path({"entries": []}) == ""
+
+    def test_empty_entries(self):
+        """Should return empty string with no originalPath and empty entries."""
+        data = {"originalPath": "", "entries": []}
+        assert get_sessions_original_path(data) == ""
 
 
 if __name__ == "__main__":

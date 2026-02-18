@@ -36,7 +36,9 @@ from memory_utils import (
     get_project_memory_dir,
     get_projects_dir,
     get_projects_index_file,
+    get_sessions_original_path,
     load_json_file,
+    load_sessions_index,
     project_name_to_filename,
     save_json_file,
     to_iso_z,
@@ -161,20 +163,8 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
 
     This is the only reliable way to get the original path since encoding is lossy.
     """
-    sessions_index = folder_path / "sessions-index.json"
-    if sessions_index.exists():
-        try:
-            data = json.loads(sessions_index.read_text(encoding="utf-8"))
-            # Try root-level originalPath first (legacy format)
-            if data.get("originalPath"):
-                return data.get("originalPath")
-            # Fall back to entries[0].projectPath (Claude Code format)
-            entries = data.get("entries", [])
-            if entries and entries[0].get("projectPath"):
-                return entries[0]["projectPath"]
-        except (json.JSONDecodeError, IOError):
-            pass
-    return None
+    data = load_sessions_index(folder_path)
+    return get_sessions_original_path(data) or None
 
 
 # =============================================================================

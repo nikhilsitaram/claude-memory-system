@@ -52,6 +52,8 @@ from memory_utils import (
     get_memory_dir,
     get_projects_dir,
     get_projects_index_file,
+    get_sessions_original_path,
+    load_sessions_index,
     remove_captured_session,
     to_iso_z,
 )
@@ -118,36 +120,22 @@ def _load_sessions_index(project_folder: Path) -> dict:
 
     Returns dict mapping session_id to entry metadata, or empty dict if missing.
     """
-    index_file = project_folder / "sessions-index.json"
-    if not index_file.exists():
+    data = load_sessions_index(project_folder)
+    if not data:
         return {}
 
-    try:
-        with open(index_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    original_path = get_sessions_original_path(data)
+    index = {}
+    for entry in data.get("entries", []):
+        session_id = entry.get("sessionId")
+        if session_id:
+            index[session_id] = {
+                "created": entry.get("created"),
+                "summary": entry.get("summary"),
+                "projectPath": original_path,
+            }
 
-        # Build lookup by sessionId
-        index = {}
-        entries = data.get("entries", [])
-
-        # Get original path (try root-level first, then entries[0].projectPath)
-        original_path = data.get("originalPath", "")
-        if not original_path and entries:
-            original_path = entries[0].get("projectPath", "")
-
-        for entry in entries:
-            session_id = entry.get("sessionId")
-            if session_id:
-                index[session_id] = {
-                    "created": entry.get("created"),
-                    "summary": entry.get("summary"),
-                    "projectPath": original_path,
-                }
-
-        return index
-
-    except (json.JSONDecodeError, IOError):
-        return {}
+    return index
 
 
 def list_all_sessions() -> list[SessionInfo]:
@@ -355,23 +343,12 @@ def build_projects_index() -> dict:
         original_path = ""
         work_days: set[str] = set()
 
-        sessions_file = project_folder / "sessions-index.json"
-        if sessions_file.exists():
-            try:
-                with open(sessions_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Warning: Could not read {sessions_file}: {e}", file=sys.stderr)
-                data = {}
-
-            # Get original path: try root-level first, then entries[0].projectPath
-            original_path = data.get("originalPath", "")
-            entries = data.get("entries", [])
-            if not original_path and entries:
-                original_path = entries[0].get("projectPath", "")
+        data = load_sessions_index(project_folder)
+        if data:
+            original_path = get_sessions_original_path(data)
 
             # Extract work days from session entries
-            for entry in entries:
+            for entry in data.get("entries", []):
                 created = entry.get("created")
                 if created:
                     try:
