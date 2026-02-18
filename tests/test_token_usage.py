@@ -108,5 +108,37 @@ class TestCalculateUsage:
         assert result["project_short_term_tokens"] == "0"
 
 
+class TestCalculateUsageEfficiency:
+    def test_daily_files_read_once(self, tmp_path, capsys):
+        """Each daily file should be read at most once during calculate_usage."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        daily_file = daily_dir / "2026-02-18.md"
+        content = "# 2026-02-18\n## Actions\n- [global/implement] Test action\n"
+        daily_file.write_text(content)
+
+        read_count = 0
+        original_read_text = Path.read_text
+
+        def counting_read_text(self, *args, **kwargs):
+            nonlocal read_count
+            if self == daily_file:
+                read_count += 1
+            return original_read_text(self, *args, **kwargs)
+
+        with mock.patch("token_usage.get_daily_dir", return_value=daily_dir), \
+             mock.patch("token_usage.get_global_memory_file", return_value=tmp_path / "nonexistent"), \
+             mock.patch("token_usage.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             mock.patch("token_usage.get_projects_index_file", return_value=tmp_path / "nonexistent"), \
+             mock.patch("token_usage.load_json_file", return_value={}), \
+             mock.patch("token_usage.load_settings", return_value=_default_settings()), \
+             mock.patch("token_usage.find_current_project", return_value=None), \
+             mock.patch("pathlib.Path.read_text", counting_read_text):
+
+            calculate_usage()
+
+        assert read_count == 1, f"Daily file read {read_count} times, expected 1"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
