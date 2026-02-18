@@ -47,10 +47,13 @@ def calculate_usage():
     daily_dir = get_daily_dir()
     daily_files = sorted(daily_dir.glob("*.md"), reverse=True)[:global_short_days] if daily_dir.exists() else []
     global_short_term_bytes = 0
+    global_short_days_actual = 0
     for f in daily_files:
         content = f.read_text(encoding="utf-8")
         filtered = filter_daily_content(content, "global")
-        global_short_term_bytes += len(filtered.encode("utf-8"))
+        if filtered:
+            global_short_term_bytes += len(filtered.encode("utf-8"))
+            global_short_days_actual += 1
     global_short_term_tokens = global_short_term_bytes // 4
 
     # Project: find by CWD match using shared utility (lowercases CWD correctly)
@@ -79,9 +82,6 @@ def calculate_usage():
                 project_short_term_bytes += len(filtered.encode("utf-8"))
                 project_short_days_actual += 1
     project_short_term_tokens = project_short_term_bytes // 4
-
-    # Count actual global days with content
-    global_short_days_actual = sum(1 for f in daily_files if filter_daily_content(f.read_text(encoding="utf-8"), "global"))
 
     total_tokens = global_long_term_tokens + global_short_term_tokens + project_long_term_tokens + project_short_term_tokens
 

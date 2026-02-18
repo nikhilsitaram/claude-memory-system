@@ -19,31 +19,21 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-# Import from memory_utils
-try:
-    from memory_utils import (
-        check_python_version,
-        get_global_memory_file,
-        get_memory_dir,
-        get_project_memory_dir,
-        get_projects_index_file,
-        load_json_file,
-        load_settings,
-        project_name_to_filename,
-    )
-except ImportError:
-    # Support running from repo directory
-    sys.path.insert(0, str(Path(__file__).parent))
-    from memory_utils import (
-        check_python_version,
-        get_global_memory_file,
-        get_memory_dir,
-        get_project_memory_dir,
-        get_projects_index_file,
-        load_json_file,
-        load_settings,
-        project_name_to_filename,
-    )
+# Add scripts directory to path for local imports
+script_dir = Path(__file__).parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+
+from memory_utils import (
+    check_python_version,
+    get_global_memory_file,
+    get_memory_dir,
+    get_project_memory_dir,
+    get_projects_index_file,
+    load_json_file,
+    load_settings,
+    project_name_to_filename,
+)
 
 # Default decay thresholds (used as fallbacks when settings.json missing)
 DEFAULT_AGE_DAYS = 30

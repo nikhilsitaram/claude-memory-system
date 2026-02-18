@@ -16,6 +16,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 # Add scripts directory to path for local imports
 script_dir = Path(__file__).parent
@@ -39,7 +40,7 @@ from memory_utils import get_captured_sessions
 # =============================================================================
 
 
-def extract_text_content(content) -> str:
+def extract_text_content(content: Any) -> str:
     """Extract text from message content (handles string or list format)."""
     if isinstance(content, str):
         return content
@@ -200,7 +201,7 @@ def format_transcripts_for_output(
                 output.append(f"\n... [{truncated} lines truncated] ...")
                 output.append("\n".join(actual_lines[-tail:]))
             else:
-                output.extend(session_parts)
+                output.append(session_text)
 
     return "\n".join(output)
 

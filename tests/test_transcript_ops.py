@@ -148,5 +148,37 @@ class TestFormatWithLineBudget:
         assert len(lines) >= 15
 
 
+# =============================================================================
+# format_transcripts_for_output — Consistency Tests
+# =============================================================================
+
+
+class TestFormatTranscriptsConsistency:
+    def test_no_budget_matches_large_budget(self):
+        """No budget and a large budget (no truncation) should produce identical output."""
+        messages = [{"role": "assistant", "content": f"Line {i}"} for i in range(5)]
+        data = {"2026-01-01": [{"session_id": "s1", "filepath": "/tmp/t.jsonl",
+                                "project_path": None, "message_count": 5, "messages": messages}]}
+
+        full = format_transcripts_for_output(data)
+        with_budget = format_transcripts_for_output(data, total_line_budget=10000)
+
+        assert full == with_budget, "Budget that doesn't trigger truncation should produce identical output"
+
+    def test_multiline_content_no_budget_matches_large_budget(self):
+        """Multi-line message content should also be identical across code paths."""
+        messages = [
+            {"role": "assistant", "content": "First line\nSecond line\nThird line"},
+            {"role": "assistant", "content": "Another\nmulti-line\nblock"},
+        ]
+        data = {"2026-01-01": [{"session_id": "s1", "filepath": "/tmp/t.jsonl",
+                                "project_path": None, "message_count": 2, "messages": messages}]}
+
+        full = format_transcripts_for_output(data)
+        with_budget = format_transcripts_for_output(data, total_line_budget=10000)
+
+        assert full == with_budget
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

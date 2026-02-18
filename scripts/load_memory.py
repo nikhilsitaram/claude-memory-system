@@ -424,6 +424,44 @@ python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-ex
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
 
 
+def pre_extract_transcripts(
+    pending_dates: list,
+    exclude_session_id: str | None = None,
+    output_dir: str = "/tmp",
+) -> dict:
+    """Pre-extract transcripts to temp files with sidecar session lists.
+
+    For each pending date, extracts transcripts, writes formatted output to a
+    temp file, and writes a .sessions sidecar with session IDs for mark-captured.
+
+    Returns dict mapping date -> output file path.
+    """
+    pid = os.getpid()
+    extracted_files: dict[str, str] = {}
+    for date in pending_dates:
+        try:
+            daily_data = extract_transcripts(date, exclude_session_id=exclude_session_id)
+            if daily_data:
+                output_path = f"{output_dir}/memory-extract-{date}-{pid}.txt"
+                Path(output_path).write_text(
+                    format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET),
+                    encoding="utf-8",
+                )
+                sidecar_path = Path(output_path).with_suffix(".sessions")
+                session_ids = [
+                    s["session_id"]
+                    for sessions in daily_data.values()
+                    for s in sessions
+                ]
+                sidecar_path.write_text(
+                    "\n".join(session_ids) + "\n", encoding="utf-8"
+                )
+                extracted_files[date] = output_path
+        except Exception as e:
+            print(f"Warning: Failed to extract {date}: {e}", file=sys.stderr)
+    return extracted_files
+
+
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
@@ -477,28 +515,7 @@ def main() -> None:
             exclude_flag = f" --exclude-session {current_session_id}"
 
         # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
-        pid = os.getpid()
-        extracted_files: dict[str, str] = {}
-        for date in pending_dates:
-            try:
-                daily_data = extract_transcripts(date, exclude_session_id=current_session_id)
-                if daily_data:
-                    output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
-                    Path(output_path).write_text(
-                        format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET), encoding="utf-8"
-                    )
-                    sidecar_path = output_path.rsplit(".", 1)[0] + ".sessions"
-                    session_ids = [
-                        s["session_id"]
-                        for sessions in daily_data.values()
-                        for s in sessions
-                    ]
-                    Path(sidecar_path).write_text(
-                        "\n".join(session_ids) + "\n", encoding="utf-8"
-                    )
-                    extracted_files[date] = output_path
-            except Exception:
-                pass  # Fall through — date will use dates-only path if all fail
+        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=current_session_id)
 
         if extracted_files:
             synth_prompt = _build_synthesis_prompt(
@@ -601,26 +618,7 @@ if __name__ == "__main__":
             sys.exit(0)
 
         # Pre-extract transcripts (manual path — user is already waiting)
-        pid = os.getpid()
-        extracted_files: dict[str, str] = {}
-        for date in pending_dates:
-            daily_data = extract_transcripts(date, exclude_session_id=exclude_id)
-            if daily_data:
-                output_path = f"/tmp/memory-extract-{date}-{pid}.txt"
-                Path(output_path).write_text(
-                    format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET), encoding="utf-8"
-                )
-                # Write sidecar with session IDs
-                sidecar_path = Path(output_path).with_suffix(".sessions")
-                session_ids = [
-                    s["session_id"]
-                    for sessions in daily_data.values()
-                    for s in sessions
-                ]
-                sidecar_path.write_text(
-                    "\n".join(session_ids) + "\n", encoding="utf-8"
-                )
-                extracted_files[date] = output_path
+        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
 
         if not extracted_files:
             print("No pending transcripts with content.")

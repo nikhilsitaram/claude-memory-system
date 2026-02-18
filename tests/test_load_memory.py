@@ -17,6 +17,7 @@ from load_memory import (  # noqa: I001
     load_global_memory,
     load_project_history,
     load_project_memory,
+    pre_extract_transcripts,
     should_synthesize,
 )
 
@@ -308,6 +309,88 @@ class TestLoadProjectHistory:
 # =============================================================================
 # Synthesis Prompt [routed] Marker Tests
 # =============================================================================
+
+
+class TestPreExtractTranscripts:
+    """Tests for pre_extract_transcripts helper."""
+
+    def _mock_daily_data(self, session_id="s1"):
+        """Build a minimal extract_transcripts return value."""
+        return {
+            "project-a": [
+                {
+                    "session_id": session_id,
+                    "messages": [{"role": "assistant", "content": "hello"}],
+                }
+            ]
+        }
+
+    def test_returns_extracted_files_dict(self, tmp_path):
+        """pre_extract_transcripts returns dict mapping date -> path."""
+        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data()), \
+             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted output"):
+            result = pre_extract_transcripts(
+                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert "2026-02-18" in result
+        assert Path(result["2026-02-18"]).exists()
+
+    def test_creates_sidecar_file(self, tmp_path):
+        """Sidecar .sessions file is created alongside the output file."""
+        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data("sess-abc")), \
+             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
+            result = pre_extract_transcripts(
+                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        sidecar = Path(result["2026-02-18"]).with_suffix(".sessions")
+        assert sidecar.exists()
+        assert "sess-abc" in sidecar.read_text()
+
+    def test_skips_dates_with_no_data(self, tmp_path):
+        """Dates where extract_transcripts returns empty dict are skipped."""
+        with mock.patch("load_memory.extract_transcripts", return_value={}), \
+             mock.patch("load_memory.format_transcripts_for_output", return_value=""):
+            result = pre_extract_transcripts(
+                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert result == {}
+
+    def test_handles_extraction_error_gracefully(self, tmp_path):
+        """Extraction errors for one date don't prevent other dates."""
+        def side_effect(date, exclude_session_id=None):
+            if date == "2026-02-17":
+                raise RuntimeError("disk full")
+            return self._mock_daily_data()
+
+        with mock.patch("load_memory.extract_transcripts", side_effect=side_effect), \
+             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
+            result = pre_extract_transcripts(
+                ["2026-02-17", "2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert "2026-02-17" not in result
+        assert "2026-02-18" in result
+
+    def test_passes_exclude_session_id(self, tmp_path):
+        """exclude_session_id is forwarded to extract_transcripts."""
+        with mock.patch("load_memory.extract_transcripts", return_value={}) as mock_extract, \
+             mock.patch("load_memory.format_transcripts_for_output", return_value=""):
+            pre_extract_transcripts(
+                ["2026-02-18"], exclude_session_id="sess-xyz", output_dir=str(tmp_path)
+            )
+        mock_extract.assert_called_once_with("2026-02-18", exclude_session_id="sess-xyz")
+
+    def test_multiple_dates(self, tmp_path):
+        """Multiple dates each get their own output and sidecar files."""
+        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data()), \
+             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
+            result = pre_extract_transcripts(
+                ["2026-02-17", "2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert len(result) == 2
+        assert result["2026-02-17"] != result["2026-02-18"]
+        for path in result.values():
+            assert Path(path).exists()
+            assert Path(path).with_suffix(".sessions").exists()
 
 
 class TestSynthesisPromptRoutedMarker:

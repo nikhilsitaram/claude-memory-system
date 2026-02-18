@@ -14,6 +14,7 @@ Usage (from Claude Code):
     from project_manager import list_projects, find_orphaned_folders, ...
 """
 
+import dataclasses
 import json
 import os
 import shutil
@@ -38,6 +39,7 @@ from memory_utils import (
     load_json_file,
     project_name_to_filename,
     save_json_file,
+    to_iso_z,
 )
 
 # Claude Code subdirectories that contain project-specific data
@@ -714,8 +716,8 @@ def backup_files(files: list[Path]) -> Path:
     backup_dir = get_memory_dir() / ".backups" / datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    for f in files:
-        f = Path(f)
+    for file_entry in files:
+        f = Path(file_entry)
         if f.exists():
             # Preserve relative structure for nested files
             dest = backup_dir / f.name
@@ -813,8 +815,8 @@ def rebuild_sessions_index(folder: Path, project_path: str) -> dict:
             "firstPrompt": first_prompt,
             "summary": "(recovered session)",
             "messageCount": 0,
-            "created": created_dt.isoformat().replace("+00:00", "Z"),
-            "modified": created_dt.isoformat().replace("+00:00", "Z"),
+            "created": to_iso_z(created_dt),
+            "modified": to_iso_z(created_dt),
             "gitBranch": "",
             "projectPath": project_path,
             "isSidechain": False,
@@ -1115,7 +1117,7 @@ def execute_move(
                 add_data = plan.index_changes["add"]
                 index["projects"][add_data["path"]] = add_data["data"]
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             # Rewrite paths in history.jsonl
@@ -1142,7 +1144,7 @@ def execute_move(
             "message": "Could not acquire lock. Another operation may be in progress.",
             "backup_path": None,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during move: {e}",
@@ -1307,7 +1309,7 @@ def execute_merge_orphan(
                         # Actually, we renamed the orphan, so don't add it
                         pass
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             # Rewrite paths in history.jsonl (if orphan had a known original path)
@@ -1332,7 +1334,7 @@ def execute_merge_orphan(
             "backup_path": None,
             "renamed_folders": renamed_folders,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during merge: {e}",
@@ -1383,7 +1385,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
                     del index["projects"][canonical_path]
                     removed.append(canonical_path)
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             return {
@@ -1400,7 +1402,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
             "removed_entries": [],
             "backup_path": None,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during cleanup: {e}",
@@ -1469,7 +1471,6 @@ if __name__ == "__main__":
     if args.command == "list":
         projects = list_projects()
         if args.json:
-            import dataclasses
             print(json.dumps([dataclasses.asdict(p) for p in projects], indent=2))
         else:
             print("Projects:")
@@ -1483,7 +1484,6 @@ if __name__ == "__main__":
     elif args.command == "orphans":
         orphans = find_orphaned_folders()
         if args.json:
-            import dataclasses
             print(json.dumps([dataclasses.asdict(o) for o in orphans], indent=2))
         else:
             print(f"Orphaned folders ({len(orphans)}):")

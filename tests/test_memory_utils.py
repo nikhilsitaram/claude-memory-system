@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -11,12 +12,14 @@ from memory_utils import (
     DEFAULT_SETTINGS,
     SHORT_TERM_TOKENS_PER_DAY,
     FileLock,
+    _calculate_token_limits,
     _deep_merge,
     add_captured_session,
     estimate_tokens,
     extract_entry_keywords,
     filter_daily_content,
     find_current_project,
+    from_iso_z,
     get_captured_sessions,
     get_working_days,
     is_routed_match,
@@ -25,6 +28,7 @@ from memory_utils import (
     project_name_to_filename,
     remove_captured_session,
     save_json_file,
+    to_iso_z,
 )
 
 # =============================================================================
@@ -92,6 +96,32 @@ class TestLoadSettings:
             mock_sf.return_value = f
             settings = load_settings()
             assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
+
+
+class TestCalculateTokenLimits:
+    def test_fallback_defaults_match_default_settings(self):
+        """_calculate_token_limits fallbacks must match DEFAULT_SETTINGS."""
+        # Pass empty settings to trigger all fallbacks
+        result = _calculate_token_limits({})
+        expected_project_days = DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]  # 5
+        assert result["projectShortTerm"]["tokenLimit"] == expected_project_days * SHORT_TERM_TOKENS_PER_DAY
+
+    def test_fallback_global_short_term_matches_default_settings(self):
+        """Global short-term fallback must match DEFAULT_SETTINGS."""
+        result = _calculate_token_limits({})
+        expected_global_days = DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]  # 2
+        assert result["globalShortTerm"]["tokenLimit"] == expected_global_days * SHORT_TERM_TOKENS_PER_DAY
+
+    def test_fallback_long_term_limits_match_default_settings(self):
+        """Long-term token limit fallbacks must match DEFAULT_SETTINGS."""
+        result = _calculate_token_limits({})
+        expected_total = (
+            DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+            + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+        )
+        assert result["totalTokenBudget"] == expected_total
 
 
 class TestDeepMerge:
@@ -525,6 +555,146 @@ class TestRoutedMatching:
         )
         assert "already" in keywords
         assert "routed" not in keywords
+
+
+# =============================================================================
+# ISO Datetime Helper Tests
+# =============================================================================
+
+
+class TestIsoDatetimeHelpers:
+    def test_to_iso_z_converts_utc(self):
+        dt = datetime(2026, 2, 18, 12, 0, 0, tzinfo=timezone.utc)
+        result = to_iso_z(dt)
+        assert result.endswith("Z")
+        assert "+00:00" not in result
+
+    def test_to_iso_z_format(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, tzinfo=timezone.utc)
+        assert to_iso_z(dt) == "2026-02-18T15:30:45Z"
+
+    def test_from_iso_z_parses_z_suffix(self):
+        result = from_iso_z("2026-02-18T12:00:00Z")
+        assert result.tzinfo is not None
+        assert result.year == 2026
+        assert result.hour == 12
+
+    def test_from_iso_z_parses_offset(self):
+        result = from_iso_z("2026-02-18T12:00:00+00:00")
+        assert result.tzinfo is not None
+        assert result.year == 2026
+
+    def test_roundtrip(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, tzinfo=timezone.utc)
+        assert from_iso_z(to_iso_z(dt)) == dt
+
+    def test_roundtrip_with_microseconds(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, 123456, tzinfo=timezone.utc)
+        assert from_iso_z(to_iso_z(dt)) == dt
+
+
+# =============================================================================
+# LTM Entry Pattern Tests
+# =============================================================================
+
+
+class TestLtmEntryPattern:
+    def test_matches_dated_entry(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert LTM_ENTRY_PATTERN.match("- (2026-02-18) [pattern] Some text")
+
+    def test_matches_indented_dated_entry(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert LTM_ENTRY_PATTERN.match("  - (2026-01-01) [gotcha] Indented")
+
+    def test_rejects_non_dated_tagged(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("- [scope/type] No date")
+
+    def test_rejects_section_header(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("## Section header")
+
+    def test_rejects_plain_text(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("Just plain text without bullet")
+
+    def test_rejects_empty_string(self):
+        from memory_utils import LTM_ENTRY_PATTERN
+        assert not LTM_ENTRY_PATTERN.match("")
+
+
+# =============================================================================
+# Collect LTM Files Tests
+# =============================================================================
+
+
+class TestCollectLtmFiles:
+    def test_collects_global_and_project_files(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        proj_f = proj_dir / "foo-long-term-memory.md"
+        proj_f.write_text("# Foo\n")
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert len(files) == 2
+        assert global_f in files
+        assert proj_f in files
+
+    def test_only_global_when_no_project_dir(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"  # does not exist
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert files == [global_f]
+
+    def test_empty_when_nothing_exists(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"  # does not exist
+        proj_dir = tmp_path / "project-memory"  # does not exist
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert files == []
+
+    def test_multiple_project_files(self, tmp_path):
+        from memory_utils import collect_ltm_files
+
+        global_f = tmp_path / "global-long-term-memory.md"
+        global_f.write_text("# Global\n")
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "foo-long-term-memory.md").write_text("# Foo\n")
+        (proj_dir / "bar-long-term-memory.md").write_text("# Bar\n")
+        # Non-LTM file should be excluded
+        (proj_dir / "notes.md").write_text("# Notes\n")
+
+        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
+             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
+            files = collect_ltm_files()
+
+        assert len(files) == 3  # global + 2 project files
+        assert global_f in files
+        filenames = {f.name for f in files}
+        assert "foo-long-term-memory.md" in filenames
+        assert "bar-long-term-memory.md" in filenames
+        assert "notes.md" not in filenames
 
 
 if __name__ == "__main__":
