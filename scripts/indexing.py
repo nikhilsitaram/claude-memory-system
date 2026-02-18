@@ -47,11 +47,13 @@ if str(script_dir) not in sys.path:
 from memory_utils import (
     add_captured_session,
     check_python_version,
+    from_iso_z,
     get_captured_sessions,
     get_memory_dir,
     get_projects_dir,
     get_projects_index_file,
     remove_captured_session,
+    to_iso_z,
 )
 
 # Sessions smaller than this are likely empty/metadata-only (2-3 messages ≈ 1000 bytes)
@@ -105,7 +107,7 @@ def _parse_index_datetime(date_str: str) -> Optional[datetime]:
         return None
     try:
         # Handle "2026-01-25T21:48:21.826Z" format
-        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return from_iso_z(date_str)
     except ValueError:
         return None
 
@@ -307,7 +309,7 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
                 # Extract timestamp as work day
                 timestamp = data.get("timestamp", "")
                 if timestamp:
-                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    dt = from_iso_z(timestamp)
                     work_days.add(dt.strftime("%Y-%m-%d"))
         except (json.JSONDecodeError, IOError, ValueError):
             continue
@@ -373,7 +375,7 @@ def build_projects_index() -> dict:
                 created = entry.get("created")
                 if created:
                     try:
-                        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        dt = from_iso_z(created)
                         work_days.add(dt.strftime("%Y-%m-%d"))
                     except ValueError:
                         continue
@@ -433,7 +435,7 @@ def build_projects_index() -> dict:
     # Build output structure
     output = {
         "version": 1,
-        "lastUpdated": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "lastUpdated": to_iso_z(datetime.now(timezone.utc)),
         "projects": projects,
         # Include a lookup table for path variations (for debugging)
         "pathVariations": {k: sorted(v) for k, v in path_variations.items() if len(v) > 1},

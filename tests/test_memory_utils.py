@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,7 @@ from memory_utils import (
     extract_entry_keywords,
     filter_daily_content,
     find_current_project,
+    from_iso_z,
     get_captured_sessions,
     get_working_days,
     is_routed_match,
@@ -26,6 +28,7 @@ from memory_utils import (
     project_name_to_filename,
     remove_captured_session,
     save_json_file,
+    to_iso_z,
 )
 
 # =============================================================================
@@ -552,6 +555,42 @@ class TestRoutedMatching:
         )
         assert "already" in keywords
         assert "routed" not in keywords
+
+
+# =============================================================================
+# ISO Datetime Helper Tests
+# =============================================================================
+
+
+class TestIsoDatetimeHelpers:
+    def test_to_iso_z_converts_utc(self):
+        dt = datetime(2026, 2, 18, 12, 0, 0, tzinfo=timezone.utc)
+        result = to_iso_z(dt)
+        assert result.endswith("Z")
+        assert "+00:00" not in result
+
+    def test_to_iso_z_format(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, tzinfo=timezone.utc)
+        assert to_iso_z(dt) == "2026-02-18T15:30:45Z"
+
+    def test_from_iso_z_parses_z_suffix(self):
+        result = from_iso_z("2026-02-18T12:00:00Z")
+        assert result.tzinfo is not None
+        assert result.year == 2026
+        assert result.hour == 12
+
+    def test_from_iso_z_parses_offset(self):
+        result = from_iso_z("2026-02-18T12:00:00+00:00")
+        assert result.tzinfo is not None
+        assert result.year == 2026
+
+    def test_roundtrip(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, tzinfo=timezone.utc)
+        assert from_iso_z(to_iso_z(dt)) == dt
+
+    def test_roundtrip_with_microseconds(self):
+        dt = datetime(2026, 2, 18, 15, 30, 45, 123456, tzinfo=timezone.utc)
+        assert from_iso_z(to_iso_z(dt)) == dt
 
 
 if __name__ == "__main__":

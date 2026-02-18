@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,6 +45,16 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
 #   load_json_file(path, default?) -> Any  save_json_file(path, data) -> bool
 # =============================================================================
+
+
+def to_iso_z(dt: datetime) -> str:
+    """Convert UTC datetime to ISO string with Z suffix."""
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def from_iso_z(date_str: str) -> datetime:
+    """Parse ISO datetime string, handling both Z and +00:00 suffixes."""
+    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
 
 
 def check_python_version() -> None:

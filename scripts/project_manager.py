@@ -38,6 +38,7 @@ from memory_utils import (
     load_json_file,
     project_name_to_filename,
     save_json_file,
+    to_iso_z,
 )
 
 # Claude Code subdirectories that contain project-specific data
@@ -813,8 +814,8 @@ def rebuild_sessions_index(folder: Path, project_path: str) -> dict:
             "firstPrompt": first_prompt,
             "summary": "(recovered session)",
             "messageCount": 0,
-            "created": created_dt.isoformat().replace("+00:00", "Z"),
-            "modified": created_dt.isoformat().replace("+00:00", "Z"),
+            "created": to_iso_z(created_dt),
+            "modified": to_iso_z(created_dt),
             "gitBranch": "",
             "projectPath": project_path,
             "isSidechain": False,
@@ -1115,7 +1116,7 @@ def execute_move(
                 add_data = plan.index_changes["add"]
                 index["projects"][add_data["path"]] = add_data["data"]
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             # Rewrite paths in history.jsonl
@@ -1307,7 +1308,7 @@ def execute_merge_orphan(
                         # Actually, we renamed the orphan, so don't add it
                         pass
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             # Rewrite paths in history.jsonl (if orphan had a known original path)
@@ -1383,7 +1384,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
                     del index["projects"][canonical_path]
                     removed.append(canonical_path)
 
-            index["lastUpdated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
             save_json_file(index_file, index)
 
             return {
