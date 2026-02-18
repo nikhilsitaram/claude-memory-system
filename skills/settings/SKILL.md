@@ -1,7 +1,7 @@
 ---
 name: settings
 description: View and modify memory system settings, check token usage
-user-invocable: true
+user-invokable: true
 ---
 
 <command-name>settings</command-name>

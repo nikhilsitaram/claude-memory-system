@@ -1,7 +1,7 @@
 ---
 name: synthesize
 description: Process raw session transcripts into daily summaries and update long-term memory with patterns and insights. Run during first session of the day, when prompted, or according to a set schedule.
-user-invocable: true
+user-invokable: true
 ---
 
 # Synthesize Skill

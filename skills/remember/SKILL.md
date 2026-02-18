@@ -1,7 +1,7 @@
 ---
 name: remember
 description: Save important notes directly to long-term memory's Pinned section. Use when user wants to explicitly preserve something permanently.
-user-invocable: true
+user-invokable: true
 ---
 
 # Remember Skill

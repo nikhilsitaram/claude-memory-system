@@ -1,7 +1,7 @@
 ---
 name: recall
 description: Search through all historical daily memory files to find information from past sessions. Use when user asks about past work, decisions, discussions, or topics that might have relevant history.
-user-invocable: true
+user-invokable: true
 ---
 
 # Recall Skill

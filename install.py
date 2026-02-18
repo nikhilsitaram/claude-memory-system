@@ -115,11 +115,7 @@ def create_directories() -> None:
         get_memory_dir() / ".backups",
         get_claude_dir() / "scripts",
         get_claude_dir() / "hooks",
-        get_claude_dir() / "skills" / "remember",
-        get_claude_dir() / "skills" / "synthesize",
-        get_claude_dir() / "skills" / "recall",
-        get_claude_dir() / "skills" / "settings",
-        get_claude_dir() / "skills" / "projects",
+        get_claude_dir() / "skills",
     ]
 
     for dir_path in dirs:
@@ -191,20 +187,22 @@ def link_hooks(script_dir: Path) -> None:
 
 
 def link_skills(script_dir: Path) -> None:
-    """Symlink skill files to ~/.claude/skills/."""
+    """Symlink skill directories to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
     skills = ["remember", "synthesize", "recall", "settings", "projects"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
-        dest_dir = skills_dir / skill
+        dest = skills_dir / skill
 
         if src_dir.exists():
-            src_skill = src_dir / "SKILL.md"
-            if src_skill.exists():
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                link_file(src_skill, dest_dir / "SKILL.md")
+            # Remove existing dir or symlink, then symlink the whole directory
+            if dest.is_symlink():
+                dest.unlink()
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+            dest.symlink_to(src_dir)
 
     print("Linked skills to ~/.claude/skills/")
 
