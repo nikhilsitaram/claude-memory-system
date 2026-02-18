@@ -14,6 +14,7 @@ Requirements: Python 3.9+
 
 import argparse
 import filecmp
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -224,8 +225,6 @@ def cmd_extract_debug(args: argparse.Namespace) -> int:
 
 def cmd_mark_routed(args: argparse.Namespace) -> int:
     """One-time migration: mark daily entries that exist in LTM with [routed] prefix."""
-    import re
-
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from memory_utils import (
         LTM_ENTRY_PATTERN,

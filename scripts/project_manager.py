@@ -14,6 +14,7 @@ Usage (from Claude Code):
     from project_manager import list_projects, find_orphaned_folders, ...
 """
 
+import dataclasses
 import json
 import os
 import shutil
@@ -1470,7 +1471,6 @@ if __name__ == "__main__":
     if args.command == "list":
         projects = list_projects()
         if args.json:
-            import dataclasses
             print(json.dumps([dataclasses.asdict(p) for p in projects], indent=2))
         else:
             print("Projects:")
@@ -1484,7 +1484,6 @@ if __name__ == "__main__":
     elif args.command == "orphans":
         orphans = find_orphaned_folders()
         if args.json:
-            import dataclasses
             print(json.dumps([dataclasses.asdict(o) for o in orphans], indent=2))
         else:
             print(f"Orphaned folders ({len(orphans)}):")
