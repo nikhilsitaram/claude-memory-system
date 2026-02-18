@@ -175,18 +175,22 @@ def _calculate_token_limits(settings: dict[str, Any]) -> dict[str, Any]:
 
     Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (750)
     """
-    global_days = settings.get("globalShortTerm", {}).get("workingDays", 2)
-    project_days = settings.get("projectShortTerm", {}).get("workingDays", 7)
+    global_days = settings.get("globalShortTerm", {}).get(
+        "workingDays", DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
+    )
+    project_days = settings.get("projectShortTerm", {}).get(
+        "workingDays", DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+    )
 
-    # Calculate short-term limits
-    settings["globalShortTerm"]["tokenLimit"] = global_days * SHORT_TERM_TOKENS_PER_DAY
-    settings["projectShortTerm"]["tokenLimit"] = project_days * SHORT_TERM_TOKENS_PER_DAY
+    # Calculate short-term limits (setdefault ensures sub-dicts exist)
+    settings.setdefault("globalShortTerm", {})["tokenLimit"] = global_days * SHORT_TERM_TOKENS_PER_DAY
+    settings.setdefault("projectShortTerm", {})["tokenLimit"] = project_days * SHORT_TERM_TOKENS_PER_DAY
 
     # Calculate total budget as sum of 4 components
     settings["totalTokenBudget"] = (
-        settings.get("globalLongTerm", {}).get("tokenLimit", 5000) +
+        settings.get("globalLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]) +
         settings["globalShortTerm"]["tokenLimit"] +
-        settings.get("projectLongTerm", {}).get("tokenLimit", 5000) +
+        settings.get("projectLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]) +
         settings["projectShortTerm"]["tokenLimit"]
     )
 

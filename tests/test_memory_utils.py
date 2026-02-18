@@ -11,6 +11,7 @@ from memory_utils import (
     DEFAULT_SETTINGS,
     SHORT_TERM_TOKENS_PER_DAY,
     FileLock,
+    _calculate_token_limits,
     _deep_merge,
     add_captured_session,
     estimate_tokens,
@@ -92,6 +93,32 @@ class TestLoadSettings:
             mock_sf.return_value = f
             settings = load_settings()
             assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
+
+
+class TestCalculateTokenLimits:
+    def test_fallback_defaults_match_default_settings(self):
+        """_calculate_token_limits fallbacks must match DEFAULT_SETTINGS."""
+        # Pass empty settings to trigger all fallbacks
+        result = _calculate_token_limits({})
+        expected_project_days = DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]  # 5
+        assert result["projectShortTerm"]["tokenLimit"] == expected_project_days * SHORT_TERM_TOKENS_PER_DAY
+
+    def test_fallback_global_short_term_matches_default_settings(self):
+        """Global short-term fallback must match DEFAULT_SETTINGS."""
+        result = _calculate_token_limits({})
+        expected_global_days = DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]  # 2
+        assert result["globalShortTerm"]["tokenLimit"] == expected_global_days * SHORT_TERM_TOKENS_PER_DAY
+
+    def test_fallback_long_term_limits_match_default_settings(self):
+        """Long-term token limit fallbacks must match DEFAULT_SETTINGS."""
+        result = _calculate_token_limits({})
+        expected_total = (
+            DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+            + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+        )
+        assert result["totalTokenBudget"] == expected_total
 
 
 class TestDeepMerge:
