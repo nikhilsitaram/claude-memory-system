@@ -61,6 +61,20 @@ from memory_utils import (
 # Sessions smaller than this are likely empty/metadata-only (2-3 messages ≈ 1000 bytes)
 MIN_SESSION_SIZE_BYTES = 1000
 
+__all__ = [
+    # Constants
+    "MIN_SESSION_SIZE_BYTES",
+    # Data classes
+    "SessionInfo",
+    # Session discovery
+    "list_all_sessions",
+    "has_assistant_message",
+    "list_pending_sessions",
+    "get_session_date",
+    # Project index
+    "build_projects_index",
+]
+
 # =============================================================================
 # Key Interfaces
 # =============================================================================
