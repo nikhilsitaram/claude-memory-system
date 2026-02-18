@@ -91,8 +91,10 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 
 Test conventions:
 - Class per function/feature: `class TestFunctionName`
-- Use `tempfile.TemporaryDirectory` for filesystem isolation
+- Use pytest `tmp_path` fixture for filesystem isolation (not `tempfile`)
 - Use `unittest.mock.patch` to mock path helpers (`get_projects_dir`, etc.)
+- Use `@pytest.mark.parametrize` for input/output variations instead of separate test methods
+- Put shared factories in `tests/helpers.py`; path setup lives in `tests/conftest.py`
 - Test happy path, edge cases, and error conditions
 - Never hardcode configurable values — import constants (`DEFAULT_AGE_DAYS`, `DEFAULT_SETTINGS`, etc.) and make test data relative to them (e.g., `timedelta(days=DEFAULT_AGE_DAYS * 2)` not `timedelta(days=60)`)
 

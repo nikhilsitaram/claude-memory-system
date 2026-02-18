@@ -5,19 +5,13 @@ Unit tests for load_memory.py
 Run with: python -m pytest tests/test_load_memory.py -v
 """
 
-import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from load_memory import (
+from load_memory import (  # noqa: I001
     _build_synthesis_prompt,
     load_daily_summaries,
     load_global_memory,
@@ -41,75 +35,70 @@ class TestShouldSynthesize:
             mock_f.return_value = Path("/nonexistent/.last-synthesis")
             assert should_synthesize(self._make_settings()) is True
 
-    def test_true_on_new_day(self):
+    def test_true_on_new_day(self, tmp_path):
         """Returns True when last synthesis was on a different UTC day."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ts_file = Path(tmpdir) / ".last-synthesis"
-            yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-            ts_file.write_text(yesterday.isoformat())
+        ts_file = tmp_path / ".last-synthesis"
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        ts_file.write_text(yesterday.isoformat())
 
-            with mock.patch("load_memory.get_last_synthesis_file") as mock_f:
-                mock_f.return_value = ts_file
-                assert should_synthesize(self._make_settings()) is True
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f:
+            mock_f.return_value = ts_file
+            assert should_synthesize(self._make_settings()) is True
 
-    def test_false_within_interval(self):
+    def test_false_within_interval(self, tmp_path):
         """Returns False when last synthesis is same day and within interval."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ts_file = Path(tmpdir) / ".last-synthesis"
-            fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-            thirty_min_ago = fixed_now - timedelta(minutes=30)
-            ts_file.write_text(thirty_min_ago.isoformat())
+        ts_file = tmp_path / ".last-synthesis"
+        fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        thirty_min_ago = fixed_now - timedelta(minutes=30)
+        ts_file.write_text(thirty_min_ago.isoformat())
 
-            with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
-                 mock.patch("load_memory.datetime") as mock_dt:
-                mock_f.return_value = ts_file
-                mock_dt.now.return_value = fixed_now
-                mock_dt.fromisoformat = datetime.fromisoformat
-                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-                assert should_synthesize(self._make_settings()) is False
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
+             mock.patch("load_memory.datetime") as mock_dt:
+            mock_f.return_value = ts_file
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            assert should_synthesize(self._make_settings()) is False
 
-    def test_true_after_interval(self):
+    def test_true_after_interval(self, tmp_path):
         """Returns True when same day but past intervalHours."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ts_file = Path(tmpdir) / ".last-synthesis"
-            fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-            three_hours_ago = fixed_now - timedelta(hours=3)
-            ts_file.write_text(three_hours_ago.isoformat())
+        ts_file = tmp_path / ".last-synthesis"
+        fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        three_hours_ago = fixed_now - timedelta(hours=3)
+        ts_file.write_text(three_hours_ago.isoformat())
 
-            with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
-                 mock.patch("load_memory.datetime") as mock_dt:
-                mock_f.return_value = ts_file
-                mock_dt.now.return_value = fixed_now
-                mock_dt.fromisoformat = datetime.fromisoformat
-                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-                assert should_synthesize(self._make_settings(interval_hours=2)) is True
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
+             mock.patch("load_memory.datetime") as mock_dt:
+            mock_f.return_value = ts_file
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            assert should_synthesize(self._make_settings(interval_hours=2)) is True
 
-    def test_true_on_invalid_file(self):
+    def test_true_on_invalid_file(self, tmp_path):
         """Returns True when file contains invalid content."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ts_file = Path(tmpdir) / ".last-synthesis"
-            ts_file.write_text("not a valid timestamp")
+        ts_file = tmp_path / ".last-synthesis"
+        ts_file.write_text("not a valid timestamp")
 
-            with mock.patch("load_memory.get_last_synthesis_file") as mock_f:
-                mock_f.return_value = ts_file
-                assert should_synthesize(self._make_settings()) is True
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f:
+            mock_f.return_value = ts_file
+            assert should_synthesize(self._make_settings()) is True
 
-    def test_respects_custom_interval(self):
+    def test_respects_custom_interval(self, tmp_path):
         """Uses intervalHours from settings, not hardcoded default."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ts_file = Path(tmpdir) / ".last-synthesis"
-            # Use fixed time to avoid UTC midnight edge case
-            fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-            three_hours_ago = fixed_now - timedelta(hours=3)
-            ts_file.write_text(three_hours_ago.isoformat())
+        ts_file = tmp_path / ".last-synthesis"
+        # Use fixed time to avoid UTC midnight edge case
+        fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        three_hours_ago = fixed_now - timedelta(hours=3)
+        ts_file.write_text(three_hours_ago.isoformat())
 
-            with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
-                 mock.patch("load_memory.datetime") as mock_dt:
-                mock_f.return_value = ts_file
-                mock_dt.now.return_value = fixed_now
-                mock_dt.fromisoformat = datetime.fromisoformat
-                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-                assert should_synthesize(self._make_settings(interval_hours=4)) is False
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
+             mock.patch("load_memory.datetime") as mock_dt:
+            mock_f.return_value = ts_file
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            assert should_synthesize(self._make_settings(interval_hours=4)) is False
 
 
 # =============================================================================
@@ -118,16 +107,15 @@ class TestShouldSynthesize:
 
 
 class TestLoadGlobalMemory:
-    def test_returns_content_when_exists(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mem_file = Path(tmpdir) / "global-long-term-memory.md"
-            mem_file.write_text("# Global Memory\nSome content here")
+    def test_returns_content_when_exists(self, tmp_path):
+        mem_file = tmp_path / "global-long-term-memory.md"
+        mem_file.write_text("# Global Memory\nSome content here")
 
-            with mock.patch("load_memory.get_global_memory_file") as mock_f:
-                mock_f.return_value = mem_file
-                content, size = load_global_memory()
-                assert "Global Memory" in content
-                assert size > 0
+        with mock.patch("load_memory.get_global_memory_file") as mock_f:
+            mock_f.return_value = mem_file
+            content, size = load_global_memory()
+            assert "Global Memory" in content
+            assert size > 0
 
     def test_returns_empty_when_no_file(self):
         with mock.patch("load_memory.get_global_memory_file") as mock_f:
@@ -136,21 +124,20 @@ class TestLoadGlobalMemory:
             assert content == ""
             assert size == 0
 
-    def test_returns_empty_on_io_error(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mem_file = Path(tmpdir) / "memory.md"
-            mem_file.write_text("content")
-            # Make unreadable
-            mem_file.chmod(0o000)
+    def test_returns_empty_on_io_error(self, tmp_path):
+        mem_file = tmp_path / "memory.md"
+        mem_file.write_text("content")
+        # Make unreadable
+        mem_file.chmod(0o000)
 
-            with mock.patch("load_memory.get_global_memory_file") as mock_f:
-                mock_f.return_value = mem_file
-                content, size = load_global_memory()
-                assert content == ""
-                assert size == 0
+        with mock.patch("load_memory.get_global_memory_file") as mock_f:
+            mock_f.return_value = mem_file
+            content, size = load_global_memory()
+            assert content == ""
+            assert size == 0
 
-            # Restore permissions for cleanup
-            mem_file.chmod(0o644)
+        # Restore permissions for cleanup
+        mem_file.chmod(0o644)
 
 
 # =============================================================================
@@ -159,38 +146,33 @@ class TestLoadGlobalMemory:
 
 
 class TestLoadProjectMemory:
-    def test_returns_content(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            mem_file = project_dir / "myproject-long-term-memory.md"
-            mem_file.write_text("# myproject\nProject learnings")
+    def test_returns_content(self, tmp_path):
+        mem_file = tmp_path / "myproject-long-term-memory.md"
+        mem_file.write_text("# myproject\nProject learnings")
 
-            with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-                mock_d.return_value = project_dir
-                content, size = load_project_memory("myproject")
-                assert "Project learnings" in content
-                assert size > 0
+        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
+            mock_d.return_value = tmp_path
+            content, size = load_project_memory("myproject")
+            assert "Project learnings" in content
+            assert size > 0
 
-    def test_returns_empty_when_missing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-                mock_d.return_value = Path(tmpdir)
-                content, size = load_project_memory("nonexistent")
-                assert content == ""
-                assert size == 0
+    def test_returns_empty_when_missing(self, tmp_path):
+        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
+            mock_d.return_value = tmp_path
+            content, size = load_project_memory("nonexistent")
+            assert content == ""
+            assert size == 0
 
-    def test_handles_special_chars_in_name(self):
+    def test_handles_special_chars_in_name(self, tmp_path):
         """Project names with special chars map to correct filenames."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            # "My Project!" → "my-project-long-term-memory.md"
-            mem_file = project_dir / "my-project-long-term-memory.md"
-            mem_file.write_text("# My Project\nContent")
+        # "My Project!" -> "my-project-long-term-memory.md"
+        mem_file = tmp_path / "my-project-long-term-memory.md"
+        mem_file.write_text("# My Project\nContent")
 
-            with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-                mock_d.return_value = project_dir
-                content, size = load_project_memory("My Project!")
-                assert "Content" in content
+        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
+            mock_d.return_value = tmp_path
+            content, size = load_project_memory("My Project!")
+            assert "Content" in content
 
 
 # =============================================================================
@@ -218,64 +200,65 @@ SAMPLE_DAILY_PROJECT = """# 2026-02-04
 """
 
 
+def _setup_daily_dir(tmp_path, include_global_only_day=False):
+    daily_dir = tmp_path / "daily"
+    daily_dir.mkdir()
+    (daily_dir / "2026-02-05.md").write_text(SAMPLE_DAILY_GLOBAL)
+    (daily_dir / "2026-02-04.md").write_text(SAMPLE_DAILY_PROJECT)
+    if include_global_only_day:
+        (daily_dir / "2026-02-03.md").write_text(
+            "# 2026-02-03\n## Actions\n- [global/implement] Only global\n"
+        )
+    return daily_dir
+
+
 class TestLoadDailySummaries:
-    def _setup_daily_dir(self, tmpdir: str) -> Path:
-        daily_dir = Path(tmpdir) / "daily"
-        daily_dir.mkdir()
-        (daily_dir / "2026-02-05.md").write_text(SAMPLE_DAILY_GLOBAL)
-        (daily_dir / "2026-02-04.md").write_text(SAMPLE_DAILY_PROJECT)
-        return daily_dir
+    def test_global_scope_filtering(self, tmp_path):
+        daily_dir = _setup_daily_dir(tmp_path)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory.get_working_days") as mock_wd:
+            mock_dd.return_value = daily_dir
+            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
 
-    def test_global_scope_filtering(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-                 mock.patch("load_memory.get_working_days") as mock_wd:
-                mock_dd.return_value = daily_dir
-                mock_wd.return_value = ["2026-02-05", "2026-02-04"]
+            summaries, total_bytes = load_daily_summaries(2, scope="global")
+            all_content = " ".join(content for _, content in summaries)
+            assert "[global/" in all_content
+            assert "[myproject/" not in all_content
 
-                summaries, total_bytes = load_daily_summaries(2, scope="global")
-                all_content = " ".join(content for _, content in summaries)
-                assert "[global/" in all_content
-                assert "[myproject/" not in all_content
+    def test_project_scope_filtering(self, tmp_path):
+        daily_dir = _setup_daily_dir(tmp_path)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory.get_working_days") as mock_wd:
+            mock_dd.return_value = daily_dir
+            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
 
-    def test_project_scope_filtering(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-                 mock.patch("load_memory.get_working_days") as mock_wd:
-                mock_dd.return_value = daily_dir
-                mock_wd.return_value = ["2026-02-05", "2026-02-04"]
+            summaries, total_bytes = load_daily_summaries(2, scope="myproject")
+            all_content = " ".join(content for _, content in summaries)
+            assert "[myproject/" in all_content
+            assert "[global/" not in all_content
 
-                summaries, total_bytes = load_daily_summaries(2, scope="myproject")
-                all_content = " ".join(content for _, content in summaries)
-                assert "[myproject/" in all_content
-                assert "[global/" not in all_content
-
-    def test_respects_days_limit(self):
+    def test_respects_days_limit(self, tmp_path):
         """get_working_days already limits, so only those dates are loaded."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-                 mock.patch("load_memory.get_working_days") as mock_wd:
-                mock_dd.return_value = daily_dir
-                mock_wd.return_value = ["2026-02-05"]  # Only 1 day
+        daily_dir = _setup_daily_dir(tmp_path)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory.get_working_days") as mock_wd:
+            mock_dd.return_value = daily_dir
+            mock_wd.return_value = ["2026-02-05"]  # Only 1 day
 
-                summaries, _ = load_daily_summaries(1, scope="global")
-                dates = [d for d, _ in summaries]
-                assert "2026-02-04" not in dates
+            summaries, _ = load_daily_summaries(1, scope="global")
+            dates = [d for d, _ in summaries]
+            assert "2026-02-04" not in dates
 
-    def test_empty_when_no_matching_content(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-                 mock.patch("load_memory.get_working_days") as mock_wd:
-                mock_dd.return_value = daily_dir
-                mock_wd.return_value = ["2026-02-05"]
+    def test_empty_when_no_matching_content(self, tmp_path):
+        daily_dir = _setup_daily_dir(tmp_path)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory.get_working_days") as mock_wd:
+            mock_dd.return_value = daily_dir
+            mock_wd.return_value = ["2026-02-05"]
 
-                summaries, total_bytes = load_daily_summaries(1, scope="other-project")
-                assert summaries == []
-                assert total_bytes == 0
+            summaries, total_bytes = load_daily_summaries(1, scope="other-project")
+            assert summaries == []
+            assert total_bytes == 0
 
 
 # =============================================================================
@@ -284,50 +267,36 @@ class TestLoadDailySummaries:
 
 
 class TestLoadProjectHistory:
-    def _setup_daily_dir(self, tmpdir: str) -> Path:
-        daily_dir = Path(tmpdir) / "daily"
-        daily_dir.mkdir()
-        (daily_dir / "2026-02-05.md").write_text(SAMPLE_DAILY_GLOBAL)
-        (daily_dir / "2026-02-04.md").write_text(SAMPLE_DAILY_PROJECT)
-        # Day with no project content
-        (daily_dir / "2026-02-03.md").write_text(
-            "# 2026-02-03\n## Actions\n- [global/implement] Only global\n"
-        )
-        return daily_dir
+    def test_loads_project_entries(self, tmp_path):
+        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd:
+            mock_dd.return_value = daily_dir
+            project = {"name": "myproject"}
+            summaries, total_bytes = load_project_history(project, days_limit=10)
 
-    def test_loads_project_entries(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd:
-                mock_dd.return_value = daily_dir
-                project = {"name": "myproject"}
-                summaries, total_bytes = load_project_history(project, days_limit=10)
+            assert len(summaries) == 2  # Feb 4 and Feb 5 have myproject entries
+            all_content = " ".join(content for _, content in summaries)
+            assert "[myproject/" in all_content
+            assert "[global/" not in all_content
+            assert total_bytes > 0
 
-                assert len(summaries) == 2  # Feb 4 and Feb 5 have myproject entries
-                all_content = " ".join(content for _, content in summaries)
-                assert "[myproject/" in all_content
-                assert "[global/" not in all_content
-                assert total_bytes > 0
-
-    def test_oldest_first_ordering(self):
+    def test_oldest_first_ordering(self, tmp_path):
         """Output should be chronological (oldest first)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd:
-                mock_dd.return_value = daily_dir
-                project = {"name": "myproject"}
-                summaries, _ = load_project_history(project, days_limit=10)
-                dates = [d for d, _ in summaries]
-                assert dates == sorted(dates)
+        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd:
+            mock_dd.return_value = daily_dir
+            project = {"name": "myproject"}
+            summaries, _ = load_project_history(project, days_limit=10)
+            dates = [d for d, _ in summaries]
+            assert dates == sorted(dates)
 
-    def test_respects_day_limit(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = self._setup_daily_dir(tmpdir)
-            with mock.patch("load_memory.get_daily_dir") as mock_dd:
-                mock_dd.return_value = daily_dir
-                project = {"name": "myproject"}
-                summaries, _ = load_project_history(project, days_limit=1)
-                assert len(summaries) == 1
+    def test_respects_day_limit(self, tmp_path):
+        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
+        with mock.patch("load_memory.get_daily_dir") as mock_dd:
+            mock_dd.return_value = daily_dir
+            project = {"name": "myproject"}
+            summaries, _ = load_project_history(project, days_limit=1)
+            assert len(summaries) == 1
 
     def test_empty_project_name(self):
         project = {"name": ""}
@@ -345,7 +314,7 @@ class TestSynthesisPromptRoutedMarker:
     """Verify [routed] marking is handled by post-synthesis mark-routed script, not subagent."""
 
     def test_prompt_does_not_contain_routed_instruction(self):
-        """Subagent should NOT be told to mark [routed] — devtools.py mark-routed handles it."""
+        """Subagent should NOT be told to mark [routed] -- devtools.py mark-routed handles it."""
         prompt = _build_synthesis_prompt("", ["2026-02-01"])
         assert "Dedup marking" not in prompt
 

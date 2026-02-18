@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""
-Unit tests for memory_utils.py
-
-Run with: python -m pytest tests/test_memory_utils.py -v
-"""
+"""Unit tests for memory_utils.py"""
 
 import json
 import os
-import sys
-import tempfile
 from pathlib import Path
 from unittest import mock
 
 import pytest
-
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
 from memory_utils import (
     DEFAULT_SETTINGS,
     SHORT_TERM_TOKENS_PER_DAY,
@@ -43,20 +32,14 @@ from memory_utils import (
 # =============================================================================
 
 
-class TestEstimateTokens:
-    def test_empty_string(self):
-        assert estimate_tokens("") == 0
-
-    def test_basic_text(self):
-        # 20 chars → 5 tokens
-        assert estimate_tokens("12345678901234567890") == 5
-
-    def test_short_text(self):
-        # 3 chars → 0 (integer division)
-        assert estimate_tokens("abc") == 0
-
-    def test_four_chars(self):
-        assert estimate_tokens("abcd") == 1
+@pytest.mark.parametrize("text,expected", [
+    ("", 0),
+    ("12345678901234567890", 5),
+    ("abc", 0),
+    ("abcd", 1),
+])
+def test_estimate_tokens(text, expected):
+    assert estimate_tokens(text) == expected
 
 
 # =============================================================================
@@ -65,62 +48,50 @@ class TestEstimateTokens:
 
 
 class TestLoadSettings:
-    def test_defaults_when_no_file(self):
+    @pytest.fixture
+    def no_settings_file(self):
         with mock.patch("memory_utils.get_settings_file") as mock_sf:
             mock_sf.return_value = Path("/nonexistent/settings.json")
+            yield
+
+    def test_defaults_when_no_file(self, no_settings_file):
+        settings = load_settings()
+        assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
+        assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+        assert settings["globalLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+
+    def test_calculated_token_limits(self, no_settings_file):
+        settings = load_settings()
+        assert settings["globalShortTerm"]["tokenLimit"] == 2 * SHORT_TERM_TOKENS_PER_DAY
+        assert settings["projectShortTerm"]["tokenLimit"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+
+    def test_total_budget_calculation(self, no_settings_file):
+        settings = load_settings()
+        expected = (
+            DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+            + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
+            + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+        )
+        assert settings["totalTokenBudget"] == expected
+
+    def test_user_overrides_merge(self, tmp_path):
+        f = tmp_path / "settings.json"
+        f.write_text(json.dumps({"globalShortTerm": {"workingDays": 5}}))
+        with mock.patch("memory_utils.get_settings_file") as mock_sf:
+            mock_sf.return_value = f
+            settings = load_settings()
+            assert settings["globalShortTerm"]["workingDays"] == 5
+            # Other defaults preserved
+            assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+
+    def test_invalid_json_returns_defaults(self, tmp_path):
+        f = tmp_path / "settings.json"
+        f.write_text("not valid json {{{")
+        with mock.patch("memory_utils.get_settings_file") as mock_sf:
+            mock_sf.return_value = f
             settings = load_settings()
             assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-            assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
-            assert settings["globalLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
-
-    def test_calculated_token_limits(self):
-        with mock.patch("memory_utils.get_settings_file") as mock_sf:
-            mock_sf.return_value = Path("/nonexistent/settings.json")
-            settings = load_settings()
-            assert settings["globalShortTerm"]["tokenLimit"] == 2 * SHORT_TERM_TOKENS_PER_DAY
-            assert settings["projectShortTerm"]["tokenLimit"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
-
-    def test_total_budget_calculation(self):
-        with mock.patch("memory_utils.get_settings_file") as mock_sf:
-            mock_sf.return_value = Path("/nonexistent/settings.json")
-            settings = load_settings()
-            expected = (
-                DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
-                + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
-                + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
-                + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
-            )
-            assert settings["totalTokenBudget"] == expected
-
-    def test_user_overrides_merge(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump({"globalShortTerm": {"workingDays": 5}}, f)
-            f.flush()
-            try:
-                with mock.patch("memory_utils.get_settings_file") as mock_sf:
-                    mock_sf.return_value = Path(f.name)
-                    settings = load_settings()
-                    assert settings["globalShortTerm"]["workingDays"] == 5
-                    # Other defaults preserved
-                    assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
-            finally:
-                os.unlink(f.name)
-
-    def test_invalid_json_returns_defaults(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            f.write("not valid json {{{")
-            f.flush()
-            try:
-                with mock.patch("memory_utils.get_settings_file") as mock_sf:
-                    mock_sf.return_value = Path(f.name)
-                    settings = load_settings()
-                    assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-            finally:
-                os.unlink(f.name)
 
 
 class TestDeepMerge:
@@ -152,44 +123,30 @@ class TestJsonFileUtils:
         result = load_json_file(Path("/nonexistent/file.json"), {"default": True})
         assert result == {"default": True}
 
-    def test_load_valid_json(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump({"key": "value"}, f)
-            f.flush()
-            try:
-                result = load_json_file(Path(f.name))
-                assert result == {"key": "value"}
-            finally:
-                os.unlink(f.name)
+    def test_load_valid_json(self, tmp_path):
+        f = tmp_path / "data.json"
+        f.write_text(json.dumps({"key": "value"}))
+        result = load_json_file(f)
+        assert result == {"key": "value"}
 
-    def test_load_invalid_json_returns_default(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            f.write("broken")
-            f.flush()
-            try:
-                result = load_json_file(Path(f.name), [])
-                assert result == []
-            finally:
-                os.unlink(f.name)
+    def test_load_invalid_json_returns_default(self, tmp_path):
+        f = tmp_path / "broken.json"
+        f.write_text("broken")
+        result = load_json_file(f, [])
+        assert result == []
 
-    def test_save_creates_parent_dirs(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = Path(tmpdir) / "sub" / "dir" / "data.json"
-            assert save_json_file(filepath, {"saved": True})
-            assert filepath.exists()
-            assert json.loads(filepath.read_text()) == {"saved": True}
+    def test_save_creates_parent_dirs(self, tmp_path):
+        filepath = tmp_path / "sub" / "dir" / "data.json"
+        assert save_json_file(filepath, {"saved": True})
+        assert filepath.exists()
+        assert json.loads(filepath.read_text()) == {"saved": True}
 
-    def test_save_round_trip(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = Path(tmpdir) / "test.json"
-            data = {"nested": {"list": [1, 2, 3]}}
-            save_json_file(filepath, data)
-            loaded = load_json_file(filepath)
-            assert loaded == data
+    def test_save_round_trip(self, tmp_path):
+        filepath = tmp_path / "test.json"
+        data = {"nested": {"list": [1, 2, 3]}}
+        save_json_file(filepath, data)
+        loaded = load_json_file(filepath)
+        assert loaded == data
 
 
 # =============================================================================
@@ -197,21 +154,15 @@ class TestJsonFileUtils:
 # =============================================================================
 
 
-class TestProjectNameToFilename:
-    def test_simple_name(self):
-        assert project_name_to_filename("myproject") == "myproject-long-term-memory.md"
-
-    def test_spaces(self):
-        assert project_name_to_filename("My Project") == "my-project-long-term-memory.md"
-
-    def test_special_characters(self):
-        assert project_name_to_filename("My@Project!") == "myproject-long-term-memory.md"
-
-    def test_consecutive_hyphens(self):
-        assert project_name_to_filename("my--project") == "my-project-long-term-memory.md"
-
-    def test_leading_trailing_hyphens(self):
-        assert project_name_to_filename("-project-") == "project-long-term-memory.md"
+@pytest.mark.parametrize("name,expected", [
+    ("myproject", "myproject-long-term-memory.md"),
+    ("My Project", "my-project-long-term-memory.md"),
+    ("My@Project!", "myproject-long-term-memory.md"),
+    ("my--project", "my-project-long-term-memory.md"),
+    ("-project-", "project-long-term-memory.md"),
+])
+def test_project_name_to_filename(name, expected):
+    assert project_name_to_filename(name) == expected
 
 
 # =============================================================================
@@ -225,57 +176,47 @@ class TestCapturedSessions:
             mock_cf.return_value = Path("/nonexistent/.captured")
             assert get_captured_sessions() == set()
 
-    def test_read_captured(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".captured", delete=False
-        ) as f:
-            f.write("session-1\nsession-2\n\nsession-3\n")
-            f.flush()
-            try:
-                with mock.patch("memory_utils.get_captured_file") as mock_cf:
-                    mock_cf.return_value = Path(f.name)
-                    result = get_captured_sessions()
-                    assert result == {"session-1", "session-2", "session-3"}
-            finally:
-                os.unlink(f.name)
+    def test_read_captured(self, tmp_path):
+        f = tmp_path / ".captured"
+        f.write_text("session-1\nsession-2\n\nsession-3\n")
+        with mock.patch("memory_utils.get_captured_file") as mock_cf:
+            mock_cf.return_value = f
+            result = get_captured_sessions()
+            assert result == {"session-1", "session-2", "session-3"}
 
-    def test_add_captured(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            captured_file = Path(tmpdir) / ".captured"
-            with mock.patch("memory_utils.get_captured_file") as mock_cf:
-                mock_cf.return_value = captured_file
-                add_captured_session("new-session")
-                assert "new-session" in captured_file.read_text()
+    def test_add_captured(self, tmp_path):
+        captured_file = tmp_path / ".captured"
+        with mock.patch("memory_utils.get_captured_file") as mock_cf:
+            mock_cf.return_value = captured_file
+            add_captured_session("new-session")
+            assert "new-session" in captured_file.read_text()
 
-    def test_add_duplicate_skipped(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            captured_file = Path(tmpdir) / ".captured"
-            captured_file.write_text("existing\n")
-            with mock.patch("memory_utils.get_captured_file") as mock_cf:
-                mock_cf.return_value = captured_file
-                add_captured_session("existing")
-                # Should not have duplicate
-                lines = [line for line in captured_file.read_text().splitlines() if line.strip()]
-                assert lines.count("existing") == 1
+    def test_add_duplicate_skipped(self, tmp_path):
+        captured_file = tmp_path / ".captured"
+        captured_file.write_text("existing\n")
+        with mock.patch("memory_utils.get_captured_file") as mock_cf:
+            mock_cf.return_value = captured_file
+            add_captured_session("existing")
+            # Should not have duplicate
+            lines = [line for line in captured_file.read_text().splitlines() if line.strip()]
+            assert lines.count("existing") == 1
 
-    def test_remove_captured(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            captured_file = Path(tmpdir) / ".captured"
-            captured_file.write_text("keep-me\nremove-me\nalso-keep\n")
-            with mock.patch("memory_utils.get_captured_file") as mock_cf:
-                mock_cf.return_value = captured_file
-                assert remove_captured_session("remove-me") is True
-                content = captured_file.read_text()
-                assert "remove-me" not in content
-                assert "keep-me" in content
+    def test_remove_captured(self, tmp_path):
+        captured_file = tmp_path / ".captured"
+        captured_file.write_text("keep-me\nremove-me\nalso-keep\n")
+        with mock.patch("memory_utils.get_captured_file") as mock_cf:
+            mock_cf.return_value = captured_file
+            assert remove_captured_session("remove-me") is True
+            content = captured_file.read_text()
+            assert "remove-me" not in content
+            assert "keep-me" in content
 
-    def test_remove_nonexistent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            captured_file = Path(tmpdir) / ".captured"
-            captured_file.write_text("session-1\n")
-            with mock.patch("memory_utils.get_captured_file") as mock_cf:
-                mock_cf.return_value = captured_file
-                assert remove_captured_session("nonexistent") is False
+    def test_remove_nonexistent(self, tmp_path):
+        captured_file = tmp_path / ".captured"
+        captured_file.write_text("session-1\n")
+        with mock.patch("memory_utils.get_captured_file") as mock_cf:
+            mock_cf.return_value = captured_file
+            assert remove_captured_session("nonexistent") is False
 
 
 # =============================================================================
@@ -289,29 +230,27 @@ class TestGetWorkingDays:
             mock_dd.return_value = Path("/nonexistent/daily")
             assert get_working_days(7) == []
 
-    def test_returns_sorted_descending(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = Path(tmpdir)
-            (daily_dir / "2026-01-01.md").write_text("day 1")
-            (daily_dir / "2026-01-03.md").write_text("day 3")
-            (daily_dir / "2026-01-02.md").write_text("day 2")
+    def test_returns_sorted_descending(self, tmp_path):
+        daily_dir = tmp_path
+        (daily_dir / "2026-01-01.md").write_text("day 1")
+        (daily_dir / "2026-01-03.md").write_text("day 3")
+        (daily_dir / "2026-01-02.md").write_text("day 2")
 
-            with mock.patch("memory_utils.get_daily_dir") as mock_dd:
-                mock_dd.return_value = daily_dir
-                days = get_working_days(10)
-                assert days == ["2026-01-03", "2026-01-02", "2026-01-01"]
+        with mock.patch("memory_utils.get_daily_dir") as mock_dd:
+            mock_dd.return_value = daily_dir
+            days = get_working_days(10)
+            assert days == ["2026-01-03", "2026-01-02", "2026-01-01"]
 
-    def test_respects_limit(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            daily_dir = Path(tmpdir)
-            for i in range(1, 6):
-                (daily_dir / f"2026-01-0{i}.md").write_text(f"day {i}")
+    def test_respects_limit(self, tmp_path):
+        daily_dir = tmp_path
+        for i in range(1, 6):
+            (daily_dir / f"2026-01-0{i}.md").write_text(f"day {i}")
 
-            with mock.patch("memory_utils.get_daily_dir") as mock_dd:
-                mock_dd.return_value = daily_dir
-                days = get_working_days(2)
-                assert len(days) == 2
-                assert days[0] == "2026-01-05"
+        with mock.patch("memory_utils.get_daily_dir") as mock_dd:
+            mock_dd.return_value = daily_dir
+            days = get_working_days(2)
+            assert len(days) == 2
+            assert days[0] == "2026-01-05"
 
 
 # =============================================================================
@@ -498,61 +437,55 @@ class TestFindCurrentProject:
 
 
 class TestFileLock:
-    def test_acquire_and_release(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            lock = FileLock(lock_path, timeout=2.0)
-            assert lock.acquire() is True
+    def test_acquire_and_release(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        lock = FileLock(lock_path, timeout=2.0)
+        assert lock.acquire() is True
+        assert lock_path.exists()
+        lock.release()
+        assert not lock_path.exists()
+
+    def test_context_manager(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        with FileLock(lock_path, timeout=2.0):
             assert lock_path.exists()
-            lock.release()
-            assert not lock_path.exists()
+        assert not lock_path.exists()
 
-    def test_context_manager(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with FileLock(lock_path, timeout=2.0):
-                assert lock_path.exists()
-            assert not lock_path.exists()
+    def test_writes_pid(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        with FileLock(lock_path, timeout=2.0):
+            pid_file = lock_path / "pid"
+            assert pid_file.exists()
+            assert int(pid_file.read_text().strip()) == os.getpid()
 
-    def test_writes_pid(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            with FileLock(lock_path, timeout=2.0):
-                pid_file = lock_path / "pid"
-                assert pid_file.exists()
-                assert int(pid_file.read_text().strip()) == os.getpid()
+    def test_stale_lock_removed_by_dead_pid(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        # Create a stale lock with a dead PID
+        lock_path.mkdir()
+        (lock_path / "pid").write_text("999999999")  # Very unlikely to be a real PID
 
-    def test_stale_lock_removed_by_dead_pid(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            # Create a stale lock with a dead PID
-            lock_path.mkdir()
-            (lock_path / "pid").write_text("999999999")  # Very unlikely to be a real PID
+        lock = FileLock(lock_path, timeout=2.0)
+        assert lock.acquire() is True
+        lock.release()
 
-            lock = FileLock(lock_path, timeout=2.0)
-            assert lock.acquire() is True
-            lock.release()
+    def test_timeout_when_locked(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        # Acquire lock
+        lock1 = FileLock(lock_path, timeout=2.0)
+        lock1.acquire()
 
-    def test_timeout_when_locked(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            # Acquire lock
-            lock1 = FileLock(lock_path, timeout=2.0)
-            lock1.acquire()
+        # Second lock should timeout (owner PID is alive — it's us)
+        lock2 = FileLock(lock_path, timeout=0.3, poll_interval=0.1)
+        assert lock2.acquire() is False
 
-            # Second lock should timeout (owner PID is alive — it's us)
-            lock2 = FileLock(lock_path, timeout=0.3, poll_interval=0.1)
-            assert lock2.acquire() is False
+        lock1.release()
 
-            lock1.release()
-
-    def test_double_release_is_safe(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lock_path = Path(tmpdir) / "test.lock"
-            lock = FileLock(lock_path, timeout=2.0)
-            lock.acquire()
-            lock.release()
-            lock.release()  # Should not raise
+    def test_double_release_is_safe(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        lock = FileLock(lock_path, timeout=2.0)
+        lock.acquire()
+        lock.release()
+        lock.release()  # Should not raise
 
 
 # =============================================================================

@@ -6,19 +6,12 @@ Run with: python -m pytest tests/test_project_manager.py -v
 """
 
 import json
-import os
-import sys
-import tempfile
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from project_manager import (
+from project_manager import (  # noqa: I001
     backup_files,
     decode_path_best_effort,
     encode_path,
@@ -41,27 +34,15 @@ from project_manager import (
 # =============================================================================
 
 
-class TestEncodePath:
-    """Tests for encode_path function."""
-
-    def test_simple_path(self):
-        assert encode_path("/home/user/project") == "-home-user-project"
-
-    def test_path_with_dots(self):
-        """Dots are also replaced with hyphens."""
-        assert encode_path("/home/user/.config") == "-home-user--config"
-
-    def test_path_with_existing_hyphens(self):
-        """Hyphens in the path are preserved (but this causes ambiguity)."""
-        # Note: This is a known limitation - we can't distinguish
-        # /home/user/my-project from /home/user/my/project after encoding
-        assert encode_path("/home/user/my-project") == "-home-user-my-project"
-
-    def test_empty_path(self):
-        assert encode_path("") == ""
-
-    def test_root_only(self):
-        assert encode_path("/") == "-"
+@pytest.mark.parametrize("path,expected", [
+    ("/home/user/project", "-home-user-project"),
+    ("/home/user/.config", "-home-user--config"),
+    ("/home/user/my-project", "-home-user-my-project"),
+    ("", ""),
+    ("/", "-"),
+])
+def test_encode_path(path, expected):
+    assert encode_path(path) == expected
 
 
 class TestDecodePathBestEffort:
@@ -92,41 +73,38 @@ class TestDecodePathBestEffort:
 class TestGetOriginalPathFromFolder:
     """Tests for get_original_path_from_folder function."""
 
-    def test_with_valid_sessions_index(self):
+    def test_with_valid_sessions_index(self, tmp_path):
         """Should extract originalPath from sessions-index.json."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            folder = Path(tmpdir) / "test-folder"
-            folder.mkdir()
+        folder = tmp_path / "test-folder"
+        folder.mkdir()
 
-            sessions_index = folder / "sessions-index.json"
-            sessions_index.write_text(json.dumps({
-                "originalPath": "/home/user/my-project",
-                "entries": []
-            }))
+        sessions_index = folder / "sessions-index.json"
+        sessions_index.write_text(json.dumps({
+            "originalPath": "/home/user/my-project",
+            "entries": []
+        }))
 
-            result = get_original_path_from_folder(folder)
-            assert result == "/home/user/my-project"
+        result = get_original_path_from_folder(folder)
+        assert result == "/home/user/my-project"
 
-    def test_without_sessions_index(self):
+    def test_without_sessions_index(self, tmp_path):
         """Should return None if no sessions-index.json."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            folder = Path(tmpdir) / "test-folder"
-            folder.mkdir()
+        folder = tmp_path / "test-folder"
+        folder.mkdir()
 
-            result = get_original_path_from_folder(folder)
-            assert result is None
+        result = get_original_path_from_folder(folder)
+        assert result is None
 
-    def test_with_invalid_json(self):
+    def test_with_invalid_json(self, tmp_path):
         """Should return None if sessions-index.json is invalid."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            folder = Path(tmpdir) / "test-folder"
-            folder.mkdir()
+        folder = tmp_path / "test-folder"
+        folder.mkdir()
 
-            sessions_index = folder / "sessions-index.json"
-            sessions_index.write_text("not valid json")
+        sessions_index = folder / "sessions-index.json"
+        sessions_index.write_text("not valid json")
 
-            result = get_original_path_from_folder(folder)
-            assert result is None
+        result = get_original_path_from_folder(folder)
+        assert result is None
 
 
 # =============================================================================
@@ -143,49 +121,44 @@ class TestValidateMove:
         assert not result.valid
         assert any("does not exist" in issue for issue in result.issues)
 
-    def test_source_not_directory(self):
+    def test_source_not_directory(self, tmp_path):
         """Should fail if source is a file, not directory."""
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            try:
-                result = validate_move(Path(f.name), Path("/tmp/dest"))
-                assert not result.valid
-                assert any("not a directory" in issue for issue in result.issues)
-            finally:
-                os.unlink(f.name)
+        f = tmp_path / "test.txt"
+        f.write_text("content")
+        result = validate_move(f, Path("/tmp/dest"))
+        assert not result.valid
+        assert any("not a directory" in issue for issue in result.issues)
 
-    def test_dest_parent_not_exists(self):
+    def test_dest_parent_not_exists(self, tmp_path):
         """Should fail if destination parent doesn't exist."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source"
-            source.mkdir()
+        source = tmp_path / "source"
+        source.mkdir()
 
-            result = validate_move(source, Path("/nonexistent/parent/dest"))
-            assert not result.valid
-            assert any("parent does not exist" in issue for issue in result.issues)
+        result = validate_move(source, Path("/nonexistent/parent/dest"))
+        assert not result.valid
+        assert any("parent does not exist" in issue for issue in result.issues)
 
-    def test_dest_exists_warning(self):
+    def test_dest_exists_warning(self, tmp_path):
         """Should warn (not fail) if destination exists."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source"
-            dest = Path(tmpdir) / "dest"
-            source.mkdir()
-            dest.mkdir()
+        source = tmp_path / "source"
+        dest = tmp_path / "dest"
+        source.mkdir()
+        dest.mkdir()
 
-            result = validate_move(source, dest)
-            assert result.valid  # Valid, just has warnings
-            assert any("exists" in w for w in result.warnings)
+        result = validate_move(source, dest)
+        assert result.valid  # Valid, just has warnings
+        assert any("exists" in w for w in result.warnings)
 
-    def test_valid_move(self):
+    def test_valid_move(self, tmp_path):
         """Should pass for valid move scenario."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source"
-            dest = Path(tmpdir) / "dest"
-            source.mkdir()
-            # dest doesn't exist, which is fine
+        source = tmp_path / "source"
+        dest = tmp_path / "dest"
+        source.mkdir()
+        # dest doesn't exist, which is fine
 
-            result = validate_move(source, dest)
-            assert result.valid
-            assert len(result.issues) == 0
+        result = validate_move(source, dest)
+        assert result.valid
+        assert len(result.issues) == 0
 
 
 class TestValidateMergeOrphan:
@@ -212,96 +185,68 @@ class TestValidateMergeOrphan:
 class TestPlanMergeOrphan:
     """Tests for plan_merge_orphan function."""
 
-    def test_same_encoded_path_skips_folder_operations(self):
-        """When orphan name equals target encoded path, no moves/merges/renames should be planned."""
-        with tempfile.TemporaryDirectory() as tmp:
-            projects_dir = Path(tmp) / "projects"
-            projects_dir.mkdir()
-            memory_dir = Path(tmp) / "memory"
-            memory_dir.mkdir()
-            claude_dir = Path(tmp) / "claude"
-            claude_dir.mkdir()
+    def _setup_and_plan(self, tmp_path, orphan_name, target_path, setup_fn=None):
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        claude_dir = tmp_path / "claude"
+        claude_dir.mkdir()
+        index_file = memory_dir / "projects-index.json"
+        index_file.write_text('{"projects":{}}')
+        if setup_fn:
+            setup_fn(projects_dir)
+        with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
+             mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
+             mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
+             mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
+            return plan_merge_orphan(orphan_name, target_path)
 
-            # Orphan folder whose name matches the target's encoded path
-            target_path = Path("/home/user/personal/investing")
-            orphan_name = encode_path(str(target_path))  # -home-user-personal-investing
+    def test_same_encoded_path_skips_folder_operations(self, tmp_path):
+        """When orphan name equals target encoded path, no moves/merges/renames should be planned."""
+        target_path = Path("/home/user/personal/investing")
+        orphan_name = encode_path(str(target_path))  # -home-user-personal-investing
+
+        def setup(projects_dir):
             orphan_folder = projects_dir / orphan_name
             orphan_folder.mkdir()
-
             # Create a session file so it's not empty
             (orphan_folder / "abc123.jsonl").write_text('{"type":"test"}\n')
 
-            # Create projects-index.json
-            index_file = memory_dir / "projects-index.json"
-            index_file.write_text('{"projects":{}}')
+        plan = self._setup_and_plan(tmp_path, orphan_name, target_path, setup_fn=setup)
 
-            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
-                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
-                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
-                plan = plan_merge_orphan(orphan_name, target_path)
+        assert plan.moves == [], f"Expected no moves, got {plan.moves}"
+        assert plan.merges == [], f"Expected no merges, got {plan.merges}"
+        assert plan.renames == [], f"Expected no renames, got {plan.renames}"
 
-            assert plan.moves == [], f"Expected no moves, got {plan.moves}"
-            assert plan.merges == [], f"Expected no merges, got {plan.merges}"
-            assert plan.renames == [], f"Expected no renames, got {plan.renames}"
-
-    def test_different_encoded_path_plans_move(self):
+    def test_different_encoded_path_plans_move(self, tmp_path):
         """When orphan name differs from target encoded path and target doesn't exist, should plan a move."""
-        with tempfile.TemporaryDirectory() as tmp:
-            projects_dir = Path(tmp) / "projects"
-            projects_dir.mkdir()
-            memory_dir = Path(tmp) / "memory"
-            memory_dir.mkdir()
-            claude_dir = Path(tmp) / "claude"
-            claude_dir.mkdir()
+        orphan_name = "-home-user-old-investing"
+        target_path = Path("/home/user/personal/investing")
 
-            # Orphan with old name, target has different encoded path
-            orphan_name = "-home-user-old-investing"
-            target_path = Path("/home/user/personal/investing")
-            orphan_folder = projects_dir / orphan_name
-            orphan_folder.mkdir()
+        def setup(projects_dir):
+            (projects_dir / orphan_name).mkdir()
 
-            index_file = memory_dir / "projects-index.json"
-            index_file.write_text('{"projects":{}}')
+        plan = self._setup_and_plan(tmp_path, orphan_name, target_path, setup_fn=setup)
 
-            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
-                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
-                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
-                plan = plan_merge_orphan(orphan_name, target_path)
+        assert len(plan.moves) == 1, f"Expected 1 move, got {plan.moves}"
+        assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
 
-            assert len(plan.moves) == 1, f"Expected 1 move, got {plan.moves}"
-            assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
-
-    def test_different_encoded_path_plans_merge_when_target_exists(self):
+    def test_different_encoded_path_plans_merge_when_target_exists(self, tmp_path):
         """When both orphan and target folders exist, should plan a merge + rename."""
-        with tempfile.TemporaryDirectory() as tmp:
-            projects_dir = Path(tmp) / "projects"
-            projects_dir.mkdir()
-            memory_dir = Path(tmp) / "memory"
-            memory_dir.mkdir()
-            claude_dir = Path(tmp) / "claude"
-            claude_dir.mkdir()
+        orphan_name = "-home-user-old-investing"
+        target_path = Path("/home/user/personal/investing")
+        target_encoded = encode_path(str(target_path))
 
-            orphan_name = "-home-user-old-investing"
-            target_path = Path("/home/user/personal/investing")
-            target_encoded = encode_path(str(target_path))
-
+        def setup(projects_dir):
             # Both folders exist
             (projects_dir / orphan_name).mkdir()
             (projects_dir / target_encoded).mkdir()
 
-            index_file = memory_dir / "projects-index.json"
-            index_file.write_text('{"projects":{}}')
+        plan = self._setup_and_plan(tmp_path, orphan_name, target_path, setup_fn=setup)
 
-            with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
-                 mock.patch("project_manager.get_projects_index_file", return_value=index_file), \
-                 mock.patch("project_manager.get_claude_dir", return_value=claude_dir), \
-                 mock.patch("project_manager.get_project_memory_dir", return_value=memory_dir / "project-memory"):
-                plan = plan_merge_orphan(orphan_name, target_path)
-
-            assert len(plan.merges) == 1, f"Expected 1 merge, got {plan.merges}"
-            assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
+        assert len(plan.merges) == 1, f"Expected 1 merge, got {plan.merges}"
+        assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
 
 
 # =============================================================================
@@ -312,106 +257,102 @@ class TestPlanMergeOrphan:
 class TestMergeSessionsIndex:
     """Tests for merge_sessions_index function."""
 
-    def test_merge_disjoint_entries(self):
+    def test_merge_disjoint_entries(self, tmp_path):
         """Two files with different sessions should combine all."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source.json"
-            dest = Path(tmpdir) / "dest.json"
+        source = tmp_path / "source.json"
+        dest = tmp_path / "dest.json"
 
-            source.write_text(json.dumps({
-                "originalPath": "/old/path",
-                "entries": [
-                    {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-                    {"id": "session-2", "created": "2026-01-02T10:00:00Z"},
-                ]
-            }))
+        source.write_text(json.dumps({
+            "originalPath": "/old/path",
+            "entries": [
+                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
+                {"id": "session-2", "created": "2026-01-02T10:00:00Z"},
+            ]
+        }))
 
-            dest.write_text(json.dumps({
-                "originalPath": "/new/path",
-                "entries": [
-                    {"id": "session-3", "created": "2026-01-03T10:00:00Z"},
-                ]
-            }))
+        dest.write_text(json.dumps({
+            "originalPath": "/new/path",
+            "entries": [
+                {"id": "session-3", "created": "2026-01-03T10:00:00Z"},
+            ]
+        }))
 
-            merged_count = merge_sessions_index(source, dest)
-            assert merged_count == 2
+        merged_count = merge_sessions_index(source, dest)
+        assert merged_count == 2
 
-            result = json.loads(dest.read_text())
-            assert len(result["entries"]) == 3
+        result = json.loads(dest.read_text())
+        assert len(result["entries"]) == 3
 
-    def test_merge_duplicate_sessions_keeps_newer(self):
+    def test_merge_duplicate_sessions_keeps_newer(self, tmp_path):
         """Duplicate session IDs should keep the one with newer timestamp."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source.json"
-            dest = Path(tmpdir) / "dest.json"
+        source = tmp_path / "source.json"
+        dest = tmp_path / "dest.json"
 
-            source.write_text(json.dumps({
-                "originalPath": "/old/path",
-                "entries": [
-                    {"id": "session-1", "created": "2026-01-01T10:00:00Z",
-                     "lastActive": "2026-01-01T15:00:00Z"},  # Newer
-                ]
-            }))
+        source.write_text(json.dumps({
+            "originalPath": "/old/path",
+            "entries": [
+                {"id": "session-1", "created": "2026-01-01T10:00:00Z",
+                 "lastActive": "2026-01-01T15:00:00Z"},  # Newer
+            ]
+        }))
 
-            dest.write_text(json.dumps({
-                "originalPath": "/new/path",
-                "entries": [
-                    {"id": "session-1", "created": "2026-01-01T10:00:00Z",
-                     "lastActive": "2026-01-01T12:00:00Z"},  # Older
-                ]
-            }))
+        dest.write_text(json.dumps({
+            "originalPath": "/new/path",
+            "entries": [
+                {"id": "session-1", "created": "2026-01-01T10:00:00Z",
+                 "lastActive": "2026-01-01T12:00:00Z"},  # Older
+            ]
+        }))
 
-            merged_count = merge_sessions_index(source, dest)
-            assert merged_count == 1
+        merged_count = merge_sessions_index(source, dest)
+        assert merged_count == 1
 
-            result = json.loads(dest.read_text())
-            assert len(result["entries"]) == 1
-            assert result["entries"][0]["lastActive"] == "2026-01-01T15:00:00Z"
+        result = json.loads(dest.read_text())
+        assert len(result["entries"]) == 1
+        assert result["entries"][0]["lastActive"] == "2026-01-01T15:00:00Z"
 
-    def test_merge_into_empty(self):
+    def test_merge_into_empty(self, tmp_path):
         """Merging into file with no entries should work."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source.json"
-            dest = Path(tmpdir) / "dest.json"
+        source = tmp_path / "source.json"
+        dest = tmp_path / "dest.json"
 
-            source.write_text(json.dumps({
-                "originalPath": "/old/path",
-                "entries": [
-                    {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-                ]
-            }))
+        source.write_text(json.dumps({
+            "originalPath": "/old/path",
+            "entries": [
+                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
+            ]
+        }))
 
-            dest.write_text(json.dumps({
-                "originalPath": "/new/path",
-                "entries": []
-            }))
+        dest.write_text(json.dumps({
+            "originalPath": "/new/path",
+            "entries": []
+        }))
 
-            merged_count = merge_sessions_index(source, dest)
-            assert merged_count == 1
+        merged_count = merge_sessions_index(source, dest)
+        assert merged_count == 1
 
-            result = json.loads(dest.read_text())
-            assert len(result["entries"]) == 1
+        result = json.loads(dest.read_text())
+        assert len(result["entries"]) == 1
 
-    def test_merge_empty_source(self):
+    def test_merge_empty_source(self, tmp_path):
         """Merging from empty source should not change dest."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "source.json"
-            dest = Path(tmpdir) / "dest.json"
+        source = tmp_path / "source.json"
+        dest = tmp_path / "dest.json"
 
-            source.write_text(json.dumps({
-                "originalPath": "/old/path",
-                "entries": []
-            }))
+        source.write_text(json.dumps({
+            "originalPath": "/old/path",
+            "entries": []
+        }))
 
-            dest.write_text(json.dumps({
-                "originalPath": "/new/path",
-                "entries": [
-                    {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-                ]
-            }))
+        dest.write_text(json.dumps({
+            "originalPath": "/new/path",
+            "entries": [
+                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
+            ]
+        }))
 
-            merged_count = merge_sessions_index(source, dest)
-            assert merged_count == 0
+        merged_count = merge_sessions_index(source, dest)
+        assert merged_count == 0
 
 
 # =============================================================================
@@ -422,45 +363,39 @@ class TestMergeSessionsIndex:
 class TestRewritePathsInFile:
     """Tests for rewrite_paths_in_file function."""
 
-    def test_simple_replacement(self):
+    def test_simple_replacement(self, tmp_path):
         """Should replace old path with new path."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("/home/user/old-project\n")
-            f.write("some other text\n")
-            f.write("/home/user/old-project/subdir\n")
-            f.flush()
+        f = tmp_path / "test.txt"
+        f.write_text(
+            "/home/user/old-project\n"
+            "some other text\n"
+            "/home/user/old-project/subdir\n"
+        )
 
-            try:
-                count = rewrite_paths_in_file(
-                    Path(f.name),
-                    "/home/user/old-project",
-                    "/home/user/new-project"
-                )
+        count = rewrite_paths_in_file(
+            f,
+            "/home/user/old-project",
+            "/home/user/new-project"
+        )
 
-                assert count == 2
+        assert count == 2
 
-                content = Path(f.name).read_text()
-                assert "/home/user/new-project" in content
-                assert "/home/user/new-project/subdir" in content
-                assert "/home/user/old-project" not in content
-            finally:
-                os.unlink(f.name)
+        content = f.read_text()
+        assert "/home/user/new-project" in content
+        assert "/home/user/new-project/subdir" in content
+        assert "/home/user/old-project" not in content
 
-    def test_no_matches(self):
+    def test_no_matches(self, tmp_path):
         """Should return 0 if no matches found."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("some text without the path\n")
-            f.flush()
+        f = tmp_path / "test.txt"
+        f.write_text("some text without the path\n")
 
-            try:
-                count = rewrite_paths_in_file(
-                    Path(f.name),
-                    "/nonexistent/path",
-                    "/new/path"
-                )
-                assert count == 0
-            finally:
-                os.unlink(f.name)
+        count = rewrite_paths_in_file(
+            f,
+            "/nonexistent/path",
+            "/new/path"
+        )
+        assert count == 0
 
     def test_nonexistent_file(self):
         """Should return 0 for nonexistent file."""
@@ -480,37 +415,35 @@ class TestRewritePathsInFile:
 class TestBackupFiles:
     """Tests for backup_files function."""
 
-    def test_creates_backup_directory(self):
+    def test_creates_backup_directory(self, tmp_path):
         """Should create timestamped backup directory."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a test file
-            test_file = Path(tmpdir) / "test.json"
-            test_file.write_text('{"key": "value"}')
+        # Create a test file
+        test_file = tmp_path / "test.json"
+        test_file.write_text('{"key": "value"}')
 
-            # Mock the memory directory
-            with mock.patch("project_manager.get_memory_dir") as mock_mem:
-                mock_mem.return_value = Path(tmpdir) / "memory"
+        # Mock the memory directory
+        with mock.patch("project_manager.get_memory_dir") as mock_mem:
+            mock_mem.return_value = tmp_path / "memory"
 
-                backup_path = backup_files([test_file])
+            backup_path = backup_files([test_file])
 
-                assert backup_path.exists()
-                assert backup_path.is_dir()
-                assert (backup_path / "test.json").exists()
+            assert backup_path.exists()
+            assert backup_path.is_dir()
+            assert (backup_path / "test.json").exists()
 
-    def test_copies_file_contents(self):
+    def test_copies_file_contents(self, tmp_path):
         """Backup should preserve file contents."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            test_file = Path(tmpdir) / "test.json"
-            original_content = '{"important": "data"}'
-            test_file.write_text(original_content)
+        test_file = tmp_path / "test.json"
+        original_content = '{"important": "data"}'
+        test_file.write_text(original_content)
 
-            with mock.patch("project_manager.get_memory_dir") as mock_mem:
-                mock_mem.return_value = Path(tmpdir) / "memory"
+        with mock.patch("project_manager.get_memory_dir") as mock_mem:
+            mock_mem.return_value = tmp_path / "memory"
 
-                backup_path = backup_files([test_file])
-                backed_up = (backup_path / "test.json").read_text()
+            backup_path = backup_files([test_file])
+            backed_up = (backup_path / "test.json").read_text()
 
-                assert backed_up == original_content
+            assert backed_up == original_content
 
 
 class TestRestoreFromBackup:
@@ -522,26 +455,25 @@ class TestRestoreFromBackup:
         assert not result["success"]
         assert "not found" in result["message"]
 
-    def test_restore_projects_index(self):
+    def test_restore_projects_index(self, tmp_path):
         """Should restore projects-index.json to correct location."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create backup directory with a file
-            backup_dir = Path(tmpdir) / "backup"
-            backup_dir.mkdir()
-            (backup_dir / "projects-index.json").write_text('{"restored": true}')
+        # Create backup directory with a file
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+        (backup_dir / "projects-index.json").write_text('{"restored": true}')
 
-            # Mock the target location
-            memory_dir = Path(tmpdir) / "memory"
-            memory_dir.mkdir()
+        # Mock the target location
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
 
-            with mock.patch("project_manager.get_projects_index_file") as mock_idx:
-                mock_idx.return_value = memory_dir / "projects-index.json"
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx:
+            mock_idx.return_value = memory_dir / "projects-index.json"
 
-                result = restore_from_backup(backup_dir)
+            result = restore_from_backup(backup_dir)
 
-                assert result["success"]
-                assert len(result["restored"]) == 1
-                assert (memory_dir / "projects-index.json").exists()
+            assert result["success"]
+            assert len(result["restored"]) == 1
+            assert (memory_dir / "projects-index.json").exists()
 
 
 # =============================================================================
@@ -552,54 +484,40 @@ class TestRestoreFromBackup:
 class TestPlanMove:
     """Tests for plan_move function."""
 
-    def test_plan_includes_backup_list(self):
+    def _plan_move(self, tmp_path, old_path, new_path):
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.get_claude_dir") as mock_claude, \
+             mock.patch("project_manager.get_project_memory_dir") as mock_mem, \
+             mock.patch("project_manager.load_json_file") as mock_load:
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            mock_claude.return_value = tmp_path
+            mock_mem.return_value = tmp_path / "project-memory"
+            mock_load.return_value = {"projects": {}}
+            (tmp_path / "projects-index.json").write_text("{}")
+            return plan_move(old_path, new_path)
+
+    def test_plan_includes_backup_list(self, tmp_path):
         """Plan should list files to backup."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_path = Path(tmpdir) / "old"
-            new_path = Path(tmpdir) / "new"
-            old_path.mkdir()
+        old_path = tmp_path / "old"
+        new_path = tmp_path / "new"
+        old_path.mkdir()
 
-            # Create mock index file
-            with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude, \
-                 mock.patch("project_manager.get_project_memory_dir") as mock_mem, \
-                 mock.patch("project_manager.load_json_file") as mock_load:
+        plan = self._plan_move(tmp_path, old_path, new_path)
 
-                mock_idx.return_value = Path(tmpdir) / "projects-index.json"
-                mock_claude.return_value = Path(tmpdir)
-                mock_mem.return_value = Path(tmpdir) / "project-memory"
-                mock_load.return_value = {"projects": {}}
+        assert plan.operation == "move"
+        assert len(plan.backups) > 0
 
-                # Create the index file so it shows up in backups
-                (Path(tmpdir) / "projects-index.json").write_text("{}")
-
-                plan = plan_move(old_path, new_path)
-
-                assert plan.operation == "move"
-                assert len(plan.backups) > 0
-
-    def test_plan_summary_is_human_readable(self):
+    def test_plan_summary_is_human_readable(self, tmp_path):
         """Plan summary should describe the operation."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_path = Path(tmpdir) / "old"
-            new_path = Path(tmpdir) / "new"
-            old_path.mkdir()
+        old_path = tmp_path / "old"
+        new_path = tmp_path / "new"
+        old_path.mkdir()
 
-            with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude, \
-                 mock.patch("project_manager.get_project_memory_dir") as mock_mem, \
-                 mock.patch("project_manager.load_json_file") as mock_load:
+        plan = self._plan_move(tmp_path, old_path, new_path)
 
-                mock_idx.return_value = Path(tmpdir) / "projects-index.json"
-                mock_claude.return_value = Path(tmpdir)
-                mock_mem.return_value = Path(tmpdir) / "project-memory"
-                mock_load.return_value = {"projects": {}}
-
-                plan = plan_move(old_path, new_path)
-
-                assert "Move project" in plan.summary
-                assert str(old_path) in plan.summary
-                assert str(new_path) in plan.summary
+        assert "Move project" in plan.summary
+        assert str(old_path) in plan.summary
+        assert str(new_path) in plan.summary
 
 
 class TestPlanCleanup:
@@ -660,36 +578,35 @@ class TestListProjects:
             projects = list_projects()
             assert projects == []
 
-    def test_with_valid_project(self):
+    def test_with_valid_project(self, tmp_path):
         """Should return project info for valid projects."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a real directory
-            project_dir = Path(tmpdir) / "my-project"
-            project_dir.mkdir()
+        # Create a real directory
+        project_dir = tmp_path / "my-project"
+        project_dir.mkdir()
 
-            with mock.patch("project_manager.load_json_file") as mock_load, \
-                 mock.patch("project_manager.get_project_memory_dir") as mock_mem, \
-                 mock.patch("project_manager.get_projects_index_file") as mock_idx:
+        with mock.patch("project_manager.load_json_file") as mock_load, \
+             mock.patch("project_manager.get_project_memory_dir") as mock_mem, \
+             mock.patch("project_manager.get_projects_index_file") as mock_idx:
 
-                mock_load.return_value = {
-                    "projects": {
-                        str(project_dir).lower(): {
-                            "name": "my-project",
-                            "originalPath": str(project_dir),
-                            "workDays": ["2026-01-01"],
-                            "encodedPaths": ["-tmp-my-project"],
-                        }
+            mock_load.return_value = {
+                "projects": {
+                    str(project_dir).lower(): {
+                        "name": "my-project",
+                        "originalPath": str(project_dir),
+                        "workDays": ["2026-01-01"],
+                        "encodedPaths": ["-tmp-my-project"],
                     }
                 }
-                mock_mem.return_value = Path(tmpdir) / "project-memory"
-                mock_idx.return_value = Path(tmpdir) / "index.json"
+            }
+            mock_mem.return_value = tmp_path / "project-memory"
+            mock_idx.return_value = tmp_path / "index.json"
 
-                projects = list_projects()
+            projects = list_projects()
 
-                assert len(projects) == 1
-                assert projects[0].name == "my-project"
-                assert projects[0].exists is True
-                assert len(projects[0].issues) == 0
+            assert len(projects) == 1
+            assert projects[0].name == "my-project"
+            assert projects[0].exists is True
+            assert len(projects[0].issues) == 0
 
     def test_with_missing_path(self):
         """Should mark project with issue if path doesn't exist."""
@@ -726,84 +643,81 @@ class TestListProjects:
 class TestUpdateSessionIndexPaths:
     """Tests for update_session_index_paths function."""
 
-    def test_updates_matching_files(self):
+    def test_updates_matching_files(self, tmp_path):
         """Should update sessions-index.json files containing old path."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            # Create two project folders with sessions-index.json
-            folder1 = projects_dir / "-home-user-old-project"
-            folder1.mkdir()
-            (folder1 / "sessions-index.json").write_text(json.dumps({
-                "originalPath": "/home/user/old-project",
-                "entries": []
-            }))
+        # Create two project folders with sessions-index.json
+        folder1 = projects_dir / "-home-user-old-project"
+        folder1.mkdir()
+        (folder1 / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/old-project",
+            "entries": []
+        }))
 
-            folder2 = projects_dir / "-home-user-old-project-sub"
-            folder2.mkdir()
-            (folder2 / "sessions-index.json").write_text(json.dumps({
-                "originalPath": "/home/user/old-project/sub",
-                "entries": []
-            }))
+        folder2 = projects_dir / "-home-user-old-project-sub"
+        folder2.mkdir()
+        (folder2 / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/old-project/sub",
+            "entries": []
+        }))
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir:
-                mock_dir.return_value = projects_dir
+        with mock.patch("project_manager.get_projects_dir") as mock_dir:
+            mock_dir.return_value = projects_dir
 
-                count = update_session_index_paths(
-                    "/home/user/old-project", "/home/user/new-project"
-                )
+            count = update_session_index_paths(
+                "/home/user/old-project", "/home/user/new-project"
+            )
 
-            assert count == 2
+        assert count == 2
 
-            data1 = json.loads((folder1 / "sessions-index.json").read_text())
-            assert data1["originalPath"] == "/home/user/new-project"
+        data1 = json.loads((folder1 / "sessions-index.json").read_text())
+        assert data1["originalPath"] == "/home/user/new-project"
 
-            data2 = json.loads((folder2 / "sessions-index.json").read_text())
-            assert data2["originalPath"] == "/home/user/new-project/sub"
+        data2 = json.loads((folder2 / "sessions-index.json").read_text())
+        assert data2["originalPath"] == "/home/user/new-project/sub"
 
-    def test_skips_non_matching_files(self):
+    def test_skips_non_matching_files(self, tmp_path):
         """Should not modify files that don't contain old path."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            folder = projects_dir / "-home-user-other"
-            folder.mkdir()
-            original = json.dumps({
-                "originalPath": "/home/user/other",
-                "entries": []
-            })
-            (folder / "sessions-index.json").write_text(original)
+        folder = projects_dir / "-home-user-other"
+        folder.mkdir()
+        original = json.dumps({
+            "originalPath": "/home/user/other",
+            "entries": []
+        })
+        (folder / "sessions-index.json").write_text(original)
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir:
-                mock_dir.return_value = projects_dir
+        with mock.patch("project_manager.get_projects_dir") as mock_dir:
+            mock_dir.return_value = projects_dir
 
-                count = update_session_index_paths(
-                    "/home/user/old-project", "/home/user/new-project"
-                )
+            count = update_session_index_paths(
+                "/home/user/old-project", "/home/user/new-project"
+            )
 
-            assert count == 0
-            assert (folder / "sessions-index.json").read_text() == original
+        assert count == 0
+        assert (folder / "sessions-index.json").read_text() == original
 
-    def test_skips_folders_without_sessions_index(self):
+    def test_skips_folders_without_sessions_index(self, tmp_path):
         """Should skip folders that don't have sessions-index.json."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            folder = projects_dir / "-home-user-old-project"
-            folder.mkdir()
-            # No sessions-index.json created
+        folder = projects_dir / "-home-user-old-project"
+        folder.mkdir()
+        # No sessions-index.json created
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir:
-                mock_dir.return_value = projects_dir
+        with mock.patch("project_manager.get_projects_dir") as mock_dir:
+            mock_dir.return_value = projects_dir
 
-                count = update_session_index_paths(
-                    "/home/user/old-project", "/home/user/new-project"
-                )
+            count = update_session_index_paths(
+                "/home/user/old-project", "/home/user/new-project"
+            )
 
-            assert count == 0
+        assert count == 0
 
     def test_returns_zero_for_missing_projects_dir(self):
         """Should return 0 if projects directory doesn't exist."""
@@ -823,147 +737,111 @@ class TestUpdateSessionIndexPaths:
 class TestFindOrphanedFolders:
     """Tests for find_orphaned_folders function."""
 
-    def test_tracked_folder_not_orphan(self):
+    def _find_orphans(self, tmp_path, index):
+        projects_dir = tmp_path / "projects"
+        with mock.patch("project_manager.get_projects_dir", return_value=projects_dir), \
+             mock.patch("project_manager.get_projects_index_file", return_value=tmp_path / "index.json"), \
+             mock.patch("project_manager.load_json_file", return_value=index), \
+             mock.patch("project_manager.get_claude_dir", return_value=tmp_path):
+            return find_orphaned_folders()
+
+    def test_tracked_folder_not_orphan(self, tmp_path):
         """Folder in encodedPaths should not be flagged as orphan,
         even if sessions-index.json has stale originalPath."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            # Create a folder with stale originalPath
-            folder = projects_dir / "-home-user-new-project"
-            folder.mkdir()
-            (folder / "sessions-index.json").write_text(json.dumps({
-                "originalPath": "/home/user/old-project",  # Stale!
-                "entries": []
-            }))
+        # Create a folder with stale originalPath
+        folder = projects_dir / "-home-user-new-project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/old-project",  # Stale!
+            "entries": []
+        }))
 
-            index = {
-                "projects": {
-                    "/home/user/new-project": {
-                        "name": "new-project",
-                        "originalPath": "/home/user/new-project",
-                        "encodedPaths": ["-home-user-new-project"],
-                        "workDays": [],
-                    }
+        index = {
+            "projects": {
+                "/home/user/new-project": {
+                    "name": "new-project",
+                    "originalPath": "/home/user/new-project",
+                    "encodedPaths": ["-home-user-new-project"],
+                    "workDays": [],
                 }
             }
+        }
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
-                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.load_json_file") as mock_load, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude:
-                mock_dir.return_value = projects_dir
-                mock_idx.return_value = Path(tmpdir) / "index.json"
-                mock_load.return_value = index
-                mock_claude.return_value = Path(tmpdir)
+        orphans = self._find_orphans(tmp_path, index)
+        assert len(orphans) == 0
 
-                orphans = find_orphaned_folders()
-
-            assert len(orphans) == 0
-
-    def test_untracked_folder_with_stale_path_is_orphan(self):
+    def test_untracked_folder_with_stale_path_is_orphan(self, tmp_path):
         """Folder not in encodedPaths with stale originalPath should be orphan."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            folder = projects_dir / "-home-user-old-project"
-            folder.mkdir()
-            (folder / "sessions-index.json").write_text(json.dumps({
-                "originalPath": "/home/user/old-project",  # Path doesn't exist
-                "entries": []
-            }))
+        folder = projects_dir / "-home-user-old-project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/old-project",  # Path doesn't exist
+            "entries": []
+        }))
 
-            index = {"projects": {}}  # Not tracked
+        index = {"projects": {}}  # Not tracked
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
-                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.load_json_file") as mock_load, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude:
-                mock_dir.return_value = projects_dir
-                mock_idx.return_value = Path(tmpdir) / "index.json"
-                mock_load.return_value = index
-                mock_claude.return_value = Path(tmpdir)
+        orphans = self._find_orphans(tmp_path, index)
+        assert len(orphans) == 1
+        assert orphans[0].folder_name == "-home-user-old-project"
 
-                orphans = find_orphaned_folders()
-
-            assert len(orphans) == 1
-            assert orphans[0].folder_name == "-home-user-old-project"
-
-    def test_folder_with_valid_path_not_orphan(self):
+    def test_folder_with_valid_path_not_orphan(self, tmp_path):
         """Folder whose originalPath exists on disk should not be orphan."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            # Create the actual project directory so path exists
-            real_project = Path(tmpdir) / "my-project"
-            real_project.mkdir()
+        # Create the actual project directory so path exists
+        real_project = tmp_path / "my-project"
+        real_project.mkdir()
 
-            folder = projects_dir / "-tmp-my-project"
-            folder.mkdir()
-            (folder / "sessions-index.json").write_text(json.dumps({
-                "originalPath": str(real_project),
-                "entries": []
-            }))
+        folder = projects_dir / "-tmp-my-project"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": str(real_project),
+            "entries": []
+        }))
 
-            index = {"projects": {}}  # Not tracked, but path exists
+        index = {"projects": {}}  # Not tracked, but path exists
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
-                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.load_json_file") as mock_load, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude:
-                mock_dir.return_value = projects_dir
-                mock_idx.return_value = Path(tmpdir) / "index.json"
-                mock_load.return_value = index
-                mock_claude.return_value = Path(tmpdir)
+        orphans = self._find_orphans(tmp_path, index)
+        assert len(orphans) == 0
 
-                orphans = find_orphaned_folders()
-
-            assert len(orphans) == 0
-
-    def test_old_encoded_path_also_tracked(self):
+    def test_old_encoded_path_also_tracked(self, tmp_path):
         """Old encoded path kept in encodedPaths should not be orphan."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            projects_dir = Path(tmpdir) / "projects"
-            projects_dir.mkdir()
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
 
-            # Simulate: folder was renamed from old to new,
-            # but old encoded name kept in encodedPaths for transcript discovery
-            folder = projects_dir / "-home-user-old-name"
-            folder.mkdir()
-            (folder / "sessions-index.json").write_text(json.dumps({
-                "originalPath": "/home/user/old-name",  # Stale
-                "entries": []
-            }))
+        # Simulate: folder was renamed from old to new,
+        # but old encoded name kept in encodedPaths for transcript discovery
+        folder = projects_dir / "-home-user-old-name"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/old-name",  # Stale
+            "entries": []
+        }))
 
-            index = {
-                "projects": {
-                    "/home/user/new-name": {
-                        "name": "new-name",
-                        "originalPath": "/home/user/new-name",
-                        "encodedPaths": [
-                            "-home-user-new-name",
-                            "-home-user-old-name",  # Old path kept
-                        ],
-                        "workDays": [],
-                    }
+        index = {
+            "projects": {
+                "/home/user/new-name": {
+                    "name": "new-name",
+                    "originalPath": "/home/user/new-name",
+                    "encodedPaths": [
+                        "-home-user-new-name",
+                        "-home-user-old-name",  # Old path kept
+                    ],
+                    "workDays": [],
                 }
             }
+        }
 
-            with mock.patch("project_manager.get_projects_dir") as mock_dir, \
-                 mock.patch("project_manager.get_projects_index_file") as mock_idx, \
-                 mock.patch("project_manager.load_json_file") as mock_load, \
-                 mock.patch("project_manager.get_claude_dir") as mock_claude:
-                mock_dir.return_value = projects_dir
-                mock_idx.return_value = Path(tmpdir) / "index.json"
-                mock_load.return_value = index
-                mock_claude.return_value = Path(tmpdir)
-
-                orphans = find_orphaned_folders()
-
-            assert len(orphans) == 0
+        orphans = self._find_orphans(tmp_path, index)
+        assert len(orphans) == 0
 
 
 if __name__ == "__main__":

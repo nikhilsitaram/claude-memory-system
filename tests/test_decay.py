@@ -5,19 +5,13 @@ Unit tests for decay.py
 Run with: python -m pytest tests/test_decay.py -v
 """
 
-import sys
-import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-# Add scripts directory to path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from decay import (
+from decay import (  # noqa: I001
     ARCHIVE_HEADER_PATTERN,
     DATE_PATTERN,
     DEFAULT_AGE_DAYS,
@@ -40,24 +34,14 @@ from decay import (
 # =============================================================================
 
 
-class TestParseLearningDate:
-    def test_valid_date(self):
-        line = "- (2026-01-15) [pattern] Some learning"
-        result = parse_learning_date(line)
-        assert result == date(2026, 1, 15)
-
-    def test_no_date(self):
-        line = "- [pattern] No date here"
-        assert parse_learning_date(line) is None
-
-    def test_invalid_date(self):
-        line = "- (2026-13-45) [pattern] Invalid date"
-        assert parse_learning_date(line) is None
-
-    def test_date_in_middle(self):
-        line = "- Some text (2026-06-15) more text"
-        result = parse_learning_date(line)
-        assert result == date(2026, 6, 15)
+@pytest.mark.parametrize("line,expected", [
+    ("- (2026-01-15) [pattern] Some learning", date(2026, 1, 15)),
+    ("- [pattern] No date here", None),
+    ("- (2026-13-45) [pattern] Invalid date", None),
+    ("- Some text (2026-06-15) more text", date(2026, 6, 15)),
+])
+def test_parse_learning_date(line, expected):
+    assert parse_learning_date(line) == expected
 
 
 class TestDatePattern:
@@ -87,26 +71,30 @@ class TestArchiveHeaderPattern:
 # =============================================================================
 
 
-class TestSectionClassification:
-    def test_protected_sections(self):
-        assert is_protected_section("## About Me")
-        assert is_protected_section("## Pinned")
-        assert is_protected_section("## Current Projects")
+@pytest.mark.parametrize("section", [
+    "## About Me", "## Pinned", "## Current Projects",
+])
+def test_protected_sections(section):
+    assert is_protected_section(section)
 
-    def test_non_protected(self):
-        assert not is_protected_section("## Key Learnings")
-        assert not is_protected_section("## Random")
 
-    def test_decay_eligible(self):
-        assert is_decay_eligible("## Key Actions")
-        assert is_decay_eligible("## Key Decisions")
-        assert is_decay_eligible("## Key Learnings")
-        assert is_decay_eligible("## Key Lessons")
+@pytest.mark.parametrize("section", ["## Key Learnings", "## Random"])
+def test_non_protected(section):
+    assert not is_protected_section(section)
 
-    def test_not_decay_eligible(self):
-        assert not is_decay_eligible("## About Me")
-        assert not is_decay_eligible("## Pinned")
-        assert not is_decay_eligible("## Random Section")
+
+@pytest.mark.parametrize("section", [
+    "## Key Actions", "## Key Decisions", "## Key Learnings", "## Key Lessons",
+])
+def test_decay_eligible(section):
+    assert is_decay_eligible(section)
+
+
+@pytest.mark.parametrize("section", [
+    "## About Me", "## Pinned", "## Random Section",
+])
+def test_not_decay_eligible(section):
+    assert not is_decay_eligible(section)
 
 
 # =============================================================================
@@ -328,12 +316,12 @@ class TestBuildProjectWorkDaysMap:
 
 
 class TestDecayFile:
-    def _make_memory_file(self, tmpdir: str, content: str) -> Path:
-        filepath = Path(tmpdir) / "test-memory.md"
+    def _make_memory_file(self, tmp_path, content):
+        filepath = tmp_path / "test-memory.md"
         filepath.write_text(content)
         return filepath
 
-    def test_decay_old_learning(self):
+    def test_decay_old_learning(self, tmp_path):
         old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).strftime("%Y-%m-%d")
         content = f"""## Pinned
 - Permanent item
@@ -342,30 +330,28 @@ class TestDecayFile:
 <!-- Subject to decay -->
 - ({old_date}) [pattern] Old learning that should be archived
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
-            assert count == 1
-            assert "Old learning" in archived[0]
+        filepath = self._make_memory_file(tmp_path, content)
+        count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
+        assert count == 1
+        assert "Old learning" in archived[0]
 
-            # Verify file was updated
-            new_content = filepath.read_text()
-            assert "Old learning" not in new_content
-            # Pinned section preserved
-            assert "Permanent item" in new_content
+        # Verify file was updated
+        new_content = filepath.read_text()
+        assert "Old learning" not in new_content
+        # Pinned section preserved
+        assert "Permanent item" in new_content
 
-    def test_keep_recent_learning(self):
+    def test_keep_recent_learning(self, tmp_path):
         recent_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         content = f"""## Key Learnings
 - ({recent_date}) [pattern] Recent learning
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
-            assert count == 0
-            assert filepath.read_text() == content
+        filepath = self._make_memory_file(tmp_path, content)
+        count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
+        assert count == 0
+        assert filepath.read_text() == content
 
-    def test_pinned_section_protected(self):
+    def test_pinned_section_protected(self, tmp_path):
         old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).strftime("%Y-%m-%d")
         content = f"""## Pinned
 - ({old_date}) [pattern] Old but pinned
@@ -373,40 +359,37 @@ class TestDecayFile:
 ## Key Learnings
 - ({old_date}) [pattern] Old and eligible
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
-            assert count == 1  # Only the Key Learnings entry
-            new_content = filepath.read_text()
-            assert "Old but pinned" in new_content
+        filepath = self._make_memory_file(tmp_path, content)
+        count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
+        assert count == 1  # Only the Key Learnings entry
+        new_content = filepath.read_text()
+        assert "Old but pinned" in new_content
 
-    def test_undated_learning_protected(self):
+    def test_undated_learning_protected(self, tmp_path):
         content = """## Key Learnings
 - [pattern] No date means no decay
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
-            assert count == 0
+        filepath = self._make_memory_file(tmp_path, content)
+        count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
+        assert count == 0
 
-    def test_dry_run_no_changes(self):
+    def test_dry_run_no_changes(self, tmp_path):
         old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).strftime("%Y-%m-%d")
         content = f"""## Key Learnings
 - ({old_date}) [pattern] Should be archived
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS, dry_run=True)
-            assert count == 1
-            # File should NOT be modified
-            assert filepath.read_text() == content
+        filepath = self._make_memory_file(tmp_path, content)
+        count, archived = decay_file(filepath, age_days=DEFAULT_AGE_DAYS, dry_run=True)
+        assert count == 1
+        # File should NOT be modified
+        assert filepath.read_text() == content
 
     def test_nonexistent_file(self):
         count, archived = decay_file(Path("/nonexistent/file.md"), age_days=DEFAULT_AGE_DAYS)
         assert count == 0
         assert archived == []
 
-    def test_multiple_sections_decayed(self):
+    def test_multiple_sections_decayed(self, tmp_path):
         old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).strftime("%Y-%m-%d")
         content = f"""## Key Actions
 - ({old_date}) [implement] Old action
@@ -417,43 +400,40 @@ class TestDecayFile:
 ## Key Lessons
 - ({old_date}) [insight] Old lesson
 """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
-            assert count == 3
+        filepath = self._make_memory_file(tmp_path, content)
+        count, _ = decay_file(filepath, age_days=DEFAULT_AGE_DAYS)
+        assert count == 3
 
-    def test_working_day_decay_keeps_entry_with_few_days(self):
+    def test_working_day_decay_keeps_entry_with_few_days(self, tmp_path):
         """Project file with few work days should keep old entries."""
         content = """## Key Learnings
 <!-- Subject to decay -->
 - (2025-06-01) [pattern] Old but few project work days
 """
         work_days = ["2025-07-01", "2025-10-01", "2026-01-15"]  # only 3 days after
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, _ = decay_file(
-                filepath, age_days=DEFAULT_AGE_DAYS,
-                project_work_days=work_days,
-                project_decay_threshold=DEFAULT_PROJECT_WORKING_DAYS,
-            )
-            assert count == 0
+        filepath = self._make_memory_file(tmp_path, content)
+        count, _ = decay_file(
+            filepath, age_days=DEFAULT_AGE_DAYS,
+            project_work_days=work_days,
+            project_decay_threshold=DEFAULT_PROJECT_WORKING_DAYS,
+        )
+        assert count == 0
 
-    def test_working_day_decay_archives_entry_with_many_days(self):
+    def test_working_day_decay_archives_entry_with_many_days(self, tmp_path):
         """Project file with enough work days should archive old entries."""
         content = """## Key Learnings
 <!-- Subject to decay -->
 - (2026-01-01) [pattern] Should be archived
 """
         work_days = [f"2026-01-{d:02d}" for d in range(2, 2 + DEFAULT_PROJECT_WORKING_DAYS + 3)]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._make_memory_file(tmpdir, content)
-            count, archived = decay_file(
-                filepath, age_days=DEFAULT_AGE_DAYS,
-                project_work_days=work_days,
-                project_decay_threshold=DEFAULT_PROJECT_WORKING_DAYS,
-            )
-            assert count == 1
-            assert "Should be archived" in archived[0]
+        filepath = self._make_memory_file(tmp_path, content)
+        count, archived = decay_file(
+            filepath, age_days=DEFAULT_AGE_DAYS,
+            project_work_days=work_days,
+            project_decay_threshold=DEFAULT_PROJECT_WORKING_DAYS,
+        )
+        assert count == 1
+        assert "Should be archived" in archived[0]
 
 
 # =============================================================================
@@ -462,66 +442,61 @@ class TestDecayFile:
 
 
 class TestAppendToArchive:
-    def test_creates_new_archive(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("decay.get_memory_dir") as mock_md:
-                mock_md.return_value = Path(tmpdir)
-                append_to_archive(["- (2026-01-01) [pattern] Test learning"])
-                archive = Path(tmpdir) / ".decay-archive.md"
-                assert archive.exists()
-                content = archive.read_text()
-                assert "Test learning" in content
-                assert "# Decay Archive" in content
+    def test_creates_new_archive(self, tmp_path):
+        with mock.patch("decay.get_memory_dir") as mock_md:
+            mock_md.return_value = tmp_path
+            append_to_archive(["- (2026-01-01) [pattern] Test learning"])
+            archive = tmp_path / ".decay-archive.md"
+            assert archive.exists()
+            content = archive.read_text()
+            assert "Test learning" in content
+            assert "# Decay Archive" in content
 
-    def test_appends_to_existing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            archive = Path(tmpdir) / ".decay-archive.md"
-            archive.write_text("# Decay Archive\n\n## Archived 2026-01-01\nOld entry\n")
+    def test_appends_to_existing(self, tmp_path):
+        archive = tmp_path / ".decay-archive.md"
+        archive.write_text("# Decay Archive\n\n## Archived 2026-01-01\nOld entry\n")
 
-            with mock.patch("decay.get_memory_dir") as mock_md:
-                mock_md.return_value = Path(tmpdir)
-                append_to_archive(["- (2026-02-01) [pattern] New learning"])
-                content = archive.read_text()
-                assert "Old entry" in content
-                assert "New learning" in content
+        with mock.patch("decay.get_memory_dir") as mock_md:
+            mock_md.return_value = tmp_path
+            append_to_archive(["- (2026-02-01) [pattern] New learning"])
+            content = archive.read_text()
+            assert "Old entry" in content
+            assert "New learning" in content
 
-    def test_dry_run_no_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("decay.get_memory_dir") as mock_md:
-                mock_md.return_value = Path(tmpdir)
-                append_to_archive(["- test"], dry_run=True)
-                assert not (Path(tmpdir) / ".decay-archive.md").exists()
+    def test_dry_run_no_file(self, tmp_path):
+        with mock.patch("decay.get_memory_dir") as mock_md:
+            mock_md.return_value = tmp_path
+            append_to_archive(["- test"], dry_run=True)
+            assert not (tmp_path / ".decay-archive.md").exists()
 
 
 class TestPurgeOldArchives:
-    def test_purge_old_sections(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            archive = Path(tmpdir) / ".decay-archive.md"
-            # Create archive with old and recent sections
-            old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_ARCHIVE_RETENTION_DAYS + 35)).strftime(
-                "%Y-%m-%d"
-            )
-            recent_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            archive.write_text(
-                f"# Decay Archive\n\n"
-                f"## Archived {recent_date}\nRecent entry\n\n"
-                f"## Archived {old_date}\nOld entry\n"
-            )
+    def test_purge_old_sections(self, tmp_path):
+        archive = tmp_path / ".decay-archive.md"
+        # Create archive with old and recent sections
+        old_date = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_ARCHIVE_RETENTION_DAYS + 35)).strftime(
+            "%Y-%m-%d"
+        )
+        recent_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        archive.write_text(
+            f"# Decay Archive\n\n"
+            f"## Archived {recent_date}\nRecent entry\n\n"
+            f"## Archived {old_date}\nOld entry\n"
+        )
 
-            with mock.patch("decay.get_memory_dir") as mock_md:
-                mock_md.return_value = Path(tmpdir)
-                purged = purge_old_archives(retention_days=DEFAULT_ARCHIVE_RETENTION_DAYS)
-                assert purged == 1
-                content = archive.read_text()
-                assert "Recent entry" in content
-                assert "Old entry" not in content
+        with mock.patch("decay.get_memory_dir") as mock_md:
+            mock_md.return_value = tmp_path
+            purged = purge_old_archives(retention_days=DEFAULT_ARCHIVE_RETENTION_DAYS)
+            assert purged == 1
+            content = archive.read_text()
+            assert "Recent entry" in content
+            assert "Old entry" not in content
 
-    def test_no_archive_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("decay.get_memory_dir") as mock_md:
-                mock_md.return_value = Path(tmpdir)
-                purged = purge_old_archives(retention_days=DEFAULT_ARCHIVE_RETENTION_DAYS)
-                assert purged == 0
+    def test_no_archive_file(self, tmp_path):
+        with mock.patch("decay.get_memory_dir") as mock_md:
+            mock_md.return_value = tmp_path
+            purged = purge_old_archives(retention_days=DEFAULT_ARCHIVE_RETENTION_DAYS)
+            assert purged == 0
 
 
 if __name__ == "__main__":
