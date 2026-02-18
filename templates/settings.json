@@ -6,15 +6,15 @@
     "_comment": "Global short-term filtered to [global/*] tags - tokenLimit: workingDays × 750"
   },
   "globalLongTerm": {
-    "tokenLimit": 5000,
+    "tokenLimit": 3000,
     "_comment": "global-long-term-memory.md - user profile, patterns, preferences"
   },
   "projectShortTerm": {
-    "workingDays": 7,
+    "workingDays": 5,
     "_comment": "Project short-term filtered to [project/*] tags - tokenLimit: workingDays × 750"
   },
   "projectLongTerm": {
-    "tokenLimit": 5000,
+    "tokenLimit": 3000,
     "_comment": "project-memory/{project}-long-term-memory.md - project-specific learnings"
   },
   "projectSettings": {
@@ -37,20 +37,20 @@
     "estimation": "1 token ≈ 4 characters. File bytes / 4 = rough token count",
     "formula": "Short-term limits = workingDays × 750 (based on ~400-600 observed after scope filtering)",
     "fixedLimits": {
-      "globalLongTerm": 5000,
-      "projectLongTerm": 5000
+      "globalLongTerm": 3000,
+      "projectLongTerm": 3000
     },
     "calculatedLimits": {
       "globalShortTerm": "2 days × 750 = 1500",
-      "projectShortTerm": "7 days × 750 = 5250",
-      "total": "5000 + 1500 + 5000 + 5250 = 16750"
+      "projectShortTerm": "5 days × 750 = 3750",
+      "total": "3000 + 1500 + 3000 + 3750 = 11250"
     }
   },
   "_defaults": {
     "globalShortTerm.workingDays": 2,
-    "globalLongTerm.tokenLimit": 5000,
-    "projectShortTerm.workingDays": 7,
-    "projectLongTerm.tokenLimit": 5000,
+    "globalLongTerm.tokenLimit": 3000,
+    "projectShortTerm.workingDays": 5,
+    "projectLongTerm.tokenLimit": 3000,
     "projectSettings.includeSubdirectories": false,
     "synthesis.intervalHours": 2,
     "synthesis.model": "sonnet",

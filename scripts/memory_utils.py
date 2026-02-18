@@ -117,14 +117,14 @@ DEFAULT_SETTINGS = {
         # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "globalLongTerm": {
-        "tokenLimit": 5000,
+        "tokenLimit": 3000,
     },
     "projectShortTerm": {
-        "workingDays": 7,
+        "workingDays": 5,
         # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "projectLongTerm": {
-        "tokenLimit": 5000,
+        "tokenLimit": 3000,
     },
     "projectSettings": {
         "includeSubdirectories": False,

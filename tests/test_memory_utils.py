@@ -78,7 +78,7 @@ class TestLoadSettings:
             mock_sf.return_value = Path("/nonexistent/settings.json")
             settings = load_settings()
             assert settings["globalShortTerm"]["tokenLimit"] == 2 * SHORT_TERM_TOKENS_PER_DAY
-            assert settings["projectShortTerm"]["tokenLimit"] == 7 * SHORT_TERM_TOKENS_PER_DAY
+            assert settings["projectShortTerm"]["tokenLimit"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
 
     def test_total_budget_calculation(self):
         with mock.patch("memory_utils.get_settings_file") as mock_sf:

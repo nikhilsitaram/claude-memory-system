@@ -296,7 +296,7 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
     action = "Would mark" if dry_run else "Marked"
     print(f"\n{action} {total_marked} entries across all daily files")
 
-    # 3. Deduplicate within each LTM file
+    # 3. Deduplicate within each LTM file (exact match + keyword similarity)
     ltm_files = []
     if global_ltm.exists():
         ltm_files.append(global_ltm)
@@ -306,7 +306,8 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
     total_deduped = 0
     for ltm_file in ltm_files:
         lines = ltm_file.read_text(encoding="utf-8").splitlines()
-        seen_entries: set[str] = set()
+        seen_exact: set[str] = set()
+        seen_keyword_entries: list[str] = []
         new_lines = []
         file_deduped = 0
 
@@ -314,10 +315,19 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
             # Only dedup dated entry lines
             if re.match(r"^\s*-\s*\(", line):
                 normalized = line.strip()
-                if normalized in seen_entries:
+                # Exact match dedup
+                if normalized in seen_exact:
                     file_deduped += 1
                     continue
-                seen_entries.add(normalized)
+                # Keyword similarity dedup (catches near-duplicates)
+                # 0.7 threshold: below this, domain vocabulary overlap causes false positives
+                if any(is_routed_match(normalized, seen, threshold=0.7) for seen in seen_keyword_entries):
+                    if dry_run:
+                        print(f"    near-dup: {normalized[:80]}...")
+                    file_deduped += 1
+                    continue
+                seen_exact.add(normalized)
+                seen_keyword_entries.append(normalized)
             new_lines.append(line)
 
         if file_deduped:
@@ -332,6 +342,97 @@ def cmd_mark_routed(args: argparse.Namespace) -> int:
         action = "Would remove" if dry_run else "Removed"
         print(f"\n{action} {total_deduped} duplicate LTM entries")
 
+    return 0
+
+
+def cmd_validate_ltm(args: argparse.Namespace) -> int:
+    """Validate LTM files for duplicates, misrouted entries, and entry count."""
+    import re
+
+    sys.path.insert(0, str(REPO_DIR / "scripts"))
+    from memory_utils import (
+        get_global_memory_file,
+        get_project_memory_dir,
+        get_projects_index_file,
+        is_routed_match,
+        load_json_file,
+    )
+
+    issues: list[str] = []
+
+    # Load registered project names
+    projects_index = load_json_file(get_projects_index_file(), {})
+    registered_projects = {
+        data.get("name", "")
+        for data in projects_index.get("projects", {}).values()
+        if data.get("name")
+    }
+
+    # Collect all LTM files
+    ltm_files: list[tuple[str, Path]] = []
+    global_ltm = get_global_memory_file()
+    if global_ltm.exists():
+        ltm_files.append(("global", global_ltm))
+
+    project_dir = get_project_memory_dir()
+    if project_dir.exists():
+        for pfile in project_dir.glob("*-long-term-memory.md"):
+            # Extract project name from filename
+            pname = pfile.stem.replace("-long-term-memory", "")
+            ltm_files.append((pname, pfile))
+
+    for scope, ltm_file in ltm_files:
+        lines = ltm_file.read_text(encoding="utf-8").splitlines()
+        entries: list[str] = []
+        entry_count = 0
+
+        for line in lines:
+            if re.match(r"^\s*-\s*\(", line):
+                normalized = line.strip()
+                entry_count += 1
+                # Check exact duplicates
+                if normalized in entries:
+                    issues.append(f"[{scope}] EXACT DUP: {normalized[:80]}...")
+                else:
+                    # Check near-duplicates (0.7 threshold avoids domain vocabulary false positives)
+                    for existing in entries:
+                        if is_routed_match(normalized, existing, threshold=0.7):
+                            issues.append(
+                                f"[{scope}] NEAR DUP:\n"
+                                f"  kept: {existing[:80]}...\n"
+                                f"  dup:  {normalized[:80]}..."
+                            )
+                            break
+                entries.append(normalized)
+
+        # Check entry count in decay-eligible sections
+        in_decay_section = False
+        decay_count = 0
+        for line in lines:
+            if line.startswith("## "):
+                section = line.strip("# ").strip()
+                in_decay_section = section in (
+                    "Key Actions", "Key Decisions", "Key Learnings", "Key Lessons"
+                )
+            elif in_decay_section and re.match(r"^\s*-\s*\(", line):
+                decay_count += 1
+
+        if decay_count > 40:
+            issues.append(f"[{scope}] HIGH ENTRY COUNT: {decay_count} entries in decay sections (consider pruning)")
+
+        # Check unregistered project files
+        if scope != "global" and scope not in registered_projects:
+            issues.append(f"[{scope}] UNREGISTERED PROJECT: {ltm_file.name} has no match in projects-index.json")
+
+        print(f"  {ltm_file.name}: {entry_count} entries ({decay_count} in decay sections)")
+
+    if issues:
+        print(f"\n{len(issues)} issue(s) found:")
+        for issue in issues:
+            print(f"  - {issue}")
+        return 1
+
+    print("\nNo issues found.")
     return 0
 
 
@@ -355,6 +456,9 @@ def main() -> int:
     mr = sub.add_parser("mark-routed", help="Mark daily entries that exist in LTM with [routed] prefix")
     mr.add_argument("--dry-run", action="store_true", help="Preview changes without modifying files")
     mr.set_defaults(func=cmd_mark_routed)
+
+    vl = sub.add_parser("validate-ltm", help="Validate LTM files for duplicates and issues")
+    vl.set_defaults(func=cmd_validate_ltm)
 
     args = parser.parse_args()
     if not args.command:

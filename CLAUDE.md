@@ -139,8 +139,8 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `globalShortTerm.workingDays` | 2 | Days of global daily summaries |
-| `projectShortTerm.workingDays` | 7 | Days of project history |
-| `*LongTerm.tokenLimit` | 5,000 | Fixed limit per long-term file |
+| `projectShortTerm.workingDays` | 5 | Days of project history |
+| `*LongTerm.tokenLimit` | 3,000 | Fixed limit per long-term file |
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
 | `synthesis.model` | sonnet | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
