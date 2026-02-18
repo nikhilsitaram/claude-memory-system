@@ -266,15 +266,23 @@ Never use multiple Edit calls on daily files.
 
 **Tag format:** `[scope/type]` where scope is `global` or one of these registered project names: ''' + project_names_str + '''
 **IMPORTANT:** Only use the project names listed above. Do NOT invent new project names from context.
-**Scope rule:** Use `global` ONLY for learnings that apply across multiple projects (SQL patterns, MCP behavior, Claude Code tool usage, general dev practices). If a learning is specific to one project's codebase, architecture, or workflow, use that project's name even if the concept seems general.
+**Scope rule:** Use `global` ONLY for learnings that apply across ALL projects — general dev practices, SQL patterns, OS/tool behavior, Claude Code mechanics. If a learning arose while working on a specific project (debugging that project's code, that project's architecture, tools used primarily for that project), it belongs to that project even if the concept seems general. When in doubt, use the project name — project scope is almost always correct.
 **Compactness:** Final solutions only, one learning per concept, omit routine details.
 
 **Long-term routing (be HIGHLY selective):**
-Route TO long-term memory ONLY: fundamental patterns, hard-won lessons, safety-critical info, non-obvious gotchas, architecture decisions with lasting impact.
+Route daily entries to corresponding LTM sections:
+- Daily `## Actions` → LTM `## Key Actions` (multi-day implementations, novel integrations, reusable setups)
+- Daily `## Decisions` → LTM `## Key Decisions` (architecture choices, design tradeoffs, scope decisions with lasting impact)
+- Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
+- Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
 Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[{project-name}/*]` → `~/.claude/memory/project-memory/{project-name}-long-term-memory.md`
 Only use registered project names for routing: ''' + project_names_str + '''
-Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped). Check for duplicates before adding.
+Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped).
+
+**DEDUP REQUIREMENT:** In Step 1 you read the LTM files. Before adding ANY entry, check your Step 1 reads for existing entries that cover the same concept — even if worded differently. If an existing entry covers the topic, do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
+
+**GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run. If you have more, consolidate related items (e.g., multiple gotchas from one debugging session → one summary entry). Prefer fewer, denser entries over many granular ones.
 
 Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
 
@@ -358,7 +366,7 @@ CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first,
 Run ALL of this in a **single Bash call**:
 ```bash
 {mark_captured_lines}
-python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
@@ -410,7 +418,7 @@ CRITICAL: Do NOT make separate Edit calls per learning — batch all items into 
 
 Run ALL of this in a **single Bash call** — mark captured, remove temp files, run decay, and update timestamp:
 ```bash
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
 ```
 
 Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
