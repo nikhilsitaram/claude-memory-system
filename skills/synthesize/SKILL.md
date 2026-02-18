@@ -1,6 +1,6 @@
 ---
 name: synthesize
-description: Process raw session transcripts into daily summaries and update long-term memory with patterns and insights. Run during first session of the day, when prompted, or according to a set schedule.
+description: Use when processing pending session transcripts into daily summaries — first session of the day, on manual request, or on schedule
 user-invokable: true
 ---
 

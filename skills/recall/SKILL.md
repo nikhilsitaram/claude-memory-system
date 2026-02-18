@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Search through all historical daily memory files to find information from past sessions. Use when user asks about past work, decisions, discussions, or topics that might have relevant history.
+description: Use when user asks about past work, decisions, discussions, or topics that might have relevant history beyond loaded context
 user-invokable: true
 ---
 
@@ -38,21 +38,11 @@ Don't wait to be prompted - search first, then answer with full context.
 
 ## Implementation
 
-Use grep to find matches across all daily files:
+Use the Grep tool to search across daily files:
+- `Grep(pattern: "search_term", path: "~/.claude/memory/daily/")` for keyword matches
+- Use `-B2 -A2` context for surrounding lines
 
-```bash
-# Search for a term across all daily files
-grep -r -l "search_term" ~/.claude/memory/daily/
-
-# Search with context
-grep -r -B2 -A2 "search_term" ~/.claude/memory/daily/
-```
-
-For time-based queries, list and read files from the relevant date range:
-
-```bash
-# List all daily files from January
-ls ~/.claude/memory/daily/2026-01-*.md
-```
+Use the Glob tool for time-based queries:
+- `Glob(pattern: "~/.claude/memory/daily/2026-01-*.md")` for a specific month
 
 Always provide the date with each result so the user knows when something happened.
