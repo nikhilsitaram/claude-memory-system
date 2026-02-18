@@ -716,8 +716,8 @@ def backup_files(files: list[Path]) -> Path:
     backup_dir = get_memory_dir() / ".backups" / datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    for f in files:
-        f = Path(f)
+    for file_entry in files:
+        f = Path(file_entry)
         if f.exists():
             # Preserve relative structure for nested files
             dest = backup_dir / f.name
@@ -1144,7 +1144,7 @@ def execute_move(
             "message": "Could not acquire lock. Another operation may be in progress.",
             "backup_path": None,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during move: {e}",
@@ -1334,7 +1334,7 @@ def execute_merge_orphan(
             "backup_path": None,
             "renamed_folders": renamed_folders,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during merge: {e}",
@@ -1402,7 +1402,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
             "removed_entries": [],
             "backup_path": None,
         }
-    except Exception as e:
+    except (IOError, OSError, shutil.Error) as e:
         return {
             "success": False,
             "message": f"Error during cleanup: {e}",

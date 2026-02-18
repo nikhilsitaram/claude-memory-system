@@ -424,10 +424,7 @@ def add_captured_session(session_id: str, captured_set: Optional[set[str]] = Non
     captured_file = get_captured_file()
     captured_file.parent.mkdir(parents=True, exist_ok=True)
 
-    lock = FileLock(captured_file.parent / ".captured.lock", timeout=5.0)
-    try:
-        lock.acquire()
-
+    with FileLock(captured_file.parent / ".captured.lock", timeout=5.0):
         # Check if already captured (use provided set or load from file)
         if captured_set is not None:
             if session_id in captured_set:
@@ -440,8 +437,6 @@ def add_captured_session(session_id: str, captured_set: Optional[set[str]] = Non
         # Append to file
         with open(captured_file, "a", encoding="utf-8") as f:
             f.write(f"{session_id}\n")
-    finally:
-        lock.release()
 
 
 def remove_captured_session(session_id: str) -> bool:
@@ -455,11 +450,11 @@ def remove_captured_session(session_id: str) -> bool:
     if not captured_file.exists():
         return False
 
-    lock = FileLock(captured_file.parent / ".captured.lock", timeout=5.0)
-    try:
-        lock.acquire()
-
-        lines = captured_file.read_text(encoding="utf-8").splitlines()
+    with FileLock(captured_file.parent / ".captured.lock", timeout=5.0):
+        try:
+            lines = captured_file.read_text(encoding="utf-8").splitlines()
+        except IOError:
+            return False
         new_lines = [line for line in lines if line.strip() != session_id]
 
         if len(new_lines) == len(lines):
@@ -467,10 +462,6 @@ def remove_captured_session(session_id: str) -> bool:
 
         captured_file.write_text("\n".join(new_lines) + "\n" if new_lines else "", encoding="utf-8")
         return True
-    except IOError:
-        return False
-    finally:
-        lock.release()
 
 
 def get_working_days(days_limit: int) -> list[str]:
