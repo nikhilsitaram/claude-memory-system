@@ -19,18 +19,24 @@ Usage:
 Requirements: Python 3.9+
 """
 
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-# Minimum Python version
-MIN_PYTHON = (3, 9)
+# Import shared utilities from scripts/memory_utils.py (same repo, no symlink needed)
+sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+from memory_utils import (  # noqa: E402
+    MIN_PYTHON,
+    get_claude_dir,
+    get_memory_dir,
+    load_json_file,
+    save_json_file,
+)
 
 
 def check_python_version() -> None:
-    """Check Python version and exit if too old."""
+    """Check Python version and exit if too old (user-facing with install links)."""
     if sys.version_info < MIN_PYTHON:
         print(f"Error: Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required")
         print(f"Current version: {sys.version_info.major}.{sys.version_info.minor}")
@@ -74,36 +80,6 @@ def detect_python_command() -> str:
 def get_script_dir() -> Path:
     """Get the directory containing this install script."""
     return Path(__file__).parent.resolve()
-
-
-def get_claude_dir() -> Path:
-    """Get the Claude configuration directory."""
-    return Path.home() / ".claude"
-
-
-def get_memory_dir() -> Path:
-    """Get the memory directory."""
-    return get_claude_dir() / "memory"
-
-
-def load_json_file(filepath: Path) -> dict:
-    """Load JSON file with error handling."""
-    if not filepath.exists():
-        return {}
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"Warning: Could not parse {filepath}: {e}")
-        print("Creating new settings file")
-        return {}
-
-
-def save_json_file(filepath: Path, data: dict) -> None:
-    """Save dict to JSON file."""
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
 
 
 def create_directories() -> None:
@@ -503,7 +479,7 @@ def main() -> int:
 
     # Update settings.json
     settings_file = claude_dir / "settings.json"
-    settings = load_json_file(settings_file)
+    settings = load_json_file(settings_file, default={})
 
     # Remove obsolete hooks (e.g., save_session.py)
     settings = remove_obsolete_hooks(settings)
