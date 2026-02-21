@@ -104,6 +104,27 @@ class TestShouldSynthesize:
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert should_synthesize(self._make_settings(interval_hours=4)) is False
 
+    def test_eager_timestamp_prevents_concurrent_synthesis(self, tmp_path):
+        """Second caller sees eager timestamp and skips synthesis (race condition fix)."""
+        ts_file = tmp_path / ".last-synthesis"
+        fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+        with mock.patch("load_memory.get_last_synthesis_file") as mock_f, \
+             mock.patch("load_memory.datetime") as mock_dt:
+            mock_f.return_value = ts_file
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            # First caller: no file exists, should synthesize
+            assert should_synthesize(self._make_settings()) is True
+
+            # Simulate eager write (what main() now does after should_synthesize returns True)
+            ts_file.write_text(fixed_now.isoformat())
+
+            # Second caller moments later: sees fresh timestamp, should NOT synthesize
+            assert should_synthesize(self._make_settings()) is False
+
 
 # =============================================================================
 # load_global_memory Tests

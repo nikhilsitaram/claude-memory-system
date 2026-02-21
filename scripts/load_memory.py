@@ -531,6 +531,12 @@ def main() -> None:
     # Exclude current session — it's still active and shouldn't be synthesized
     pending_dates = get_pending_days(exclude_session_id=current_session_id)
     if pending_dates and should_synthesize(settings):
+        # Write timestamp eagerly to prevent duplicate synthesis when multiple
+        # sessions start simultaneously (all would see stale timestamp otherwise)
+        get_last_synthesis_file().write_text(
+            datetime.now(timezone.utc).isoformat(), encoding="utf-8"
+        )
+
         synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
