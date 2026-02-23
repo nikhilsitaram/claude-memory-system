@@ -20,12 +20,13 @@ from memory_utils import (
     load_json_file,
     load_settings,
     project_name_to_filename,
+    resolve_worktree_to_main_repo,
 )
 
 
 def calculate_usage():
     """Calculate token usage for all memory components."""
-    cwd = os.getcwd()
+    cwd = resolve_worktree_to_main_repo(os.getcwd())
 
     # Load settings using shared utility (handles missing file + JSON errors)
     settings = load_settings()
