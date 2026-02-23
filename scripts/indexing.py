@@ -54,6 +54,7 @@ from memory_utils import (
     get_projects_index_file,
     get_sessions_original_path,
     load_sessions_index,
+    prune_captured_from_state,
     remove_captured_session,
     to_iso_z,
 )
@@ -562,6 +563,13 @@ def cmd_mark_captured(args: argparse.Namespace) -> int:
 
         print(f"Marked {marked} sessions, skipped {skipped_today} (today's sessions)", file=sys.stderr)
 
+        # Prune newly marked sessions from synthesis state (cleanup)
+        if marked > 0:
+            try:
+                prune_captured_from_state(set(session_ids))
+            except Exception:
+                pass  # Non-critical cleanup
+
     else:
         # Mode 2: Explicit IDs — mark unconditionally
         if not args.session_ids:
@@ -574,6 +582,12 @@ def cmd_mark_captured(args: argparse.Namespace) -> int:
             captured.add(sid)
 
         print(f"Marked {len(args.session_ids)} sessions as captured.", file=sys.stderr)
+
+        # Prune newly marked sessions from synthesis state (cleanup)
+        try:
+            prune_captured_from_state(set(args.session_ids))
+        except Exception:
+            pass  # Non-critical cleanup
 
     return 0
 

@@ -22,15 +22,20 @@ from memory_utils import (
     from_iso_z,
     get_captured_sessions,
     get_sessions_original_path,
+    get_synthesis_state_file,
     get_working_days,
     is_routed_match,
     load_json_file,
     load_sessions_index,
     load_settings,
+    load_synthesis_state,
     project_name_to_filename,
+    prune_captured_from_state,
     remove_captured_session,
     save_json_file,
+    save_synthesis_state,
     to_iso_z,
+    update_synthesis_state,
 )
 
 # =============================================================================
@@ -778,6 +783,63 @@ class TestGetSessionsOriginalPath:
         """Should return empty string with no originalPath and empty entries."""
         data = {"originalPath": "", "entries": []}
         assert get_sessions_original_path(data) == ""
+
+
+# =============================================================================
+# Synthesis State Tests
+# =============================================================================
+
+
+class TestSynthesisState:
+    def test_get_synthesis_state_file(self, tmp_path):
+        """Returns .synthesis-state.json in memory dir."""
+        with mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
+            result = get_synthesis_state_file()
+        assert result == tmp_path / ".synthesis-state.json"
+
+    def test_load_empty(self, tmp_path):
+        """Returns empty sessions dict when file doesn't exist."""
+        with mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
+            result = load_synthesis_state()
+        assert result == {"sessions": {}}
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        """Saved state can be loaded back."""
+        state = {"sessions": {"abc": {"offset": 100, "lines": 10, "last_synthesized": "2026-02-22T12:00:00Z"}}}
+        state_file = tmp_path / ".synthesis-state.json"
+        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file):
+            save_synthesis_state(state)
+            loaded = load_synthesis_state()
+        assert loaded == state
+
+    def test_update_synthesis_state(self, tmp_path):
+        """Updates offsets for given sessions, preserves others."""
+        state_file = tmp_path / ".synthesis-state.json"
+        initial = {"sessions": {"old": {"offset": 50, "lines": 5, "last_synthesized": "2026-02-22T10:00:00Z"}}}
+        state_file.write_text(json.dumps(initial))
+
+        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file):
+            update_synthesis_state({"new": {"offset": 200, "lines": 20}})
+            result = load_synthesis_state()
+        assert "old" in result["sessions"]
+        assert "new" in result["sessions"]
+        assert result["sessions"]["new"]["offset"] == 200
+        assert "last_synthesized" in result["sessions"]["new"]
+
+    def test_prune_captured_from_state(self, tmp_path):
+        """Removes captured session IDs from state."""
+        state_file = tmp_path / ".synthesis-state.json"
+        state = {"sessions": {
+            "keep": {"offset": 100, "lines": 10, "last_synthesized": "2026-02-22T10:00:00Z"},
+            "remove": {"offset": 200, "lines": 20, "last_synthesized": "2026-02-22T10:00:00Z"},
+        }}
+        state_file.write_text(json.dumps(state))
+
+        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file):
+            prune_captured_from_state({"remove", "not-present"})
+            result = load_synthesis_state()
+        assert "keep" in result["sessions"]
+        assert "remove" not in result["sessions"]
 
 
 if __name__ == "__main__":

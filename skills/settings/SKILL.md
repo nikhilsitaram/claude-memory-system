@@ -48,13 +48,13 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 
 | Path | Type | Range | Default | Notes |
 |------|------|-------|---------|-------|
-| `globalLongTerm.tokenLimit` | int | 1000-50000 | 5,000 | Fixed limit |
+| `globalLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
-| `projectLongTerm.tokenLimit` | int | 1000-50000 | 5,000 | Fixed limit |
-| `projectShortTerm.workingDays` | int | 1-30 | 7 | Also updates tokenLimit |
+| `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
+| `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
 | `projectSettings.includeSubdirectories` | bool | — | false | Match subdirs to parent project |
 | `synthesis.intervalHours` | int | 1-24 | 2 | Hours between auto-synthesis |
-| `synthesis.model` | string | sonnet/opus/haiku | sonnet | Model for synthesis subagent |
+| `synthesis.model` | string | haiku/sonnet/opus | haiku | Model for synthesis subagent |
 | `synthesis.background` | bool | — | true | Run auto-synthesis in background |
 | `decay.ageDays` | int | 7-365 | 30 | Archive learnings older than this |
 | `decay.archiveRetentionDays` | int | 30-730 | 365 | Purge archived items older than this |
@@ -63,11 +63,11 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 
 | Component | Default | Formula |
 |-----------|---------|---------|
-| Global long-term | 5,000 | fixed |
+| Global long-term | 3,000 | fixed |
 | Global short-term | 1,500 | workingDays * 750 |
-| Project long-term | 5,000 | fixed |
-| Project short-term | 5,250 | workingDays * 750 |
-| **Total** | **16,750** | sum of above |
+| Project long-term | 3,000 | fixed |
+| Project short-term | 3,750 | workingDays * 750 |
+| **Total** | **11,250** | sum of above |
 
 **Estimation**: 1 token ~ 4 characters. 750 tokens/day based on ~400-600 observed after scope filtering.
 

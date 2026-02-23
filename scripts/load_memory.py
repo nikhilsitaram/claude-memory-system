@@ -35,14 +35,23 @@ from memory_utils import (
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
+    get_projects_dir,
     get_projects_index_file,
+    get_synthesis_state_file,
     get_working_days,
     load_json_file,
     load_settings,
+    load_synthesis_state,
     project_name_to_filename,
     remove_captured_session,
 )
-from transcript_ops import extract_transcripts, format_transcripts_for_output, get_pending_days
+from transcript_ops import (
+    extract_transcripts,
+    extract_transcripts_incremental,
+    format_transcripts_for_output,
+    format_transcripts_incremental,
+    get_pending_days,
+)
 
 # Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
 TRANSCRIPT_LINE_BUDGET = 1950
@@ -218,13 +227,45 @@ def _get_project_names_str() -> str:
     return ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
 
 
-def _build_synthesis_instructions(project_names_str: str) -> str:
-    """Build the shared synthesis instructions block (tagging, routing, dedup, batching)."""
-    return '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
+import re
 
-ALWAYS use a single **Write** call per daily file — even if the file already exists.
-If an earlier version exists (from Step 1 Read), merge its content into your output, then Write the complete file.
-Never use multiple Edit calls on daily files.
+# Profile sections in global LTM that are never dedup targets
+_PROFILE_HEADERS_RE = re.compile(
+    r"^## (?:About Me|Current Projects|Technical Environment|Patterns & Preferences)\s*$"
+)
+
+
+def _strip_profile_sections(content: str) -> str:
+    """Strip auto-pinned profile sections from global LTM for synthesis prompts.
+
+    Removes About Me, Current Projects, Technical Environment, and
+    Patterns & Preferences sections (including their content) since these
+    are never dedup targets and add ~4KB of bloat.
+
+    Keeps: title line, ## Pinned, ## Key * sections, and all other headers.
+    """
+    if not content:
+        return content
+
+    lines = content.split("\n")
+    result: list[str] = []
+    skipping = False
+
+    for line in lines:
+        if _PROFILE_HEADERS_RE.match(line):
+            skipping = True
+            continue
+        if skipping and line.startswith("## "):
+            skipping = False
+        if not skipping:
+            result.append(line)
+
+    return "\n".join(result)
+
+
+def _build_synthesis_instructions(project_names_str: str) -> str:
+    """Build the shared synthesis instructions block (tagging, routing, dedup)."""
+    return '''**Daily summary format:**
 
 ```markdown
 # YYYY-MM-DD
@@ -260,193 +301,283 @@ Route daily entries to corresponding LTM sections:
 - Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
 - Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
-Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[{project-name}/*]` → `~/.claude/memory/project-memory/{project-name}-long-term-memory.md`
+Destinations: `[global/*]` → global LTM, `[{project-name}/*]` → project LTM
 Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped).
 
-**DEDUP REQUIREMENT:** In Step 1 you read the LTM files. Before adding ANY entry, check your Step 1 reads for existing entries that cover the same concept — even if worded differently. If an existing entry covers the topic, do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
+**DEDUP REQUIREMENT:** Before adding ANY routed entry, check the existing LTM content provided below. If an existing entry covers the same concept — even if worded differently — do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
 
 **GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run. If you have more, consolidate related items (e.g., multiple gotchas from one debugging session → one summary entry). Prefer fewer, denser entries over many granular ones.
 
-Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
-
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.
-
-**CRITICAL batching requirement**: Collect ALL items to route across all dates, then make ONE Edit call per target file with ALL new entries at once.
-Do NOT make separate Edit calls per learning — batch them into a single Edit per file.
-Example: old_string ends with section header + comment, new_string = same header + comment + all new entries appended.'''
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.'''
 
 
 def _build_preextracted_prompt(
     pending_dates: list[str],
     extracted_files: dict[str, str],
     synthesis_instructions: str,
+    embedded_files: dict | None = None,
 ) -> str:
-    """Build synthesis prompt for pre-extracted mode (manual /synthesize)."""
+    """Build synthesis prompt with embedded content and structured output format.
+
+    Args:
+        pending_dates: List of dates to process (YYYY-MM-DD)
+        extracted_files: Dict mapping date -> extract file path (for sidecar references)
+        synthesis_instructions: Shared instructions block
+        embedded_files: Pre-read content to embed inline:
+            - "transcripts": dict[date, content] - transcript text per date
+            - "global_ltm": str - global LTM file content
+            - "project_ltms": dict[project, content] - project LTM content
+    """
+    if embedded_files is None:
+        embedded_files = {}
+
     dates_str = ", ".join(pending_dates)
+    transcripts = embedded_files.get("transcripts", {})
+    global_ltm = embedded_files.get("global_ltm", "")
+    project_ltms = embedded_files.get("project_ltms", {})
 
-    # Count lines per file for Read limit hints
-    file_metadata: list[tuple[str, str, int]] = []
-    for date, path in sorted(extracted_files.items()):
-        try:
-            line_count = Path(path).read_text(encoding="utf-8").count("\n") + 1
-        except IOError:
-            line_count = 2000
-        file_metadata.append((date, path, line_count))
+    # Build embedded transcript sections
+    transcript_sections = []
+    for date in sorted(pending_dates):
+        content = transcripts.get(date, "")
+        if not content:
+            # Fallback: read from extract file if not embedded
+            path = extracted_files.get(date, "")
+            if path:
+                try:
+                    content = Path(path).read_text(encoding="utf-8")
+                except IOError:
+                    content = "(transcript unavailable)"
+        transcript_sections.append(f"### Transcript: {date}\n{content}")
+    transcript_block = "\n\n".join(transcript_sections)
 
-    file_list = "\n".join(
-        f"- **{date}**: `{path}` ({lines} lines)"
-        for date, path, lines in file_metadata
-    )
-    read_transcript_lines = "\n".join(
-        f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}"
-        for date, path, lines in file_metadata
-    )
-    read_daily_lines = "\n".join(
-        f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected"
-        for d in pending_dates
-    )
-    mark_captured_lines = "\n".join(
-        f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&'
-        for date, path in sorted(extracted_files.items())
-    )
-    return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
+    # Build LTM sections for dedup context
+    ltm_sections = []
+    if global_ltm:
+        ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
+    for project, content in sorted(project_ltms.items()):
+        if content:
+            ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
+    ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
 
-**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
+    # Build existing daily merge context (for incremental synthesis)
+    existing_dailies = embedded_files.get("existing_dailies", {})
+    merge_sections = []
+    for date in sorted(pending_dates):
+        existing = existing_dailies.get(date, "")
+        if existing:
+            merge_sections.append(f"### Existing daily summary for {date}\n{existing}")
 
-Pending dates: {dates_str}
+    merge_instructions = ""
+    if merge_sections:
+        merge_block = "\n\n".join(merge_sections)
+        merge_instructions = f"""
+## Existing Daily Summaries (merge context)
 
-Pre-extracted transcript files:
-{file_list}
+These daily files already exist from a previous synthesis run. When you see sessions marked '(continued — new messages only)', merge new insights into the existing summary. Do NOT duplicate entries already present. Add only genuinely new items.
 
-## Tool Guidelines
+{merge_block}
 
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
+"""
 
-## Process
+    # Build sidecar and extract paths for synthesis.py apply command
+    sidecar_paths = []
+    extract_paths = []
+    for date in sorted(extracted_files.keys()):
+        path = extracted_files[date]
+        sidecar = path.rsplit(".", 1)[0] + ".sessions"
+        sidecar_paths.append(sidecar)
+        extract_paths.append(path)
+    sidecars_arg = " ".join(sidecar_paths)
+    extracts_arg = " ".join(extract_paths)
 
-### Step 1: Read all inputs
+    # Pre-compute output filename with PID so Write and Bash use the same path
+    # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
+    output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
 
-Make exactly ONE parallel tool call with ALL of these Read calls simultaneously:
-{read_transcript_lines}
-- Read(`~/.claude/memory/global-long-term-memory.md`)
-{read_daily_lines}
+    # Build --offsets-json arg for incremental synthesis state update
+    offsets_path = embedded_files.get("offsets_path", "")
+    offsets_arg = f" --offsets-json {offsets_path}" if offsets_path else ""
 
-If you already know which projects are referenced, include their LTM files in this SAME parallel call:
-- Read(`~/.claude/memory/project-memory/{{project}}-long-term-memory.md`)
+    first_date = sorted(pending_dates)[0]
 
-**Do NOT read files one at a time. All reads MUST be in a single parallel call.**
+    return f'''You are a structured data extractor. Your job is to read session transcripts and produce ONLY delimited structured output — no prose, no commentary, no summary.
 
-### Step 2: Synthesize + Route + Write
+## Output Format
 
-In **one reasoning step**, produce daily summaries AND long-term routing edits for ALL {len(pending_dates)} dates.
-Then make ALL file Write/Edit calls in a single parallel tool call:
-- Write each daily summary file (one per date)
-- Edit global LTM ONCE with ALL global-scope learnings from ALL dates batched together
-- Edit project LTM ONCE per project with ALL project-scope learnings batched together
+Your output must follow this exact structure. Here is a complete realistic example:
 
-CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first, batch into one Edit per file.
+===DAILY:2026-02-20===
+# 2026-02-20
+## Actions
+- [myproject/implement] Built REST API endpoints for user authentication
+- [global/implement] Configured pre-commit hooks for Python linting
+
+## Decisions
+- [myproject/design] JWT tokens over session cookies — stateless scales better for microservices
+
+## Learnings
+- [myproject/gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+- [global/pattern] `pytest -x --tb=short` stops on first failure with compact output — faster debug cycles
+
+## Lessons
+- [global/tip] `git stash -u` includes untracked files — plain `git stash` misses them
+
+===ROUTE:myproject:Key Learnings===
+- (2026-02-20) [gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+
+===ROUTE:global:Key Lessons===
+- (2026-02-20) [tip] `git stash -u` includes untracked files — plain `git stash` misses them
+
+===END===
+
+Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing else.
+
+## Delivery
+
+Only use the Write and Bash tools — no other tools.
+
+1. Write(`{output_filename}`, <your structured output>)
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}{offsets_arg}`
+
+## Synthesis Instructions
 
 {synthesis_instructions}
 
-### Step 3: Mark captured, clean up & finalize
+## Existing Long-Term Memory (for dedup)
 
-Run ALL of this in a **single Bash call**:
-```bash
-{mark_captured_lines}
-python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
-```
+{ltm_block}
+{merge_instructions}
+## Session Transcripts
 
-Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+**Pending dates:** {dates_str}
 
+{transcript_block}
 
-def _build_autoextract_prompt(
-    exclude_flag: str,
-    pending_dates: list[str],
-    synthesis_instructions: str,
-) -> str:
-    """Build synthesis prompt for auto-extract mode (auto-synthesis)."""
-    dates_str = ", ".join(pending_dates)
+## Reminder
 
-    return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
-
-**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
-
-Pending dates to process: {dates_str}
-
-## Tool Guidelines
-
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
-
-**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read (Bash output truncates at 30K chars; temp file avoids this):
-```
-python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
-```
-Then read the content and sidecar:
-```
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
-```
-
-## Process
-
-For each pending date ({dates_str}), do a **single combined pass** (extract + summarize + route + mark):
-
-### Step 1: Extract & Read
-
-Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
-- `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
-- `~/.claude/memory/global-long-term-memory.md`
-- Any existing daily file: `~/.claude/memory/daily/YYYY-MM-DD.md`
-- `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
-
-### Step 2: Summarize + Route + Write
-
-In **one reasoning step**, produce BOTH the daily summary AND any long-term routing edits.
-Then make ALL Write/Edit calls in a single parallel tool call.
-CRITICAL: Do NOT make separate Edit calls per learning — batch all items into one Edit per target file.
-
-{synthesis_instructions}
-
-### Step 3: Mark captured, clean up & finalize
-
-Run ALL of this in a **single Bash call** — mark captured, remove temp files, run decay, and update timestamp:
-```bash
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
-```
-
-Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+Output only the structured format shown above. Start with ===DAILY:{first_date}=== and end with ===END===.'''
 
 
 def _build_synthesis_prompt(
-    exclude_flag: str,
     pending_dates: list[str],
-    extracted_files: dict[str, str] | None = None,
+    extracted_files: dict[str, str],
+    embedded_files: dict | None = None,
 ) -> str:
     """
     Build the embedded synthesis prompt for the subagent.
 
-    Two modes:
-    - Pre-extracted (manual /synthesize): files already on disk, skip extraction
-    - Dates-only (auto-synthesis): subagent extracts each date
+    Pre-extraction is required. If pre-extraction fails, synthesis is skipped
+    (no auto-extract fallback).
 
     Args:
-        exclude_flag: The --exclude-session flag string (or empty)
         pending_dates: List of pending date strings (YYYY-MM-DD)
-        extracted_files: Optional dict mapping date -> file path (pre-extracted)
+        extracted_files: Dict mapping date -> file path (pre-extracted)
+        embedded_files: Pre-read content to embed inline (transcripts, LTM content)
     """
     project_names_str = _get_project_names_str()
     synthesis_instructions = _build_synthesis_instructions(project_names_str)
 
-    if extracted_files:
-        return _build_preextracted_prompt(pending_dates, extracted_files, synthesis_instructions)
-    else:
-        return _build_autoextract_prompt(exclude_flag, pending_dates, synthesis_instructions)
+    return _build_preextracted_prompt(
+        pending_dates, extracted_files, synthesis_instructions, embedded_files
+    )
+
+
+def _find_projects_in_sidecars(extracted_files: dict[str, str]) -> set[str]:
+    """Find project names from session IDs in sidecar files.
+
+    Reads .sessions sidecar files, locates each session's project directory
+    under ~/.claude/projects/, and maps to project names via projects-index.
+
+    Returns set of project names that had sessions in the extracted files.
+    """
+    projects_index = load_json_file(get_projects_index_file(), {})
+
+    # Build reverse lookup: encoded dir name -> project name
+    encoded_to_name: dict[str, str] = {}
+    for data in projects_index.get("projects", {}).values():
+        name = data.get("name", "")
+        if name:
+            for enc in data.get("encodedPaths", []):
+                encoded_to_name[enc] = name
+
+    # Collect all session IDs from sidecar files
+    session_ids: set[str] = set()
+    for path in extracted_files.values():
+        sidecar = Path(path).with_suffix(".sessions")
+        if sidecar.exists():
+            try:
+                for line in sidecar.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        session_ids.add(line)
+            except IOError:
+                pass
+
+    # Map session IDs to project names via their parent directory
+    claude_projects_dir = get_projects_dir()
+    result: set[str] = set()
+    for sid in session_ids:
+        for proj_dir in claude_projects_dir.iterdir():
+            if (proj_dir / f"{sid}.jsonl").exists():
+                name = encoded_to_name.get(proj_dir.name)
+                if name:
+                    result.add(name)
+                break
+    return result
+
+
+def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool = False) -> dict:
+    """Pre-read all files for embedding in synthesis prompt.
+
+    Reads transcript extracts, global LTM, and project LTMs into memory
+    so the synthesis prompt can embed them inline (zero tool calls).
+
+    Args:
+        extracted_files: Dict mapping date -> extract file path
+        include_dailies: If True, read existing daily summary files as merge context
+
+    Returns:
+        Dict with keys: transcripts, global_ltm, project_ltms, (existing_dailies)
+    """
+    embedded: dict = {"transcripts": {}, "global_ltm": "", "project_ltms": {}}
+    for date, path in extracted_files.items():
+        try:
+            embedded["transcripts"][date] = Path(path).read_text(encoding="utf-8")
+        except IOError:
+            pass
+    global_ltm_file = get_global_memory_file()
+    if global_ltm_file.exists():
+        try:
+            embedded["global_ltm"] = _strip_profile_sections(
+                global_ltm_file.read_text(encoding="utf-8")
+            )
+        except IOError:
+            pass
+    # Only include project LTMs for projects that had sessions extracted
+    relevant_projects = _find_projects_in_sidecars(extracted_files)
+    proj_dir = get_project_memory_dir()
+    if proj_dir.exists():
+        for f in proj_dir.glob("*-long-term-memory.md"):
+            name = f.stem.replace("-long-term-memory", "")
+            if name in relevant_projects:
+                try:
+                    embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
+                except IOError:
+                    pass
+    # Read existing daily files as merge context (for incremental synthesis)
+    if include_dailies:
+        daily_dir = get_daily_dir()
+        embedded["existing_dailies"] = {}
+        for date in extracted_files:
+            daily_file = daily_dir / f"{date}.md"
+            if daily_file.exists():
+                try:
+                    embedded["existing_dailies"][date] = daily_file.read_text(encoding="utf-8")
+                except IOError:
+                    pass
+    return embedded
 
 
 def pre_extract_transcripts(
@@ -485,6 +616,61 @@ def pre_extract_transcripts(
         except Exception as e:
             print(f"Warning: Failed to extract {date}: {e}", file=sys.stderr)
     return extracted_files
+
+
+def pre_extract_transcripts_incremental(
+    pending_dates: list,
+    exclude_session_id: str | None = None,
+    output_dir: str = "/tmp",
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """Pre-extract transcripts incrementally using high water marks.
+
+    Like pre_extract_transcripts but uses synthesis state to skip unchanged
+    sessions and only extract delta content from grown sessions.
+
+    Returns:
+        (extracted_files, session_offsets) where:
+        - extracted_files: dict mapping date -> output file path
+        - session_offsets: dict mapping session_id -> {"offset": int, "lines": int}
+    """
+    state = load_synthesis_state()
+    pid = os.getpid()
+    extracted_files: dict[str, str] = {}
+    session_offsets: dict[str, dict] = {}
+
+    try:
+        daily_data = extract_transcripts_incremental(
+            state, exclude_session_id=exclude_session_id
+        )
+    except Exception as e:
+        print(f"Warning: Incremental extraction failed: {e}", file=sys.stderr)
+        return {}, {}
+
+    for date in sorted(pending_dates):
+        sessions = daily_data.get(date)
+        if not sessions:
+            continue
+
+        output_path = f"{output_dir}/memory-extract-{date}-{pid}.txt"
+        date_data = {date: sessions}
+        Path(output_path).write_text(
+            format_transcripts_incremental(date_data, total_line_budget=TRANSCRIPT_LINE_BUDGET),
+            encoding="utf-8",
+        )
+
+        sidecar_path = Path(output_path).with_suffix(".sessions")
+        session_ids = [s["session_id"] for s in sessions]
+        sidecar_path.write_text("\n".join(session_ids) + "\n", encoding="utf-8")
+
+        extracted_files[date] = output_path
+
+        for s in sessions:
+            session_offsets[s["session_id"]] = {
+                "offset": s["current_offset"],
+                "lines": s["current_lines"],
+            }
+
+    return extracted_files, session_offsets
 
 
 def main() -> None:
@@ -540,35 +726,46 @@ def main() -> None:
         synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
-        # Build exclude flag for subagent
-        exclude_flag = ""
-        if current_session_id:
-            exclude_flag = f" --exclude-session {current_session_id}"
-
         # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
-        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=current_session_id)
+        session_offsets = None
 
-        if extracted_files:
-            synth_prompt = _build_synthesis_prompt(
-                exclude_flag, list(extracted_files.keys()), extracted_files
+        if get_synthesis_state_file().exists():
+            extracted_files, session_offsets = pre_extract_transcripts_incremental(
+                pending_dates, exclude_session_id=current_session_id
             )
         else:
-            # Fallback: subagent extracts (slower but handles edge cases)
-            synth_prompt = _build_synthesis_prompt(exclude_flag, pending_dates)
+            extracted_files = pre_extract_transcripts(
+                pending_dates, exclude_session_id=current_session_id
+            )
 
-        print("## AUTO-SYNTHESIZE REQUIRED")
-        print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
-        print()
-        if synthesis_background:
-            print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
-        else:
-            print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
-        print("```")
-        print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
-              f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
-        print(synth_prompt)
-        print("```")
-        print()
+        if extracted_files:
+            # Pre-read all files for embedding in prompt (zero tool calls for subagent)
+            include_dailies = session_offsets is not None
+            embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+
+            # Write session offsets to temp file for synthesis.py state update
+            if session_offsets:
+                offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
+                Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
+                embedded["offsets_path"] = offsets_path
+
+            synth_prompt = _build_synthesis_prompt(
+                list(extracted_files.keys()), extracted_files, embedded
+            )
+
+            print("## AUTO-SYNTHESIZE REQUIRED")
+            print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
+            print()
+            if synthesis_background:
+                print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
+            else:
+                print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
+            print("```")
+            print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
+                  f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
+            print(synth_prompt)
+            print("```")
+            print()
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
@@ -634,10 +831,8 @@ if __name__ == "__main__":
     # --synthesis-prompt: output just the subagent prompt (for /synthesize skill)
     if len(sys.argv) > 1 and sys.argv[1] == "--synthesis-prompt":
         exclude_id = None
-        exclude_flag = ""
         if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
             exclude_id = sys.argv[3]
-            exclude_flag = f" --exclude-session {sys.argv[3]}"
 
         settings = load_settings()
         model = settings.get("synthesis", {}).get("model", "sonnet")
@@ -648,14 +843,31 @@ if __name__ == "__main__":
             print("No pending transcripts.")
             sys.exit(0)
 
-        # Pre-extract transcripts (manual path — user is already waiting)
-        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
+        # Pre-extract transcripts (check for incremental mode)
+        session_offsets = None
+
+        if get_synthesis_state_file().exists():
+            extracted_files, session_offsets = pre_extract_transcripts_incremental(
+                pending_dates, exclude_session_id=exclude_id
+            )
+        else:
+            extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
 
         if not extracted_files:
             print("No pending transcripts with content.")
             sys.exit(0)
 
+        # Pre-read all files for embedding in prompt
+        include_dailies = session_offsets is not None
+        embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+
+        # Write session offsets to temp file for synthesis.py state update
+        if session_offsets:
+            offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
+            Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
+            embedded["offsets_path"] = offsets_path
+
         print(f"model={model}")
-        print(_build_synthesis_prompt(exclude_flag, list(extracted_files.keys()), extracted_files))
+        print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded))
     else:
         main()

@@ -15,6 +15,7 @@ claude-memory-system/
 │   ├── indexing.py             # Session discovery, project index, CLI
 │   ├── transcript_ops.py      # Transcript parsing and extraction (split from indexing)
 │   ├── decay.py                # Age-based decay for long-term memory
+│   ├── synthesis.py            # Synthesis output parser, applier, state updater
 │   ├── project_manager.py      # Project lifecycle management library
 │   └── devtools.py             # Dev diagnostics + mark-routed dedup migration
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
@@ -66,7 +67,7 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 **Learning types:** `gotcha`, `pitfall`, `pattern`
 **Lesson types:** `insight`, `tip`, `workaround`
 
-**Routed entries:** Entries that exist in both daily files and LTM are prefixed with `[routed]` (e.g., `- [routed][scope/type] Description`) and skipped at load time. Marking is handled deterministically by `devtools.py mark-routed` (runs post-synthesis), not by the synthesis subagent.
+**Routed entries:** Entries that exist in both daily files and LTM are prefixed with `[routed]` (e.g., `- [routed][scope/type] Description`) and skipped at load time. Marking is applied by `synthesis.py` at write time and reinforced by `devtools.py mark-routed` post-processing.
 
 **Filtering:** Tags determine which short-term memory tier content appears in:
 - `[global/*]` → Global Short-Term Memory (loaded every session)
@@ -144,7 +145,7 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `projectShortTerm.workingDays` | 5 | Days of project history |
 | `*LongTerm.tokenLimit` | 3,000 | Fixed limit per long-term file |
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
-| `synthesis.model` | sonnet | Model for synthesis subagent |
+| `synthesis.model` | haiku | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
 | `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
 | `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
@@ -161,5 +162,7 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Session exclusion | `--exclude-session` flag + auto-uncapture on resume prevent active session data loss |
 | Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
 | Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
-| Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read |
+| Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read; `synthesis.py` applies output |
+| Zero-tool synthesis | `synthesis.py` parses structured output, applies daily files + LTM routes; `load_memory.py` embeds all inputs in prompt |
+| Incremental synthesis | `.synthesis-state.json` tracks per-session byte offset + line count; skips unchanged, delta-extracts grown sessions; merge context for existing dailies |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |

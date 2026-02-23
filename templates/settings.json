@@ -23,9 +23,9 @@
   },
   "synthesis": {
     "intervalHours": 2,
-    "model": "sonnet",
+    "model": "haiku",
     "background": true,
-    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day). Model: sonnet|opus|haiku. Background: true runs synthesis without blocking user."
+    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day). Model: haiku|sonnet|opus. Background: true runs synthesis without blocking user."
   },
   "decay": {
     "ageDays": 30,
@@ -53,7 +53,7 @@
     "projectLongTerm.tokenLimit": 3000,
     "projectSettings.includeSubdirectories": false,
     "synthesis.intervalHours": 2,
-    "synthesis.model": "sonnet",
+    "synthesis.model": "haiku",
     "synthesis.background": true,
     "decay.ageDays": 30,
     "decay.projectWorkingDays": 20,

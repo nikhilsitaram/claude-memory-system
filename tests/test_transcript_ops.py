@@ -14,6 +14,7 @@ from transcript_ops import (
     extract_transcripts,
     format_transcripts_for_output,
     get_pending_days,
+    parse_jsonl_file_from_line,
 )
 
 # =============================================================================
@@ -178,6 +179,319 @@ class TestFormatTranscriptsConsistency:
         with_budget = format_transcripts_for_output(data, total_line_budget=10000)
 
         assert full == with_budget
+
+
+# =============================================================================
+# parse_jsonl_file_from_line Tests
+# =============================================================================
+
+
+class TestParseJsonlFileFromLine:
+    def test_full_parse_when_start_line_zero(self, tmp_path):
+        """start_line=0 reads all messages (same as parse_jsonl_file)."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "First message"),
+            ("assistant", "Second message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=0)
+        assert len(messages) == 2
+        assert total_lines == 2
+
+    def test_delta_from_line(self, tmp_path):
+        """start_line=1 skips first line, parses remainder."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Old message"),
+            ("assistant", "New message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=1)
+        assert len(messages) == 1
+        assert "New message" in messages[0]["content"]
+        assert total_lines == 2
+
+    def test_start_line_beyond_file(self, tmp_path):
+        """start_line past EOF returns empty messages and current line count."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Only message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=100)
+        assert messages == []
+        assert total_lines == 1
+
+    def test_filters_skippable_messages(self, tmp_path):
+        """should_skip_message filter still applies to delta messages."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Old message"),
+            ("assistant", "<system-reminder>skip this</system-reminder>"),
+            ("assistant", "New real message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=1)
+        assert len(messages) == 1
+        assert "New real message" in messages[0]["content"]
+        assert total_lines == 3
+
+    def test_returns_total_lines_not_parsed_lines(self, tmp_path):
+        """total_lines counts non-blank JSONL lines only."""
+        transcript = tmp_path / "session.jsonl"
+        content = make_jsonl_content([("assistant", "msg1"), ("assistant", "msg2")])
+        content += "\n"  # trailing blank line
+        transcript.write_text(content)
+        _, total_lines = parse_jsonl_file_from_line(transcript, start_line=0)
+        # total_lines = non-blank JSONL lines (blank lines are skipped in line count)
+        assert total_lines == 2
+
+
+# =============================================================================
+# extract_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestExtractTranscriptsIncremental:
+    def test_new_session_full_extract(self, tmp_path):
+        """Session not in state gets mode='full' with all messages."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Hello"),
+            ("assistant", "World"),
+        ]))
+        session = make_session_info(
+            session_id="new-sess",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert "2026-02-22" in result
+        sess = result["2026-02-22"][0]
+        assert sess["mode"] == "full"
+        assert sess["message_count"] == 2
+
+    def test_unchanged_session_skipped(self, tmp_path):
+        """Session with same file size as state is skipped entirely."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([("assistant", "Hello")]))
+        fsize = transcript.stat().st_size
+
+        session = make_session_info(
+            session_id="old-sess",
+            transcript_path=transcript,
+            file_size=fsize,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {"old-sess": {"offset": fsize, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert result == {}  # no content to process
+
+    def test_grown_session_delta_extract(self, tmp_path):
+        """Session that grew since state gets mode='delta' with only new messages."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        # Write initial content
+        initial_content = make_jsonl_content([("assistant", "Old message")])
+        transcript.write_text(initial_content)
+        initial_size = transcript.stat().st_size
+
+        # Append new content
+        with open(transcript, "a") as f:
+            f.write(make_jsonl_content([("assistant", "New message")]))
+        new_size = transcript.stat().st_size
+
+        session = make_session_info(
+            session_id="grown-sess",
+            transcript_path=transcript,
+            file_size=new_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {"grown-sess": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert "2026-02-22" in result
+        sess = result["2026-02-22"][0]
+        assert sess["mode"] == "delta"
+        assert sess["message_count"] == 1  # only new message
+        assert "New message" in sess["messages"][0]["content"]
+
+    def test_mixed_sessions_same_day(self, tmp_path):
+        """Mix of new, unchanged, and grown sessions on same day."""
+        from transcript_ops import extract_transcripts_incremental
+
+        # Unchanged session
+        t1 = tmp_path / "s1.jsonl"
+        t1.write_text(make_jsonl_content([("assistant", "Old")]))
+
+        # Grown session
+        t2 = tmp_path / "s2.jsonl"
+        initial = make_jsonl_content([("assistant", "Was here")])
+        t2.write_text(initial)
+        initial_size = t2.stat().st_size
+        with open(t2, "a") as f:
+            f.write(make_jsonl_content([("assistant", "Am new")]))
+
+        # New session
+        t3 = tmp_path / "s3.jsonl"
+        t3.write_text(make_jsonl_content([("assistant", "Brand new")]))
+
+        sessions = [
+            make_session_info("s1", t1, t1.stat().st_size, created=datetime(2026, 2, 22, 10, 0, tzinfo=timezone.utc)),
+            make_session_info("s2", t2, t2.stat().st_size, created=datetime(2026, 2, 22, 11, 0, tzinfo=timezone.utc)),
+            make_session_info("s3", t3, t3.stat().st_size, created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc)),
+        ]
+
+        state = {"sessions": {
+            "s1": {"offset": t1.stat().st_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"},
+            "s2": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"},
+        }}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=sessions), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        day_sessions = result["2026-02-22"]
+        modes = {s["session_id"]: s["mode"] for s in day_sessions}
+        assert "s1" not in modes  # unchanged, skipped
+        assert modes["s2"] == "delta"
+        assert modes["s3"] == "full"
+
+    def test_returns_session_offsets(self, tmp_path):
+        """Result includes session_offsets dict for state update."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([("assistant", "Hello")]))
+
+        session = make_session_info(
+            session_id="sess-1",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        sess = result["2026-02-22"][0]
+        assert "current_offset" in sess
+        assert "current_lines" in sess
+        assert sess["current_offset"] == transcript.stat().st_size
+        assert sess["current_lines"] >= 1
+
+    def test_exclude_session_id(self, tmp_path):
+        """Exclude session ID is forwarded to list_pending_sessions."""
+        from transcript_ops import extract_transcripts_incremental
+
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[]) as mock_lps, \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            extract_transcripts_incremental(state, exclude_session_id="skip-me")
+
+        mock_lps.assert_called_once()
+        call_kwargs = mock_lps.call_args
+        # Check exclude_session_id was passed
+        assert call_kwargs[1].get("exclude_session_id") == "skip-me" or \
+               (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "skip-me")
+
+
+# =============================================================================
+# format_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestFormatTranscriptsIncremental:
+    def _make_session(self, sid, mode, messages, content_lines=1):
+        return {
+            "session_id": sid,
+            "filepath": "/tmp/test.jsonl",
+            "project_path": None,
+            "message_count": len(messages),
+            "messages": [{"role": "assistant", "content": m} for m in messages],
+            "mode": mode,
+            "current_offset": 1000,
+            "current_lines": 10,
+        }
+
+    def test_full_session_labeled(self):
+        """Full sessions have standard session header."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "full", ["Hello"])]}
+        output = format_transcripts_incremental(data)
+        assert "Session: s1" in output
+        assert "(continued" not in output
+
+    def test_delta_session_labeled(self):
+        """Delta sessions have (continued) marker in header."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "delta", ["New msg"])]}
+        output = format_transcripts_incremental(data)
+        assert "Session: s1 (continued" in output
+
+    def test_budget_applied(self):
+        """Line budget still works with incremental format."""
+        from transcript_ops import format_transcripts_incremental
+
+        msgs = [f"Message {i}" for i in range(50)]
+        data = {"2026-02-22": [self._make_session("s1", "full", msgs)]}
+        output_no_budget = format_transcripts_incremental(data)
+        output_with_budget = format_transcripts_incremental(data, total_line_budget=30)
+        assert len(output_with_budget.split("\n")) < len(output_no_budget.split("\n"))
+
+    def test_mixed_modes_in_day(self):
+        """Both full and delta sessions in same day get correct labels."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [
+            self._make_session("s1", "full", ["First session"]),
+            self._make_session("s2", "delta", ["Continued session"]),
+        ]}
+        output = format_transcripts_incremental(data)
+        lines = output.split("\n")
+        # Find session header lines
+        s1_header = [ln for ln in lines if "Session: s1" in ln]
+        s2_header = [ln for ln in lines if "Session: s2" in ln]
+        assert len(s1_header) == 1
+        assert len(s2_header) == 1
+        assert "(continued" not in s1_header[0]
+        assert "(continued" in s2_header[0]
+
+    def test_day_header_present(self):
+        """Output includes DAY header with session/message counts."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "full", ["Hello", "World"])]}
+        output = format_transcripts_incremental(data)
+        assert "DAY: 2026-02-22" in output
+        assert "1 sessions" in output
+        assert "2 messages" in output
 
 
 if __name__ == "__main__":

@@ -5,24 +5,113 @@ Unit tests for load_memory.py
 Run with: python -m pytest tests/test_load_memory.py -v
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from load_memory import (
-    _build_autoextract_prompt,
+    _build_embedded_files,
     _build_preextracted_prompt,
     _build_synthesis_instructions,
     _build_synthesis_prompt,
+    _find_projects_in_sidecars,
     _get_project_names_str,
+    _strip_profile_sections,
     load_daily_summaries,
     load_global_memory,
     load_project_history,
     load_project_memory,
     pre_extract_transcripts,
+    pre_extract_transcripts_incremental,
     should_synthesize,
 )
+
+# =============================================================================
+# _strip_profile_sections Tests
+# =============================================================================
+
+
+SAMPLE_GLOBAL_LTM = """# Long-Term Memory
+
+## About Me
+- **Name**: Test User
+- **Role**: Developer
+
+## Current Projects
+- **ProjectA**: Building stuff
+
+## Technical Environment
+- **OS**: Linux
+- **Tools**: vim, git
+
+## Patterns & Preferences
+- Prefers tabs over spaces
+
+## Pinned
+- (2026-01-01) [pattern] Important pinned item
+
+## Key Actions
+- (2026-02-01) [implement] Built feature X
+
+## Key Decisions
+- (2026-02-01) [design] Chose architecture Y
+
+## Key Learnings
+- (2026-02-01) [gotcha] Watch out for Z
+
+## Key Lessons
+- (2026-02-01) [tip] Use command W
+"""
+
+
+class TestStripProfileSections:
+    def test_strips_profile_sections(self):
+        """About Me, Current Projects, Technical Environment, Patterns & Preferences removed."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## About Me" not in result
+        assert "Test User" not in result
+        assert "## Current Projects" not in result
+        assert "ProjectA" not in result
+        assert "## Technical Environment" not in result
+        assert "## Patterns & Preferences" not in result
+        assert "tabs over spaces" not in result
+
+    def test_keeps_key_sections(self):
+        """Key Actions/Decisions/Learnings/Lessons preserved."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## Key Actions" in result
+        assert "Built feature X" in result
+        assert "## Key Decisions" in result
+        assert "Chose architecture Y" in result
+        assert "## Key Learnings" in result
+        assert "Watch out for Z" in result
+        assert "## Key Lessons" in result
+        assert "Use command W" in result
+
+    def test_keeps_pinned(self):
+        """Pinned section preserved."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## Pinned" in result
+        assert "Important pinned item" in result
+
+    def test_empty_content(self):
+        """Empty string returns empty."""
+        assert _strip_profile_sections("") == ""
+
+    def test_project_ltm_unchanged(self):
+        """Content without profile sections passes through unchanged."""
+        project_content = """# Project Memory
+
+## Pinned
+- Important
+
+## Key Learnings
+- (2026-02-01) [pattern] Something useful
+"""
+        assert _strip_profile_sections(project_content) == project_content
+
 
 # =============================================================================
 # should_synthesize Tests
@@ -418,17 +507,25 @@ class TestPreExtractTranscripts:
 
 
 class TestSynthesisPromptRoutedMarker:
-    """Verify [routed] marking is handled by post-synthesis mark-routed script, not subagent."""
+    """Verify [routed] marking is handled by synthesis.py, not subagent."""
 
-    def test_prompt_does_not_contain_routed_instruction(self):
-        """Subagent should NOT be told to mark [routed] -- devtools.py mark-routed handles it."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
+    def test_prompt_does_not_contain_routed_instruction(self, tmp_path):
+        """Subagent should NOT be told to mark [routed] -- synthesis.py handles it."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"], {"2026-02-01": str(extract)}
+        )
         assert "Dedup marking" not in prompt
 
-    def test_prompt_contains_mark_routed_in_cleanup(self):
-        """Step 3 bash command should run mark-routed after synthesis."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
-        assert "devtools.py mark-routed" in prompt
+    def test_prompt_contains_synthesis_apply(self, tmp_path):
+        """Prompt should instruct subagent to run synthesis.py apply."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"], {"2026-02-01": str(extract)}
+        )
+        assert "synthesis.py apply" in prompt
 
 
 # =============================================================================
@@ -492,9 +589,9 @@ class TestBuildSynthesisInstructions:
         assert "DEDUP REQUIREMENT" in instructions
         assert "GRANULARITY CAP" in instructions
 
-    def test_contains_batching_requirement(self):
+    def test_contains_dedup_requirement(self):
         instructions = _build_synthesis_instructions("`proj`")
-        assert "CRITICAL batching requirement" in instructions
+        assert "DEDUP REQUIREMENT" in instructions
 
     def test_contains_daily_summary_template(self):
         instructions = _build_synthesis_instructions("`proj`")
@@ -510,41 +607,86 @@ class TestBuildSynthesisInstructions:
 
 
 class TestBuildPreextractedPrompt:
-    def test_contains_file_references(self, tmp_path):
-        transcript = tmp_path / "extract-2026-02-01.txt"
-        transcript.write_text("line1\nline2\nline3\n")
+    """Tests for _build_preextracted_prompt with embedded content and structured output."""
+
+    def test_embeds_transcript_content(self, tmp_path):
+        """Transcript content should be embedded inline, not as file paths."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("SESSION DATA HERE")
 
         prompt = _build_preextracted_prompt(
-            ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
-            "SYNTHESIS_INSTRUCTIONS_PLACEHOLDER",
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": str(extract_file)},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={"transcripts": {"2026-02-22": "SESSION DATA HERE"}},
         )
-        assert str(transcript) in prompt
-        assert "4 lines" in prompt  # 3 newlines + 1
+        assert "SESSION DATA HERE" in prompt
+        assert "===DAILY:" in prompt  # structured output format
+        assert "===ROUTE:" in prompt
+        assert "===END===" in prompt
+        assert "Step 1: Read" not in prompt  # no Read instructions
+
+    def test_embeds_ltm_content(self, tmp_path):
+        """Global and project LTM content should be embedded inline."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "transcript"},
+                "global_ltm": "## Key Learnings\n- existing",
+                "project_ltms": {"proj": "## Key Learnings\n- proj existing"},
+            },
+        )
+        assert "## Key Learnings" in prompt
+        assert "- existing" in prompt
+        assert "- proj existing" in prompt
+
+    def test_structured_output_instructions(self, tmp_path):
+        """Prompt should include delivery instructions and prohibitions."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={"transcripts": {"2026-02-22": "data"}},
+        )
+        assert "synthesis.py apply" in prompt
+        assert "Output only the structured format" in prompt
+        assert "Only use the Write and Bash tools" in prompt
+
+    def test_no_auto_extract_fallback(self):
+        """_build_autoextract_prompt should no longer exist."""
+        import load_memory
+        assert not hasattr(load_memory, "_build_autoextract_prompt")
 
     def test_contains_synthesis_instructions(self, tmp_path):
-        transcript = tmp_path / "extract.txt"
-        transcript.write_text("content\n")
+        """Synthesis instructions block is included in the prompt."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
 
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
+            {"2026-02-01": str(extract)},
             "MY_CUSTOM_INSTRUCTIONS",
         )
         assert "MY_CUSTOM_INSTRUCTIONS" in prompt
 
-    def test_contains_mark_captured_commands(self, tmp_path):
-        transcript = tmp_path / "extract-2026-02-01.txt"
-        transcript.write_text("content\n")
+    def test_contains_sidecar_references(self, tmp_path):
+        """Prompt includes sidecar paths for synthesis.py apply."""
+        extract = tmp_path / "extract-2026-02-01.txt"
+        extract.write_text("content\n")
 
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
+            {"2026-02-01": str(extract)},
             "instructions",
         )
-        assert "mark-captured --sidecar" in prompt
+        sidecar = str(extract).rsplit(".", 1)[0] + ".sessions"
+        assert sidecar in prompt
+        assert "synthesis.py apply" in prompt
 
-    def test_contains_read_instructions_for_all_dates(self, tmp_path):
+    def test_contains_all_dates(self, tmp_path):
+        """All pending dates appear in the prompt."""
         f1 = tmp_path / "extract-01.txt"
         f2 = tmp_path / "extract-02.txt"
         f1.write_text("a\n")
@@ -557,43 +699,27 @@ class TestBuildPreextractedPrompt:
         )
         assert "2026-02-01" in prompt
         assert "2026-02-02" in prompt
-        assert "Read(`~/.claude/memory/daily/2026-02-01.md`)" in prompt
-        assert "Read(`~/.claude/memory/daily/2026-02-02.md`)" in prompt
 
-    def test_handles_unreadable_file(self, tmp_path):
-        """Falls back to 2000 line count when file is unreadable."""
+    def test_reads_from_extract_file_when_not_embedded(self, tmp_path):
+        """Falls back to reading extract file when transcripts not in embedded_files."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("CONTENT FROM FILE")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        assert "CONTENT FROM FILE" in prompt
+
+    def test_handles_unreadable_file(self):
+        """Shows unavailable message when extract file doesn't exist and not embedded."""
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
             {"2026-02-01": "/nonexistent/file.txt"},
             "instructions",
         )
-        assert "2000 lines" in prompt
-
-
-# =============================================================================
-# _build_autoextract_prompt Tests
-# =============================================================================
-
-
-class TestBuildAutoextractPrompt:
-    def test_contains_extract_command(self):
-        prompt = _build_autoextract_prompt(" --exclude-session abc", ["2026-02-01"], "instructions")
-        assert "indexing.py extract" in prompt
-        assert "--exclude-session abc" in prompt
-
-    def test_contains_synthesis_instructions(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01"], "MY_INSTRUCTIONS")
-        assert "MY_INSTRUCTIONS" in prompt
-
-    def test_contains_all_dates(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01", "2026-02-02"], "instructions")
-        assert "2026-02-01, 2026-02-02" in prompt
-
-    def test_contains_mark_captured_and_cleanup(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01"], "instructions")
-        assert "mark-captured --sidecar" in prompt
-        assert "devtools.py mark-routed" in prompt
-        assert "decay.py" in prompt
+        assert "(transcript unavailable)" in prompt
 
 
 # =============================================================================
@@ -602,29 +728,534 @@ class TestBuildAutoextractPrompt:
 
 
 class TestBuildSynthesisPromptIntegration:
-    """Test the orchestrator dispatches correctly to sub-functions."""
+    """Test the orchestrator dispatches correctly to _build_preextracted_prompt."""
 
-    def test_autoextract_path(self):
-        """Without extracted_files, returns autoextract prompt."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
-        assert "indexing.py extract" in prompt
-        assert "Pre-extracted transcript files" not in prompt
-
-    def test_preextracted_path(self, tmp_path):
-        """With extracted_files, returns preextracted prompt."""
+    def test_includes_synthesis_instructions(self, tmp_path):
+        """Prompt includes shared synthesis instructions from _build_synthesis_instructions."""
         transcript = tmp_path / "extract.txt"
         transcript.write_text("content\n")
 
         prompt = _build_synthesis_prompt(
-            "", ["2026-02-01"],
+            ["2026-02-01"],
             extracted_files={"2026-02-01": str(transcript)},
         )
-        assert "Pre-extracted transcript files" in prompt
-        assert "indexing.py extract YYYY-MM-DD" not in prompt
+        # Should contain instructions generated by _build_synthesis_instructions
+        assert "[scope/type]" in prompt
+        assert "Long-term routing" in prompt
 
-    def test_exclude_flag_passed_to_autoextract(self):
-        prompt = _build_synthesis_prompt(" --exclude-session xyz", ["2026-02-01"])
-        assert "--exclude-session xyz" in prompt
+    def test_passes_embedded_files(self, tmp_path):
+        """embedded_files are forwarded to _build_preextracted_prompt."""
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"],
+            extracted_files={"2026-02-01": str(transcript)},
+            embedded_files={
+                "transcripts": {"2026-02-01": "EMBEDDED TRANSCRIPT DATA"},
+                "global_ltm": "GLOBAL LTM CONTENT",
+            },
+        )
+        assert "EMBEDDED TRANSCRIPT DATA" in prompt
+        assert "GLOBAL LTM CONTENT" in prompt
+
+    def test_structured_output_format(self, tmp_path):
+        """Prompt includes structured output delimiters."""
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"],
+            extracted_files={"2026-02-01": str(transcript)},
+        )
+        assert "===DAILY:" in prompt
+        assert "===ROUTE:" in prompt
+        assert "===END===" in prompt
+
+
+# =============================================================================
+# _build_embedded_files Tests
+# =============================================================================
+
+
+class TestBuildEmbeddedFiles:
+    """Tests for _build_embedded_files helper."""
+
+    def test_reads_transcript_files(self, tmp_path):
+        """Transcript extract files are read into embedded dict."""
+        extract = tmp_path / "extract-2026-02-01.txt"
+        extract.write_text("transcript content")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert result["transcripts"]["2026-02-01"] == "transcript content"
+
+    def test_reads_global_ltm(self, tmp_path):
+        """Global LTM file content is read into embedded dict."""
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text("## Key Learnings\n- something")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = ltm
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert "## Key Learnings" in result["global_ltm"]
+
+    def test_reads_project_ltms(self, tmp_path):
+        """Project LTM files are read when project found in sidecars."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "myproject-long-term-memory.md").write_text("project content")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"myproject"}):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert result["project_ltms"]["myproject"] == "project content"
+
+    def test_handles_missing_transcript_file(self, tmp_path):
+        """Missing transcript files are silently skipped."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-01": "/nonexistent/file.txt"})
+
+        assert "2026-02-01" not in result["transcripts"]
+
+    def test_handles_missing_global_ltm(self, tmp_path):
+        """Missing global LTM returns empty string."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert result["global_ltm"] == ""
+
+    def test_handles_missing_project_dir(self, tmp_path):
+        """Missing project memory dir returns empty project_ltms."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert result["project_ltms"] == {}
+
+    def test_multiple_projects(self, tmp_path):
+        """Multiple project LTM files are read when found in sidecars."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "alpha-long-term-memory.md").write_text("alpha content")
+        (proj_dir / "beta-long-term-memory.md").write_text("beta content")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"alpha", "beta"}):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert result["project_ltms"]["alpha"] == "alpha content"
+        assert result["project_ltms"]["beta"] == "beta content"
+
+    def test_filters_unmentioned_projects(self, tmp_path):
+        """Project LTMs not in sidecars are excluded."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "mentioned-long-term-memory.md").write_text("included")
+        (proj_dir / "unrelated-long-term-memory.md").write_text("excluded")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"mentioned"}):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert "mentioned" in result["project_ltms"]
+        assert "unrelated" not in result["project_ltms"]
+
+
+# =============================================================================
+# _find_projects_in_sidecars Tests
+# =============================================================================
+
+
+class TestFindProjectsInSidecars:
+    """Tests for _find_projects_in_sidecars helper."""
+
+    def test_maps_session_to_project(self, tmp_path):
+        """Session ID in sidecar maps to project name via projects-index."""
+        # Set up extract + sidecar
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("abc-123\n")
+
+        # Set up Claude projects dir with session file
+        claude_proj = tmp_path / "projects" / "-home-user-myproject"
+        claude_proj.mkdir(parents=True)
+        (claude_proj / "abc-123.jsonl").write_text("")
+
+        index = {"projects": {"/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}}}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == {"myproject"}
+
+    def test_multiple_sessions_different_projects(self, tmp_path):
+        """Sessions from different projects return both project names."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("sess-1\nsess-2\n")
+
+        claude_proj_a = tmp_path / "projects" / "-proj-a"
+        claude_proj_a.mkdir(parents=True)
+        (claude_proj_a / "sess-1.jsonl").write_text("")
+
+        claude_proj_b = tmp_path / "projects" / "-proj-b"
+        claude_proj_b.mkdir(parents=True)
+        (claude_proj_b / "sess-2.jsonl").write_text("")
+
+        index = {"projects": {
+            "/proj/a": {"name": "alpha", "encodedPaths": ["-proj-a"]},
+            "/proj/b": {"name": "beta", "encodedPaths": ["-proj-b"]},
+        }}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == {"alpha", "beta"}
+
+    def test_no_sidecar_returns_empty(self, tmp_path):
+        """Missing sidecar file returns empty set."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        # No .sessions file created
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text("{}")
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == set()
+
+    def test_empty_extracted_files(self):
+        """Empty extracted_files returns empty set."""
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+            mock_idx.return_value = Path("/nonexistent/index.json")
+            result = _find_projects_in_sidecars({})
+
+        assert result == set()
+
+    def test_session_not_in_index_skipped(self, tmp_path):
+        """Session in unknown project dir is silently skipped."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("orphan-sess\n")
+
+        claude_proj = tmp_path / "projects" / "-unknown-dir"
+        claude_proj.mkdir(parents=True)
+        (claude_proj / "orphan-sess.jsonl").write_text("")
+
+        # Index has no entry for -unknown-dir
+        index = {"projects": {}}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == set()
+
+
+# =============================================================================
+# Output filename PID fix Tests
+# =============================================================================
+
+
+class TestOutputFilenamePid:
+    """Verify delivery instructions use deterministic PID-based filename."""
+
+    def test_prompt_uses_pid_not_dollar_dollar(self, tmp_path):
+        """Output filename should use os.getpid(), not $$."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        # Should NOT contain literal $$
+        assert "/tmp/synthesis-output-$$" not in prompt
+        # Should contain the actual PID
+        import os
+        assert f"/tmp/synthesis-output-{os.getpid()}.txt" in prompt
+
+    def test_write_and_bash_use_same_filename(self, tmp_path):
+        """Both Write and Bash instructions reference identical filename."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        import os
+        expected_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
+        # Should appear exactly twice: once in Write, once in Bash
+        assert prompt.count(expected_filename) == 2
+
+
+# =============================================================================
+# pre_extract_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestPreExtractTranscriptsIncremental:
+    def _mock_daily_data(self, session_id="s1", mode="full"):
+        """Build a minimal extract_transcripts_incremental return value."""
+        return {
+            "2026-02-22": [
+                {
+                    "session_id": session_id,
+                    "filepath": "/tmp/test.jsonl",
+                    "project_path": "project-a",
+                    "messages": [{"role": "assistant", "content": "hello"}],
+                    "message_count": 1,
+                    "mode": mode,
+                    "current_offset": 500,
+                    "current_lines": 5,
+                }
+            ]
+        }
+
+    def test_returns_extracted_files_and_offsets(self, tmp_path):
+        """Returns both extracted_files dict and session_offsets dict."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data()), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="formatted output"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert "2026-02-22" in extracted
+        assert Path(extracted["2026-02-22"]).exists()
+        assert offsets["s1"]["offset"] == 500
+        assert offsets["s1"]["lines"] == 5
+
+    def test_creates_sidecar(self, tmp_path):
+        """Sidecar .sessions file contains session IDs."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data("abc")), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="formatted"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, _ = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        sidecar = Path(extracted["2026-02-22"]).with_suffix(".sessions")
+        assert sidecar.exists()
+        assert "abc" in sidecar.read_text()
+
+    def test_skips_empty_dates(self, tmp_path):
+        """Dates with no incremental content are excluded."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value={}), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert extracted == {}
+        assert offsets == {}
+
+    def test_collects_offsets_from_multiple_sessions(self, tmp_path):
+        """Multiple sessions across dates accumulate in offsets dict."""
+        multi = {
+            "2026-02-21": [
+                {"session_id": "s1", "filepath": "/tmp/t1", "project_path": None,
+                 "messages": [{"role": "assistant", "content": "a"}], "message_count": 1,
+                 "mode": "full", "current_offset": 100, "current_lines": 2},
+            ],
+            "2026-02-22": [
+                {"session_id": "s2", "filepath": "/tmp/t2", "project_path": None,
+                 "messages": [{"role": "assistant", "content": "b"}], "message_count": 1,
+                 "mode": "delta", "current_offset": 300, "current_lines": 8},
+            ],
+        }
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=multi), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="data"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            _, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-21", "2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert offsets["s1"]["offset"] == 100
+        assert offsets["s2"]["offset"] == 300
+
+
+# =============================================================================
+# _build_embedded_files with dailies Tests
+# =============================================================================
+
+
+class TestBuildEmbeddedFilesWithDailies:
+    """Test that _build_embedded_files includes existing daily files as merge context."""
+
+    def test_includes_existing_daily_when_available(self, tmp_path):
+        """Existing daily file for a date is read into embedded dict."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (daily_dir / "2026-02-22.md").write_text("## Actions\n- [global/implement] Old stuff")
+
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            mock_dd.return_value = daily_dir
+            result = _build_embedded_files(
+                {"2026-02-22": str(extract)},
+                include_dailies=True,
+            )
+
+        assert "existing_dailies" in result
+        assert "2026-02-22" in result["existing_dailies"]
+        assert "Old stuff" in result["existing_dailies"]["2026-02-22"]
+
+    def test_no_daily_returns_empty(self, tmp_path):
+        """When no daily file exists for a date, it's not in embedded dict."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            mock_dd.return_value = daily_dir
+            result = _build_embedded_files({}, include_dailies=True)
+
+        assert result.get("existing_dailies", {}) == {}
+
+    def test_include_dailies_false_skips(self, tmp_path):
+        """include_dailies=False (default) does not read daily files."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (daily_dir / "2026-02-22.md").write_text("## Actions\n- stuff")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-22": str(tmp_path / "x.txt")})
+
+        assert "existing_dailies" not in result or result["existing_dailies"] == {}
+
+
+# =============================================================================
+# Prompt merge context Tests
+# =============================================================================
+
+
+class TestPromptMergeContext:
+    """Test that prompts include merge instructions when existing dailies present."""
+
+    def test_prompt_includes_existing_daily(self):
+        """When existing_dailies in embedded, prompt includes merge context section."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "new transcript data"},
+                "existing_dailies": {"2026-02-22": "## Actions\n- [global/implement] Old stuff"},
+            },
+        )
+        assert "Existing daily summary" in prompt
+        assert "Old stuff" in prompt
+        assert "merge" in prompt.lower()
+
+    def test_prompt_no_merge_when_no_dailies(self):
+        """Without existing_dailies, no merge section in prompt."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "transcript data"},
+            },
+        )
+        assert "Existing daily summary" not in prompt
+
+
+# =============================================================================
+# Incremental Wiring Tests
+# =============================================================================
+
+
+class TestIncrementalWiring:
+    """Verify incremental extraction is wired into the prompt."""
+
+    def test_offsets_arg_in_prompt_when_offsets_present(self):
+        """When offsets_path is in embedded_files, apply command includes --offsets-json."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "data"},
+                "offsets_path": "/tmp/synthesis-offsets-123.json",
+            },
+        )
+        assert "--offsets-json /tmp/synthesis-offsets-123.json" in prompt
+
+    def test_no_offsets_arg_when_no_offsets(self):
+        """Without offsets_path, apply command has no --offsets-json."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "data"},
+            },
+        )
+        assert "--offsets-json" not in prompt
 
 
 if __name__ == "__main__":

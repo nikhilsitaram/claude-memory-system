@@ -5,6 +5,7 @@ Unit tests for indexing.py
 Run with: python -m pytest tests/test_indexing.py -v
 """
 
+import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +74,9 @@ class TestExtractTextContent:
     "<command-name>/synthesize</command-name> some content",
     "Some text with <system-reminder> embedded",
     "[Request interrupted by user]",
+    "===DAILY:2026-02-20===\n# 2026-02-20\n## Actions\n- [global/implement] something",
+    "python3 $HOME/.claude/scripts/synthesis.py apply /tmp/output.txt --sidecars /tmp/s.sessions",
+    "## AUTO-SYNTHESIZE REQUIRED\nThere are 2 pending date(s)",
 ])
 def test_should_skip(content):
     assert should_skip_message(content)
@@ -654,6 +658,59 @@ class TestBuildProjectsIndex:
         result = build_projects_index()
 
         assert len(result["projects"]) == 0
+
+
+# =============================================================================
+# mark-captured prunes synthesis state Tests
+# =============================================================================
+
+
+class TestMarkCapturedPrunesState:
+    """Verify mark-captured also prunes synthesis state."""
+
+    def test_calls_prune_on_success(self, tmp_path):
+        """When sessions are marked captured, prune_captured_from_state is called."""
+        captured_file = tmp_path / ".captured"
+        captured_file.write_text("")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("sess-1\nsess-2\n")
+
+        with mock.patch("indexing.get_captured_sessions", return_value=set()), \
+             mock.patch("indexing.list_all_sessions", return_value=[]), \
+             mock.patch("indexing.add_captured_session"), \
+             mock.patch("indexing.prune_captured_from_state") as mock_prune:
+            from indexing import cmd_mark_captured
+            # Build args namespace matching sidecar mode
+            args = argparse.Namespace(sidecar=str(sidecar), session_ids=[])
+            cmd_mark_captured(args)
+
+        mock_prune.assert_called_once()
+        called_ids = mock_prune.call_args[0][0]
+        assert "sess-1" in called_ids
+        assert "sess-2" in called_ids
+
+    def test_no_prune_when_nothing_marked(self, tmp_path):
+        """When all sessions are skipped (today), prune is not called."""
+        captured_file = tmp_path / ".captured"
+        captured_file.write_text("")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("sess-1\n")
+
+        # Make sess-1 look like today's session so it gets skipped
+        today_session = make_session_info(
+            "sess-1",
+            created=datetime.now(timezone.utc),
+        )
+
+        with mock.patch("indexing.get_captured_sessions", return_value=set()), \
+             mock.patch("indexing.list_all_sessions", return_value=[today_session]), \
+             mock.patch("indexing.add_captured_session"), \
+             mock.patch("indexing.prune_captured_from_state") as mock_prune:
+            from indexing import cmd_mark_captured
+            args = argparse.Namespace(sidecar=str(sidecar), session_ids=[])
+            cmd_mark_captured(args)
+
+        mock_prune.assert_not_called()
 
 
 if __name__ == "__main__":
