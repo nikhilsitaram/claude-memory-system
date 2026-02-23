@@ -3,9 +3,11 @@
 
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from memory_utils import (
@@ -29,6 +31,7 @@ from memory_utils import (
     load_synthesis_state,
     project_name_to_filename,
     prune_stale_state_entries,
+    resolve_worktree_to_main_repo,
     save_json_file,
     save_synthesis_state,
     to_iso_z,
@@ -857,6 +860,75 @@ class TestSynthesisState:
         assert "new" in result["sessions"]
         assert result["sessions"]["new"]["offset"] == 200
         assert "last_synthesized" in result["sessions"]["new"]
+
+# =============================================================================
+# Resolve Worktree to Main Repo Tests
+# =============================================================================
+
+
+class TestResolveWorktreeToMainRepo:
+    """Tests for resolve_worktree_to_main_repo()."""
+
+    def test_worktree_resolves_to_main_repo(self):
+        """When git says toplevel != common-dir parent, return main repo root."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo/.worktrees/feature\n"),
+                MagicMock(returncode=0, stdout="/repo/.git\n"),
+            ]
+            result = resolve_worktree_to_main_repo("/repo/.worktrees/feature/src")
+            assert result == "/repo"
+
+    def test_main_repo_returns_unchanged(self):
+        """When toplevel == common-dir parent, it's the main repo -- return as-is."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/home/user/project\n"),
+                MagicMock(returncode=0, stdout="/home/user/project/.git\n"),
+            ]
+            result = resolve_worktree_to_main_repo("/home/user/project")
+            assert result == "/home/user/project"
+
+    def test_non_git_directory_returns_unchanged(self):
+        """Non-git directory (git fails) returns original path."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(128, "git")
+            result = resolve_worktree_to_main_repo("/tmp/not-a-repo")
+            assert result == "/tmp/not-a-repo"
+
+    def test_git_not_installed_returns_unchanged(self):
+        """If git binary not found, return original path."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("git not found")
+            result = resolve_worktree_to_main_repo("/some/path")
+            assert result == "/some/path"
+
+    def test_empty_git_output_returns_unchanged(self):
+        """If git returns empty output, return original path."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="\n"),
+            ]
+            result = resolve_worktree_to_main_repo("/some/path")
+            assert result == "/some/path"
+
+    def test_git_common_dir_failure_returns_unchanged(self):
+        """If first git call succeeds but second fails, return original path."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo/.worktrees/feature\n"),
+                subprocess.CalledProcessError(128, "git"),
+            ]
+            result = resolve_worktree_to_main_repo("/repo/.worktrees/feature")
+            assert result == "/repo/.worktrees/feature"
+
+    def test_first_call_nonzero_returns_unchanged(self):
+        """If --show-toplevel returns nonzero exit code, return original path."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=128, stdout="")
+            result = resolve_worktree_to_main_repo("/some/path")
+            assert result == "/some/path"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
