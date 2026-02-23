@@ -187,3 +187,114 @@ def mark_routed_entries(
         )
 
     return marked_dailies
+
+
+def write_daily_files(dailies: list[DailyFile], daily_dir: Path | None = None) -> list[str]:
+    """Write daily summary files atomically. Returns list of written file paths."""
+    if daily_dir is None:
+        from memory_utils import get_daily_dir
+
+        daily_dir = get_daily_dir()
+    daily_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[str] = []
+    for daily in dailies:
+        target = daily_dir / f"{daily.date}.md"
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(daily.content + "\n", encoding="utf-8")
+        tmp.rename(target)
+        written.append(str(target))
+    return written
+
+
+def append_to_ltm(
+    routes: list[RouteEntry],
+    ltm_dir: Path | None = None,
+    global_file: Path | None = None,
+    template_dir: Path | None = None,
+) -> list[str]:
+    """Append routed entries to LTM file sections. Returns warnings list.
+
+    For each RouteEntry, finds the target file (global LTM or project LTM),
+    locates the matching section header, and inserts new entries after the
+    header/comment block. Skips entries that already exist (dedup by exact match).
+    Creates project files from template if missing.
+    """
+    if global_file is None:
+        from memory_utils import get_global_memory_file
+
+        global_file = get_global_memory_file()
+    if ltm_dir is None:
+        from memory_utils import get_project_memory_dir
+
+        ltm_dir = get_project_memory_dir()
+    if template_dir is None:
+        from memory_utils import get_memory_dir
+
+        template_dir = get_memory_dir() / "templates"
+
+    from memory_utils import project_name_to_filename
+
+    warnings: list[str] = []
+
+    # Group routes by target file
+    file_routes: dict[Path, list[RouteEntry]] = {}
+    for route in routes:
+        if route.scope == "global":
+            target = global_file
+        else:
+            filename = project_name_to_filename(route.scope)
+            target = ltm_dir / filename
+        file_routes.setdefault(target, []).append(route)
+
+    for target_file, file_route_list in file_routes.items():
+        # Create from template if missing
+        if not target_file.exists():
+            template = template_dir / "project-long-term-memory.md"
+            if template.exists():
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                content = template.read_text(encoding="utf-8")
+                scope = file_route_list[0].scope
+                content = content.replace("{project}", scope)
+                target_file.write_text(content, encoding="utf-8")
+            else:
+                warnings.append(f"No template and no file for {target_file.name}")
+                continue
+
+        content = target_file.read_text(encoding="utf-8")
+        lines = content.split("\n")
+        existing_content = content.lower()
+
+        for route in file_route_list:
+            section_header = f"## {route.section}"
+            # Find the section
+            section_idx = None
+            for idx, line in enumerate(lines):
+                if line.strip() == section_header:
+                    section_idx = idx
+                    break
+
+            if section_idx is None:
+                warnings.append(f"Section '{route.section}' not found in {target_file.name}")
+                continue
+
+            # Find insertion point: after section header + comment lines + blank lines
+            insert_idx = section_idx + 1
+            while insert_idx < len(lines) and (
+                lines[insert_idx].strip().startswith("<!--") or lines[insert_idx].strip() == ""
+            ):
+                insert_idx += 1
+
+            # Filter out entries that already exist (case-insensitive dedup)
+            new_entries = []
+            for entry in route.entries:
+                if entry.strip().lower() not in existing_content:
+                    new_entries.append(entry)
+
+            if new_entries:
+                for entry in reversed(new_entries):
+                    lines.insert(insert_idx, entry)
+
+        target_file.write_text("\n".join(lines), encoding="utf-8")
+
+    return warnings

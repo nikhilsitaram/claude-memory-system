@@ -9,8 +9,10 @@ from synthesis import (  # noqa: I001
     DailyFile,  # noqa: F401
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
+    append_to_ltm,
     mark_routed_entries,
     parse_synthesis_output,
+    write_daily_files,
 )
 
 
@@ -186,3 +188,182 @@ class TestMarkRoutedEntries:
         result = mark_routed_entries([d1, d2], routes)
         assert "[routed]" in result[0].content
         assert "[routed]" not in result[1].content
+
+
+# =============================================================================
+# write_daily_files Tests
+# =============================================================================
+
+
+class TestWriteDailyFiles:
+    def test_writes_daily_file(self, tmp_path):
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        dailies = [DailyFile(date="2026-02-22", content="# 2026-02-22\n## Actions\n- something")]
+        write_daily_files(dailies, daily_dir)
+        written = (daily_dir / "2026-02-22.md").read_text()
+        assert "# 2026-02-22" in written
+        assert "- something" in written
+
+    def test_overwrites_existing_daily(self, tmp_path):
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (daily_dir / "2026-02-22.md").write_text("old content")
+        dailies = [DailyFile(date="2026-02-22", content="new content")]
+        write_daily_files(dailies, daily_dir)
+        assert (daily_dir / "2026-02-22.md").read_text().strip() == "new content"
+
+    def test_creates_daily_dir_if_missing(self, tmp_path):
+        daily_dir = tmp_path / "daily"
+        dailies = [DailyFile(date="2026-02-22", content="content")]
+        write_daily_files(dailies, daily_dir)
+        assert (daily_dir / "2026-02-22.md").exists()
+
+    def test_returns_written_paths(self, tmp_path):
+        daily_dir = tmp_path / "daily"
+        dailies = [
+            DailyFile(date="2026-02-21", content="day 1"),
+            DailyFile(date="2026-02-22", content="day 2"),
+        ]
+        result = write_daily_files(dailies, daily_dir)
+        assert len(result) == 2
+        assert str(daily_dir / "2026-02-21.md") in result
+        assert str(daily_dir / "2026-02-22.md") in result
+
+    def test_empty_list_writes_nothing(self, tmp_path):
+        daily_dir = tmp_path / "daily"
+        result = write_daily_files([], daily_dir)
+        assert result == []
+        assert daily_dir.exists()  # dir still created
+
+    def test_atomic_write_via_tmp(self, tmp_path):
+        """Verify no .tmp files linger after write."""
+        daily_dir = tmp_path / "daily"
+        dailies = [DailyFile(date="2026-02-22", content="content")]
+        write_daily_files(dailies, daily_dir)
+        tmp_files = list(daily_dir.glob("*.tmp"))
+        assert tmp_files == []
+
+
+# =============================================================================
+# append_to_ltm Tests
+# =============================================================================
+
+
+class TestAppendToLtm:
+    def test_appends_entries_to_section(self, tmp_path):
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Long-Term Memory\n\n"
+            "## Key Learnings\n"
+            "<!-- Subject to 30-day decay -->\n"
+            "\n"
+            "- (2026-02-01) [pattern] Existing entry\n"
+        )
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [gotcha] New entry"],
+            ),
+        ]
+        append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "- (2026-02-01) [pattern] Existing entry" in content
+        assert "- (2026-02-22) [gotcha] New entry" in content
+
+    def test_creates_project_file_from_template(self, tmp_path):
+        template = tmp_path / "templates" / "project-long-term-memory.md"
+        template.parent.mkdir()
+        template.write_text("# {project}\n\n## Key Learnings\n<!-- decay -->\n")
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+
+        routes = [
+            RouteEntry(
+                scope="my-project",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [pattern] First entry"],
+            ),
+        ]
+        append_to_ltm(
+            routes,
+            ltm_dir=proj_dir,
+            global_file=tmp_path / "global.md",
+            template_dir=template.parent,
+        )
+        proj_file = proj_dir / "my-project-long-term-memory.md"
+        assert proj_file.exists()
+        assert "First entry" in proj_file.read_text()
+
+    def test_section_not_found_skips(self, tmp_path):
+        ltm_file = tmp_path / "global.md"
+        ltm_file.write_text("# Memory\n\n## About Me\nJust about me.\n")
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [pattern] Orphaned"],
+            ),
+        ]
+        # Should not crash, should skip
+        warnings = append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
+        assert any("Key Learnings" in w for w in warnings)
+
+    def test_no_duplicate_append(self, tmp_path):
+        ltm_file = tmp_path / "global.md"
+        ltm_file.write_text(
+            "## Key Learnings\n" "<!-- decay -->\n" "- (2026-02-22) [pattern] Already exists\n"
+        )
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [pattern] Already exists"],
+            ),
+        ]
+        append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert content.count("Already exists") == 1  # not duplicated
+
+    def test_multiple_sections_same_file(self, tmp_path):
+        ltm_file = tmp_path / "global.md"
+        ltm_file.write_text(
+            "# Memory\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n\n"
+            "## Key Actions\n"
+            "<!-- decay -->\n\n"
+        )
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [pattern] A pattern"],
+            ),
+            RouteEntry(
+                scope="global",
+                section="Key Actions",
+                entries=["- (2026-02-22) [implement] An action"],
+            ),
+        ]
+        append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "A pattern" in content
+        assert "An action" in content
+
+    def test_no_template_no_file_warns(self, tmp_path):
+        routes = [
+            RouteEntry(
+                scope="missing-project",
+                section="Key Learnings",
+                entries=["- (2026-02-22) [pattern] Entry"],
+            ),
+        ]
+        warnings = append_to_ltm(
+            routes,
+            ltm_dir=tmp_path / "project-memory",
+            global_file=tmp_path / "global.md",
+            template_dir=tmp_path / "no-templates",
+        )
+        assert len(warnings) > 0
