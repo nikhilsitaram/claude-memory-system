@@ -23,8 +23,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from indexing import get_session_date, list_pending_sessions
-from memory_utils import get_captured_sessions
+from indexing import get_session_date, list_recent_sessions
 
 __all__ = [
     # Parsing
@@ -189,8 +188,7 @@ def extract_transcripts(
     Returns:
         Dict mapping date strings to lists of session dicts.
     """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, exclude_session_id=exclude_session_id)
+    pending = list_recent_sessions(exclude_session_id=exclude_session_id)
 
     if specific_day:
         pending = [s for s in pending if get_session_date(s) == specific_day]
@@ -239,8 +237,7 @@ def extract_transcripts_incremental(
     Returns:
         Dict mapping date -> list of session dicts (only sessions with content).
     """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, exclude_session_id=exclude_session_id)
+    pending = list_recent_sessions(exclude_session_id=exclude_session_id)
 
     sessions_state = state.get("sessions", {})
     daily_data: dict[str, list[dict]] = defaultdict(list)
@@ -408,9 +405,8 @@ def get_pending_days(exclude_session_id: str | None = None) -> list[str]:
     Args:
         exclude_session_id: Optional session ID to exclude
     """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(
-        captured, exclude_session_id=exclude_session_id, verify_content=True
+    pending = list_recent_sessions(
+        exclude_session_id=exclude_session_id, verify_content=True
     )
 
     days = set()

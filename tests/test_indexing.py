@@ -5,7 +5,6 @@ Unit tests for indexing.py
 Run with: python -m pytest tests/test_indexing.py -v
 """
 
-import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +17,6 @@ from indexing import (
     build_projects_index,
     get_session_date,
     has_assistant_message,
-    list_pending_sessions,
 )
 from transcript_ops import (
     extract_text_content,
@@ -181,43 +179,58 @@ class TestParseJsonlFile:
 
 
 # =============================================================================
-# list_pending_sessions Tests
+# list_recent_sessions Tests
 # =============================================================================
 
 
-class TestListPendingSessions:
+class TestListRecentSessions:
     def _make_sessions(self):
+        """Build sessions with controlled mtimes."""
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
         return [
-            make_session_info("captured-1", file_size=2000),
-            make_session_info("pending-1", file_size=2000),
-            make_session_info("small-1", file_size=500),
-            make_session_info("pending-2", file_size=3000),
+            make_session_info("recent-1", file_size=2000,
+                              file_mtime=now - timedelta(days=1)),
+            make_session_info("recent-2", file_size=3000,
+                              file_mtime=now - timedelta(days=3)),
+            make_session_info("old-1", file_size=2000,
+                              file_mtime=now - timedelta(days=10)),
+            make_session_info("small-1", file_size=500,
+                              file_mtime=now - timedelta(days=1)),
         ]
 
-    def test_filters_captured(self):
+    def test_filters_old_sessions(self):
+        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
-            result = list_pending_sessions(captured={"captured-1"})
+            result = list_recent_sessions(max_age_days=7)
             ids = {s.session_id for s in result}
-            assert "captured-1" not in ids
-            assert "pending-1" in ids
+            assert "recent-1" in ids
+            assert "recent-2" in ids
+            assert "old-1" not in ids
 
     def test_filters_small_sessions(self):
+        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
-            result = list_pending_sessions(captured=set())
+            result = list_recent_sessions(max_age_days=7)
             ids = {s.session_id for s in result}
             assert "small-1" not in ids
 
     def test_excludes_session_id(self):
+        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
-            result = list_pending_sessions(
-                captured=set(), exclude_session_id="pending-1"
+            result = list_recent_sessions(
+                max_age_days=7, exclude_session_id="recent-1"
             )
             ids = {s.session_id for s in result}
-            assert "pending-1" not in ids
-            assert "pending-2" in ids
+            assert "recent-1" not in ids
+            assert "recent-2" in ids
+
+    def test_default_window(self):
+        from indexing import DEFAULT_RECENCY_WINDOW_DAYS
+        assert DEFAULT_RECENCY_WINDOW_DAYS == 7
 
     def test_min_session_size_constant(self):
         assert MIN_SESSION_SIZE_BYTES == 1000
@@ -658,59 +671,6 @@ class TestBuildProjectsIndex:
         result = build_projects_index()
 
         assert len(result["projects"]) == 0
-
-
-# =============================================================================
-# mark-captured prunes synthesis state Tests
-# =============================================================================
-
-
-class TestMarkCapturedPrunesState:
-    """Verify mark-captured also prunes synthesis state."""
-
-    def test_calls_prune_on_success(self, tmp_path):
-        """When sessions are marked captured, prune_captured_from_state is called."""
-        captured_file = tmp_path / ".captured"
-        captured_file.write_text("")
-        sidecar = tmp_path / "extract.sessions"
-        sidecar.write_text("sess-1\nsess-2\n")
-
-        with mock.patch("indexing.get_captured_sessions", return_value=set()), \
-             mock.patch("indexing.list_all_sessions", return_value=[]), \
-             mock.patch("indexing.add_captured_session"), \
-             mock.patch("indexing.prune_captured_from_state") as mock_prune:
-            from indexing import cmd_mark_captured
-            # Build args namespace matching sidecar mode
-            args = argparse.Namespace(sidecar=str(sidecar), session_ids=[])
-            cmd_mark_captured(args)
-
-        mock_prune.assert_called_once()
-        called_ids = mock_prune.call_args[0][0]
-        assert "sess-1" in called_ids
-        assert "sess-2" in called_ids
-
-    def test_no_prune_when_nothing_marked(self, tmp_path):
-        """When all sessions are skipped (today), prune is not called."""
-        captured_file = tmp_path / ".captured"
-        captured_file.write_text("")
-        sidecar = tmp_path / "extract.sessions"
-        sidecar.write_text("sess-1\n")
-
-        # Make sess-1 look like today's session so it gets skipped
-        today_session = make_session_info(
-            "sess-1",
-            created=datetime.now(timezone.utc),
-        )
-
-        with mock.patch("indexing.get_captured_sessions", return_value=set()), \
-             mock.patch("indexing.list_all_sessions", return_value=[today_session]), \
-             mock.patch("indexing.add_captured_session"), \
-             mock.patch("indexing.prune_captured_from_state") as mock_prune:
-            from indexing import cmd_mark_captured
-            args = argparse.Namespace(sidecar=str(sidecar), session_ids=[])
-            cmd_mark_captured(args)
-
-        mock_prune.assert_not_called()
 
 
 if __name__ == "__main__":
