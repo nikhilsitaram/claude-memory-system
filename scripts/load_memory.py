@@ -728,7 +728,7 @@ def main() -> None:
             )
 
             # Write prompt to temp file (avoids 30K char Bash truncation)
-            prompt_path = f"/tmp/synthesis-prompt-{os.getpid()}.txt"
+            prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{os.getpid()}.txt"
             Path(prompt_path).write_text(synth_prompt, encoding="utf-8")
 
             print("## AUTO-SYNTHESIZE REQUIRED")

@@ -205,7 +205,7 @@ DEFAULT_SETTINGS = {
     },
     "synthesis": {
         "intervalHours": 2,
-        "model": "haiku",
+        "model": "sonnet",
         "background": True,
     },
     "decay": {

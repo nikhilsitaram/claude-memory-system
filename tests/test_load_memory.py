@@ -1231,5 +1231,17 @@ class TestSynthesisPromptFileOutput:
         assert offsets_data["sid1"]["offset"] == 200
 
 
+# =============================================================================
+# Synthesis Model Default Tests
+# =============================================================================
+
+
+class TestSynthesisModelDefault:
+    def test_default_model_is_sonnet(self):
+        """Default synthesis model should be sonnet for reliable tool use."""
+        from memory_utils import DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["synthesis"]["model"] == "sonnet"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
