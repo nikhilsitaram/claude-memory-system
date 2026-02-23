@@ -131,3 +131,59 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
         i += 1
 
     return result
+
+
+def _extract_description(entry: str) -> str:
+    """Extract the description portion from a route entry for matching.
+
+    Route format: '- (YYYY-MM-DD) [type] Description'
+    Daily format: '- [scope/type] Description'
+    Returns the text after the last ] bracket.
+    """
+    idx = entry.rfind("]")
+    if idx >= 0:
+        return entry[idx + 1 :].strip()
+    return entry.strip("- ").strip()
+
+
+def mark_routed_entries(
+    dailies: list[DailyFile],
+    routes: list[RouteEntry],
+) -> list[DailyFile]:
+    """Mark daily entries as [routed] when they appear in route blocks.
+
+    Matches by description text (the part after [scope/type] or [type]).
+    Returns new list of DailyFile with [routed] prefix applied.
+    """
+    if not routes:
+        return dailies
+
+    # Collect all routed descriptions (lowercased for fuzzy match)
+    routed_descriptions: set[str] = set()
+    for route in routes:
+        for entry in route.entries:
+            desc = _extract_description(entry).lower()
+            if desc:
+                routed_descriptions.add(desc)
+
+    if not routed_descriptions:
+        return dailies
+
+    marked_dailies = []
+    for daily in dailies:
+        new_lines = []
+        for line in daily.content.split("\n"):
+            stripped = line.strip()
+            # Only mark tagged entries that aren't already routed
+            if (
+                stripped.startswith("- [")
+                and not stripped.startswith("- [routed]")
+                and _extract_description(stripped).lower() in routed_descriptions
+            ):
+                line = re.sub(r"^(\s*- )\[", r"\1[routed][", line)
+            new_lines.append(line)
+        marked_dailies.append(
+            DailyFile(date=daily.date, content="\n".join(new_lines))
+        )
+
+    return marked_dailies
