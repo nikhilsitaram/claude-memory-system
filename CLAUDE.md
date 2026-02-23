@@ -145,7 +145,7 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `projectShortTerm.workingDays` | 5 | Days of project history |
 | `*LongTerm.tokenLimit` | 3,000 | Fixed limit per long-term file |
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
-| `synthesis.model` | sonnet | Model for synthesis subagent |
+| `synthesis.model` | haiku | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
 | `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
 | `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
