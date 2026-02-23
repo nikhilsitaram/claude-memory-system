@@ -47,6 +47,6 @@ fi
 
 # Output decision
 if [ "$should_allow" = true ]; then
-    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Memory system operation auto-approved"}}'
+    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"$reason\"}}"
 fi
 # For non-memory operations, output nothing - let normal permission flow happen
