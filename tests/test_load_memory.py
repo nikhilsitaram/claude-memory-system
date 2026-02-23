@@ -24,6 +24,7 @@ from load_memory import (
     load_project_history,
     load_project_memory,
     pre_extract_transcripts,
+    pre_extract_transcripts_incremental,
     should_synthesize,
 )
 
@@ -1038,6 +1039,88 @@ class TestOutputFilenamePid:
         expected_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
         # Should appear exactly twice: once in Write, once in Bash
         assert prompt.count(expected_filename) == 2
+
+
+# =============================================================================
+# pre_extract_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestPreExtractTranscriptsIncremental:
+    def _mock_daily_data(self, session_id="s1", mode="full"):
+        """Build a minimal extract_transcripts_incremental return value."""
+        return {
+            "2026-02-22": [
+                {
+                    "session_id": session_id,
+                    "filepath": "/tmp/test.jsonl",
+                    "project_path": "project-a",
+                    "messages": [{"role": "assistant", "content": "hello"}],
+                    "message_count": 1,
+                    "mode": mode,
+                    "current_offset": 500,
+                    "current_lines": 5,
+                }
+            ]
+        }
+
+    def test_returns_extracted_files_and_offsets(self, tmp_path):
+        """Returns both extracted_files dict and session_offsets dict."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data()), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="formatted output"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert "2026-02-22" in extracted
+        assert Path(extracted["2026-02-22"]).exists()
+        assert offsets["s1"]["offset"] == 500
+        assert offsets["s1"]["lines"] == 5
+
+    def test_creates_sidecar(self, tmp_path):
+        """Sidecar .sessions file contains session IDs."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data("abc")), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="formatted"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, _ = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        sidecar = Path(extracted["2026-02-22"]).with_suffix(".sessions")
+        assert sidecar.exists()
+        assert "abc" in sidecar.read_text()
+
+    def test_skips_empty_dates(self, tmp_path):
+        """Dates with no incremental content are excluded."""
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value={}), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            extracted, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert extracted == {}
+        assert offsets == {}
+
+    def test_collects_offsets_from_multiple_sessions(self, tmp_path):
+        """Multiple sessions across dates accumulate in offsets dict."""
+        multi = {
+            "2026-02-21": [
+                {"session_id": "s1", "filepath": "/tmp/t1", "project_path": None,
+                 "messages": [{"role": "assistant", "content": "a"}], "message_count": 1,
+                 "mode": "full", "current_offset": 100, "current_lines": 2},
+            ],
+            "2026-02-22": [
+                {"session_id": "s2", "filepath": "/tmp/t2", "project_path": None,
+                 "messages": [{"role": "assistant", "content": "b"}], "message_count": 1,
+                 "mode": "delta", "current_offset": 300, "current_lines": 8},
+            ],
+        }
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value=multi), \
+             mock.patch("load_memory.format_transcripts_incremental", return_value="data"), \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
+            _, offsets = pre_extract_transcripts_incremental(
+                ["2026-02-21", "2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+        assert offsets["s1"]["offset"] == 100
+        assert offsets["s2"]["offset"] == 300
 
 
 if __name__ == "__main__":

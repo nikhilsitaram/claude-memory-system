@@ -40,10 +40,17 @@ from memory_utils import (
     get_working_days,
     load_json_file,
     load_settings,
+    load_synthesis_state,
     project_name_to_filename,
     remove_captured_session,
 )
-from transcript_ops import extract_transcripts, format_transcripts_for_output, get_pending_days
+from transcript_ops import (
+    extract_transcripts,
+    extract_transcripts_incremental,
+    format_transcripts_for_output,
+    format_transcripts_incremental,
+    get_pending_days,
+)
 
 # Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
 TRANSCRIPT_LINE_BUDGET = 1950
@@ -572,6 +579,61 @@ def pre_extract_transcripts(
         except Exception as e:
             print(f"Warning: Failed to extract {date}: {e}", file=sys.stderr)
     return extracted_files
+
+
+def pre_extract_transcripts_incremental(
+    pending_dates: list,
+    exclude_session_id: str | None = None,
+    output_dir: str = "/tmp",
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """Pre-extract transcripts incrementally using high water marks.
+
+    Like pre_extract_transcripts but uses synthesis state to skip unchanged
+    sessions and only extract delta content from grown sessions.
+
+    Returns:
+        (extracted_files, session_offsets) where:
+        - extracted_files: dict mapping date -> output file path
+        - session_offsets: dict mapping session_id -> {"offset": int, "lines": int}
+    """
+    state = load_synthesis_state()
+    pid = os.getpid()
+    extracted_files: dict[str, str] = {}
+    session_offsets: dict[str, dict] = {}
+
+    try:
+        daily_data = extract_transcripts_incremental(
+            state, exclude_session_id=exclude_session_id
+        )
+    except Exception as e:
+        print(f"Warning: Incremental extraction failed: {e}", file=sys.stderr)
+        return {}, {}
+
+    for date in sorted(pending_dates):
+        sessions = daily_data.get(date)
+        if not sessions:
+            continue
+
+        output_path = f"{output_dir}/memory-extract-{date}-{pid}.txt"
+        date_data = {date: sessions}
+        Path(output_path).write_text(
+            format_transcripts_incremental(date_data, total_line_budget=TRANSCRIPT_LINE_BUDGET),
+            encoding="utf-8",
+        )
+
+        sidecar_path = Path(output_path).with_suffix(".sessions")
+        session_ids = [s["session_id"] for s in sessions]
+        sidecar_path.write_text("\n".join(session_ids) + "\n", encoding="utf-8")
+
+        extracted_files[date] = output_path
+
+        for s in sessions:
+            session_offsets[s["session_id"]] = {
+                "offset": s["current_offset"],
+                "lines": s["current_lines"],
+            }
+
+    return extracted_files, session_offsets
 
 
 def main() -> None:
