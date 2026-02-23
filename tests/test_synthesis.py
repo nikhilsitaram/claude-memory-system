@@ -513,3 +513,148 @@ class TestApplyResults:
 
         captured = capsys.readouterr()
         assert "Warning:" in captured.err
+
+
+# =============================================================================
+# End-to-End Integration Tests
+# =============================================================================
+
+
+class TestEndToEnd:
+    """Full pipeline integration test with real file operations."""
+
+    def test_cli_apply(self, tmp_path):
+        """Test the CLI entry point with a realistic output file."""
+        # Set up directory structure
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        template_dir = tmp_path / "templates"
+        template_dir.mkdir()
+        template_dir.joinpath("project-long-term-memory.md").write_text(
+            "# {project}\n\n## Key Learnings\n<!-- decay -->\n\n## Key Lessons\n<!-- decay -->\n"
+        )
+
+        global_ltm = memory_dir / "global-long-term-memory.md"
+        global_ltm.write_text(
+            "# Global LTM\n\n## Key Learnings\n<!-- decay -->\n\n## Key Lessons\n<!-- decay -->\n"
+        )
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Built something cool
+## Learnings
+- [global/pattern] Pattern is useful
+
+===ROUTE:global:Key Learnings===
+- (2026-02-22) [pattern] Pattern is useful
+
+===END===
+""")
+
+        # Verify the parser works end-to-end
+        result = parse_synthesis_output(output_file.read_text())
+        assert len(result.dailies) == 1
+        assert len(result.routes) == 1
+
+        marked = mark_routed_entries(result.dailies, result.routes)
+        assert "[routed]" in marked[0].content
+
+        write_daily_files(marked, daily_dir)
+        assert (daily_dir / "2026-02-22.md").exists()
+        assert "[routed]" in (daily_dir / "2026-02-22.md").read_text()
+
+        warnings = append_to_ltm(
+            result.routes,
+            ltm_dir=proj_dir,
+            global_file=global_ltm,
+            template_dir=template_dir,
+        )
+        assert len(warnings) == 0
+        assert "Pattern is useful" in global_ltm.read_text()
+
+    def test_multi_day_multi_scope(self, tmp_path):
+        """Test pipeline with multiple days and both global + project routes."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        template_dir = tmp_path / "templates"
+        template_dir.mkdir()
+        template_dir.joinpath("project-long-term-memory.md").write_text(
+            "# {project}\n\n## Key Learnings\n<!-- decay -->\n\n## Key Actions\n<!-- decay -->\n"
+        )
+
+        global_ltm = tmp_path / "global-long-term-memory.md"
+        global_ltm.write_text(
+            "# Global LTM\n\n## Key Learnings\n<!-- decay -->\n\n## Key Actions\n<!-- decay -->\n"
+        )
+
+        output_text = """===DAILY:2026-02-21===
+# 2026-02-21
+## Actions
+- [myproj/implement] Built feature X
+## Learnings
+- [global/pattern] Global insight A
+
+===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Refactored module Y
+## Learnings
+- [myproj/gotcha] Watch out for edge case Z
+
+===ROUTE:global:Key Learnings===
+- (2026-02-21) [pattern] Global insight A
+
+===ROUTE:global:Key Actions===
+- (2026-02-22) [implement] Refactored module Y
+
+===ROUTE:myproj:Key Learnings===
+- (2026-02-22) [gotcha] Watch out for edge case Z
+
+===ROUTE:myproj:Key Actions===
+- (2026-02-21) [implement] Built feature X
+
+===END===
+"""
+
+        result = parse_synthesis_output(output_text)
+        assert len(result.dailies) == 2
+        assert len(result.routes) == 4
+
+        marked = mark_routed_entries(result.dailies, result.routes)
+        # All tagged entries should be routed
+        assert "[routed][global/pattern]" in marked[0].content
+        assert "[routed][myproj/implement]" in marked[0].content
+        assert "[routed][global/implement]" in marked[1].content
+        assert "[routed][myproj/gotcha]" in marked[1].content
+
+        write_daily_files(marked, daily_dir)
+        assert (daily_dir / "2026-02-21.md").exists()
+        assert (daily_dir / "2026-02-22.md").exists()
+
+        warnings = append_to_ltm(
+            result.routes,
+            ltm_dir=proj_dir,
+            global_file=global_ltm,
+            template_dir=template_dir,
+        )
+        assert len(warnings) == 0
+
+        # Global LTM has both entries
+        global_content = global_ltm.read_text()
+        assert "Global insight A" in global_content
+        assert "Refactored module Y" in global_content
+
+        # Project LTM was created from template and has both entries
+        proj_file = proj_dir / "myproj-long-term-memory.md"
+        assert proj_file.exists()
+        proj_content = proj_file.read_text()
+        assert "Watch out for edge case Z" in proj_content
+        assert "Built feature X" in proj_content
