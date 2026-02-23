@@ -164,3 +164,4 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Zero-tool synthesis | `synthesis.py` parses structured output, applies daily files + LTM routes; `load_memory.py` embeds all inputs in prompt |
 | Incremental synthesis | `.synthesis-state.json` tracks per-session byte offset + line count; skips unchanged, delta-extracts grown sessions; merge context for existing dailies |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
+| Worktree-aware detection | `resolve_worktree_to_main_repo()` resolves git worktree paths to main repo via `git rev-parse`; falls back to `/.worktrees/` path pattern for deleted worktrees |
