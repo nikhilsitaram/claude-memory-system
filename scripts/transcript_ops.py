@@ -36,6 +36,7 @@ __all__ = [
     "extract_transcripts",
     "extract_transcripts_incremental",
     "format_transcripts_for_output",
+    "format_transcripts_incremental",
     "get_pending_days",
 ]
 
@@ -314,6 +315,68 @@ def format_transcripts_for_output(
         for session in sessions:
             output.append(f"\n{'─'*70}")
             output.append(f"Session: {session['session_id']}")
+            output.append(f"{'─'*70}")
+
+            session_parts: list[str] = []
+            for msg in session["messages"]:
+                role_label = "USER" if msg["role"] == "user" else "CLAUDE"
+                session_parts.append(f"\n[{role_label}]")
+                session_parts.append(msg["content"])
+
+            session_text = "\n".join(session_parts)
+            actual_lines = session_text.split("\n")
+
+            if max_lines_per_session and len(actual_lines) > max_lines_per_session:
+                head = max_lines_per_session // 3
+                tail = max_lines_per_session - head
+                truncated = len(actual_lines) - head - tail
+                output.append("\n".join(actual_lines[:head]))
+                output.append(f"\n... [{truncated} lines truncated] ...")
+                output.append("\n".join(actual_lines[-tail:]))
+            else:
+                output.append(session_text)
+
+    return "\n".join(output)
+
+
+def format_transcripts_incremental(
+    daily_data: dict[str, list[dict]],
+    total_line_budget: int | None = None,
+) -> str:
+    """Format incrementally-extracted transcripts for output.
+
+    Like format_transcripts_for_output but marks delta sessions with
+    '(continued -- new messages only)' in the header.
+
+    Args:
+        daily_data: Dict from extract_transcripts_incremental
+        total_line_budget: Cap total output lines (divided across sessions)
+    """
+    all_sessions = [s for sessions in daily_data.values() for s in sessions]
+    max_lines_per_session = None
+    if total_line_budget and all_sessions:
+        max_lines_per_session = total_line_budget // len(all_sessions)
+        max_lines_per_session = max(max_lines_per_session, 15)
+
+    output = []
+
+    for day in sorted(daily_data.keys()):
+        sessions = daily_data[day]
+        total_messages = sum(s["message_count"] for s in sessions)
+        output.append(f"\n{'='*70}")
+        output.append(f"DAY: {day} ({len(sessions)} sessions, {total_messages} messages)")
+        output.append(f"{'='*70}")
+
+        for session in sessions:
+            output.append(f"\n{'─'*70}")
+            mode = session.get("mode", "full")
+            if mode == "delta":
+                output.append(
+                    f"Session: {session['session_id']}"
+                    " (continued — new messages only)"
+                )
+            else:
+                output.append(f"Session: {session['session_id']}")
             output.append(f"{'─'*70}")
 
             session_parts: list[str] = []

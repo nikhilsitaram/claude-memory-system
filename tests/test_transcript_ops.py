@@ -420,5 +420,79 @@ class TestExtractTranscriptsIncremental:
                (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "skip-me")
 
 
+# =============================================================================
+# format_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestFormatTranscriptsIncremental:
+    def _make_session(self, sid, mode, messages, content_lines=1):
+        return {
+            "session_id": sid,
+            "filepath": "/tmp/test.jsonl",
+            "project_path": None,
+            "message_count": len(messages),
+            "messages": [{"role": "assistant", "content": m} for m in messages],
+            "mode": mode,
+            "current_offset": 1000,
+            "current_lines": 10,
+        }
+
+    def test_full_session_labeled(self):
+        """Full sessions have standard session header."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "full", ["Hello"])]}
+        output = format_transcripts_incremental(data)
+        assert "Session: s1" in output
+        assert "(continued" not in output
+
+    def test_delta_session_labeled(self):
+        """Delta sessions have (continued) marker in header."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "delta", ["New msg"])]}
+        output = format_transcripts_incremental(data)
+        assert "Session: s1 (continued" in output
+
+    def test_budget_applied(self):
+        """Line budget still works with incremental format."""
+        from transcript_ops import format_transcripts_incremental
+
+        msgs = [f"Message {i}" for i in range(50)]
+        data = {"2026-02-22": [self._make_session("s1", "full", msgs)]}
+        output_no_budget = format_transcripts_incremental(data)
+        output_with_budget = format_transcripts_incremental(data, total_line_budget=30)
+        assert len(output_with_budget.split("\n")) < len(output_no_budget.split("\n"))
+
+    def test_mixed_modes_in_day(self):
+        """Both full and delta sessions in same day get correct labels."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [
+            self._make_session("s1", "full", ["First session"]),
+            self._make_session("s2", "delta", ["Continued session"]),
+        ]}
+        output = format_transcripts_incremental(data)
+        lines = output.split("\n")
+        # Find session header lines
+        s1_header = [ln for ln in lines if "Session: s1" in ln]
+        s2_header = [ln for ln in lines if "Session: s2" in ln]
+        assert len(s1_header) == 1
+        assert len(s2_header) == 1
+        assert "(continued" not in s1_header[0]
+        assert "(continued" in s2_header[0]
+
+    def test_day_header_present(self):
+        """Output includes DAY header with session/message counts."""
+        from transcript_ops import format_transcripts_incremental
+
+        data = {"2026-02-22": [self._make_session("s1", "full", ["Hello", "World"])]}
+        output = format_transcripts_incremental(data)
+        assert "DAY: 2026-02-22" in output
+        assert "1 sessions" in output
+        assert "2 messages" in output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
