@@ -380,61 +380,31 @@ from synthesis import apply_results, run_post_processing  # noqa: E402
 
 
 class TestRunPostProcessing:
-    def test_marks_captured_sessions(self, tmp_path):
-        """Runs mark-captured for each sidecar that exists."""
-        sidecar = tmp_path / "test.sessions"
-        sidecar.write_text("session-1\nsession-2\n")
-
-        with patch("synthesis.subprocess.run") as mock_run:
-            run_post_processing(
-                sidecar_paths=[str(sidecar)],
-                extract_paths=[],
-            )
-
-        # Should have been called for mark-captured, mark-routed, validate-ltm, decay
-        assert mock_run.call_count >= 1
-        # First call should be mark-captured with the sidecar
-        first_call_args = mock_run.call_args_list[0]
-        cmd = first_call_args[0][0]
-        assert "mark-captured" in cmd
-        assert str(sidecar) in cmd
-
     def test_cleans_up_temp_files(self, tmp_path):
-        """Removes sidecar and extract temp files."""
-        sidecar = tmp_path / "test.sessions"
-        sidecar.write_text("data")
+        """Removes extract temp files."""
         extract = tmp_path / "extract.txt"
         extract.write_text("data")
 
-        with patch("synthesis.subprocess.run"):
-            run_post_processing(
-                sidecar_paths=[str(sidecar)],
-                extract_paths=[str(extract)],
-            )
+        with patch("synthesis.subprocess.run"), \
+             patch("synthesis.prune_stale_state_entries"):
+            run_post_processing(extract_paths=[str(extract)])
 
-        assert not sidecar.exists()
         assert not extract.exists()
 
-    def test_skips_missing_sidecar(self, tmp_path):
-        """Does not call mark-captured for sidecars that don't exist."""
-        missing = tmp_path / "nonexistent.sessions"
+    def test_prunes_stale_state(self):
+        """Calls prune_stale_state_entries during post-processing."""
+        with patch("synthesis.subprocess.run"), \
+             patch("synthesis.prune_stale_state_entries") as mock_prune:
+            run_post_processing(extract_paths=[])
 
-        with patch("synthesis.subprocess.run") as mock_run:
-            run_post_processing(
-                sidecar_paths=[str(missing)],
-                extract_paths=[],
-            )
-
-        # mark-captured should NOT be called (sidecar missing)
-        for call in mock_run.call_args_list:
-            cmd = call[0][0]
-            assert "mark-captured" not in cmd
+        mock_prune.assert_called_once()
 
     def test_updates_timestamp(self, tmp_path):
         """Writes .last-synthesis timestamp file."""
         with patch("synthesis.subprocess.run"), \
+             patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
-            run_post_processing(sidecar_paths=[], extract_paths=[])
+            run_post_processing(extract_paths=[])
 
         ts_file = tmp_path / ".last-synthesis"
         assert ts_file.exists()
@@ -472,7 +442,6 @@ class TestApplyResults:
              patch("synthesis.run_post_processing"):
             apply_results(
                 output_file=str(output_file),
-                sidecar_paths=[],
                 extract_paths=[],
             )
 
@@ -490,7 +459,7 @@ class TestApplyResults:
         output_file.write_text("just garbage text")
 
         with patch("synthesis.run_post_processing") as mock_post:
-            apply_results(str(output_file), [], [])
+            apply_results(output_file=str(output_file), extract_paths=[])
             mock_post.assert_not_called()
 
     def test_warnings_printed_to_stderr(self, tmp_path, capsys):
@@ -509,7 +478,7 @@ class TestApplyResults:
              patch("memory_utils.get_project_memory_dir", return_value=tmp_path / "pm"), \
              patch("memory_utils.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.run_post_processing"):
-            apply_results(str(output_file), [], [])
+            apply_results(output_file=str(output_file), extract_paths=[])
 
         captured = capsys.readouterr()
         assert "Warning:" in captured.err
@@ -551,7 +520,6 @@ class TestApplyResultsWithOffsets:
              patch("synthesis.update_synthesis_state") as mock_update:
             apply_results(
                 output_file=str(output_file),
-                sidecar_paths=[],
                 extract_paths=[],
                 offsets_json=str(offsets_file),
             )
@@ -579,7 +547,7 @@ class TestApplyResultsWithOffsets:
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.run_post_processing"), \
              patch("synthesis.update_synthesis_state") as mock_update:
-            apply_results(str(output_file), [], [])
+            apply_results(output_file=str(output_file), extract_paths=[])
 
         mock_update.assert_not_called()
 
@@ -606,7 +574,8 @@ class TestApplyResultsWithOffsets:
              patch("synthesis.update_synthesis_state") as mock_update:
             # Should not crash even with missing file
             apply_results(
-                str(output_file), [], [],
+                output_file=str(output_file),
+                extract_paths=[],
                 offsets_json=str(tmp_path / "missing.json"),
             )
 
@@ -637,7 +606,8 @@ class TestApplyResultsWithOffsets:
              patch("synthesis.run_post_processing"), \
              patch("synthesis.update_synthesis_state") as mock_update:
             apply_results(
-                str(output_file), [], [],
+                output_file=str(output_file),
+                extract_paths=[],
                 offsets_json=str(offsets_file),
             )
 
@@ -655,9 +625,9 @@ class TestRunPostProcessingOffsetsCleanup:
         offsets_file.write_text('{"s1": {"offset": 100}}')
 
         with patch("synthesis.subprocess.run"), \
+             patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(
-                sidecar_paths=[],
                 extract_paths=[],
                 offsets_json=str(offsets_file),
             )
@@ -667,8 +637,9 @@ class TestRunPostProcessingOffsetsCleanup:
     def test_no_offsets_no_error(self, tmp_path):
         """run_post_processing works fine without offsets_json."""
         with patch("synthesis.subprocess.run"), \
+             patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
-            run_post_processing(sidecar_paths=[], extract_paths=[])
+            run_post_processing(extract_paths=[])
 
         # Should not raise
 

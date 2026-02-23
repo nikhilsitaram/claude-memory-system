@@ -6,10 +6,10 @@ Parses structured output from the synthesis subagent and applies results:
 - Writes daily summary files
 - Appends routed entries to LTM files
 - Marks [routed] entries in daily files
-- Runs post-processing (mark-captured, decay, validation, timestamp)
+- Runs post-processing (state pruning, decay, validation, timestamp)
 
 Usage:
-    python3 synthesis.py apply <output_file> --sidecars <path1> [<path2>...] --extracts <path1> [<path2>...]
+    python3 synthesis.py apply <output_file> --extracts <path1> [<path2>...]
 
 Requirements: Python 3.9+
 """
@@ -32,6 +32,7 @@ from memory_utils import (  # noqa: E402
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
+    prune_stale_state_entries,
     update_synthesis_state,
 )
 
@@ -316,30 +317,20 @@ def append_to_ltm(
 
 
 def run_post_processing(
-    sidecar_paths: list[str],
     extract_paths: list[str],
     offsets_json: str | None = None,
 ) -> None:
-    """Run mark-captured, cleanup, decay, validation, and timestamp update."""
+    """Run state pruning, cleanup, decay, validation, and timestamp update."""
     from datetime import datetime, timezone
 
-    # Mark captured sessions
-    for sidecar in sidecar_paths:
-        if Path(sidecar).exists():
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(script_dir / "indexing.py"),
-                    "mark-captured",
-                    "--sidecar",
-                    sidecar,
-                ],
-                capture_output=True,
-                timeout=30,
-            )
+    # Prune stale state entries
+    try:
+        prune_stale_state_entries()
+    except Exception:
+        pass  # Non-critical
 
     # Cleanup temp files
-    paths_to_clean = extract_paths + sidecar_paths
+    paths_to_clean = list(extract_paths)
     if offsets_json:
         paths_to_clean.append(offsets_json)
     for path in paths_to_clean:
@@ -376,7 +367,6 @@ def run_post_processing(
 
 def apply_results(
     output_file: str,
-    sidecar_paths: list[str],
     extract_paths: list[str],
     offsets_json: str | None = None,
 ) -> None:
@@ -415,7 +405,7 @@ def apply_results(
             print(f"Warning: Could not update synthesis state: {e}", file=sys.stderr)
 
     # Post-processing
-    run_post_processing(sidecar_paths, extract_paths, offsets_json=offsets_json)
+    run_post_processing(extract_paths, offsets_json=offsets_json)
     print("Post-processing complete")
 
 
@@ -426,7 +416,6 @@ def main() -> int:
 
     apply_parser = sub.add_parser("apply", help="Apply synthesis output")
     apply_parser.add_argument("output_file", help="Path to synthesis output file")
-    apply_parser.add_argument("--sidecars", nargs="*", default=[], help="Sidecar file paths")
     apply_parser.add_argument("--extracts", nargs="*", default=[], help="Extract file paths to clean up")
     apply_parser.add_argument("--offsets-json", default=None, help="Path to session offsets JSON for state update")
 
@@ -434,7 +423,6 @@ def main() -> int:
     if args.command == "apply":
         apply_results(
             args.output_file,
-            args.sidecars,
             args.extracts,
             offsets_json=getattr(args, "offsets_json", None),
         )
