@@ -25,6 +25,7 @@ from load_memory import (
     load_project_memory,
     pre_extract_transcripts_incremental,
     should_synthesize,
+    write_synthesis_prompt,
 )
 
 # =============================================================================
@@ -1108,6 +1109,138 @@ class TestIncrementalWiring:
             },
         )
         assert "--offsets-json" not in prompt
+
+
+# =============================================================================
+# write_synthesis_prompt (file output) Tests
+# =============================================================================
+
+
+class TestSynthesisPromptFileOutput:
+    """Test that --synthesis-prompt writes prompt to file, not stdout."""
+
+    def test_writes_prompt_to_temp_file(self, tmp_path, monkeypatch):
+        """Prompt content goes to temp file, stdout gets only model + path."""
+        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
+        monkeypatch.setattr(
+            "load_memory.pre_extract_transcripts_incremental",
+            lambda dates, **kw: (
+                {"2026-02-23": "/tmp/extract.txt"},
+                {"sid1": {"offset": 100, "lines": 10}},
+                {"2026-02-23": [{"session_id": "sid1", "project_path": "/test", "messages": ["hi"]}]},
+            ),
+        )
+        monkeypatch.setattr(
+            "load_memory._build_embedded_files",
+            lambda *a, **kw: {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}},
+        )
+        monkeypatch.setattr(
+            "load_memory._build_synthesis_prompt",
+            lambda *a, **kw: "FAKE_PROMPT_CONTENT_HERE",
+        )
+        monkeypatch.setattr("load_memory.load_settings", lambda: {"synthesis": {"model": "haiku"}})
+        monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
+
+        import io
+        captured = io.StringIO()
+        monkeypatch.setattr("sys.stdout", captured)
+
+        write_synthesis_prompt(exclude_session_id=None)
+
+        output = captured.getvalue()
+        lines = output.strip().split("\n")
+
+        assert lines[0] == "model=haiku"
+        assert lines[1].startswith("prompt_file=")
+        prompt_path = lines[1].split("=", 1)[1]
+        assert Path(prompt_path).exists()
+        assert Path(prompt_path).read_text() == "FAKE_PROMPT_CONTENT_HERE"
+
+    def test_no_pending_transcripts(self, tmp_path, monkeypatch):
+        """Prints 'No pending transcripts.' when no dates available."""
+        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: [])
+        monkeypatch.setattr("load_memory.load_settings", lambda: {"synthesis": {"model": "haiku"}})
+
+        import io
+        captured = io.StringIO()
+        monkeypatch.setattr("sys.stdout", captured)
+
+        write_synthesis_prompt(exclude_session_id=None)
+
+        assert "No pending transcripts." in captured.getvalue()
+
+    def test_no_extracted_content(self, tmp_path, monkeypatch):
+        """Prints 'No pending transcripts with content.' when extraction yields nothing."""
+        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
+        monkeypatch.setattr(
+            "load_memory.pre_extract_transcripts_incremental",
+            lambda dates, **kw: ({}, {}, {}),
+        )
+        monkeypatch.setattr("load_memory.load_settings", lambda: {"synthesis": {"model": "haiku"}})
+
+        import io
+        captured = io.StringIO()
+        monkeypatch.setattr("sys.stdout", captured)
+
+        write_synthesis_prompt(exclude_session_id=None)
+
+        assert "No pending transcripts with content." in captured.getvalue()
+
+    def test_offsets_file_written_when_session_offsets(self, tmp_path, monkeypatch):
+        """Session offsets are written to a temp JSON file and embedded in the prompt args."""
+        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
+        monkeypatch.setattr(
+            "load_memory.pre_extract_transcripts_incremental",
+            lambda dates, **kw: (
+                {"2026-02-23": "/tmp/extract.txt"},
+                {"sid1": {"offset": 200, "lines": 5}},
+                {"2026-02-23": [{"session_id": "sid1", "project_path": "/test", "messages": ["hi"]}]},
+            ),
+        )
+        # Capture what's passed to _build_embedded_files
+        captured_embedded = {}
+
+        def mock_build_embedded(*a, **kw):
+            result = {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}}
+            return result
+
+        def mock_build_prompt(*a, **kw):
+            # Capture the embedded arg passed to _build_synthesis_prompt
+            if len(a) >= 3:
+                captured_embedded.update(a[2] or {})
+            elif "embedded_files" in kw:
+                captured_embedded.update(kw["embedded_files"] or {})
+            return "PROMPT"
+
+        monkeypatch.setattr("load_memory._build_embedded_files", mock_build_embedded)
+        monkeypatch.setattr("load_memory._build_synthesis_prompt", mock_build_prompt)
+        monkeypatch.setattr("load_memory.load_settings", lambda: {"synthesis": {"model": "haiku"}})
+        monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
+
+        import io
+        captured_out = io.StringIO()
+        monkeypatch.setattr("sys.stdout", captured_out)
+
+        write_synthesis_prompt(exclude_session_id=None)
+
+        # Verify offsets_path was added to embedded files
+        assert "offsets_path" in captured_embedded
+        offsets_file = Path(captured_embedded["offsets_path"])
+        assert offsets_file.exists()
+        offsets_data = json.loads(offsets_file.read_text())
+        assert offsets_data["sid1"]["offset"] == 200
+
+
+# =============================================================================
+# Synthesis Model Default Tests
+# =============================================================================
+
+
+class TestSynthesisModelDefault:
+    def test_default_model_is_sonnet(self):
+        """Default synthesis model should be sonnet for reliable tool use."""
+        from memory_utils import DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["synthesis"]["model"] == "sonnet"
 
 
 if __name__ == "__main__":

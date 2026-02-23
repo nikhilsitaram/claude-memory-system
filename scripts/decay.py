@@ -330,6 +330,63 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
     return purged_count
 
 
+def run(dry_run: bool = False) -> int:
+    """Run decay on all memory files. Returns 0 on success."""
+    settings = load_settings()
+    age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
+    project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)
+    retention_days = settings.get("decay", {}).get("archiveRetentionDays", DEFAULT_ARCHIVE_RETENTION_DAYS)
+
+    if dry_run:
+        print("DRY RUN - no changes will be made")
+        print()
+
+    print(f"Decay settings: global={age_days} calendar days, project={project_working_days} working days, purge after {retention_days} days")
+    print()
+
+    total_archived = 0
+    all_archived_learnings = []
+
+    # Process global memory (calendar-day decay)
+    global_file = get_global_memory_file()
+    if global_file.exists():
+        count, learnings = decay_file(global_file, age_days, dry_run)
+        if count > 0:
+            print(f"Global memory: archived {count} learning(s)")
+            total_archived += count
+            all_archived_learnings.extend(learnings)
+
+    # Process project memory files (working-day decay)
+    project_dir = get_project_memory_dir()
+    if project_dir.exists():
+        work_days_map = build_project_work_days_map()
+        for project_file in project_dir.glob("*-long-term-memory.md"):
+            work_days = work_days_map.get(project_file.name, [])
+            count, learnings = decay_file(
+                project_file, age_days, dry_run,
+                project_work_days=work_days if work_days else None,
+                project_decay_threshold=project_working_days if work_days else None,
+            )
+            if count > 0:
+                print(f"{project_file.name}: archived {count} learning(s)")
+                total_archived += count
+                all_archived_learnings.extend(learnings)
+
+    # Append to archive
+    if all_archived_learnings:
+        append_to_archive(all_archived_learnings, dry_run)
+        print(f"\nTotal archived: {total_archived} learning(s)")
+    else:
+        print("No learnings to archive")
+
+    # Purge old archives
+    purged = purge_old_archives(retention_days, dry_run)
+    if purged > 0:
+        print(f"Purged {purged} old archive section(s)")
+
+    return 0
+
+
 def main() -> int:
     """Main entry point."""
     check_python_version()
@@ -343,60 +400,7 @@ def main() -> int:
         help="Show what would be archived/purged without making changes"
     )
     args = parser.parse_args()
-
-    settings = load_settings()
-    age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
-    project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)
-    retention_days = settings.get("decay", {}).get("archiveRetentionDays", DEFAULT_ARCHIVE_RETENTION_DAYS)
-
-    if args.dry_run:
-        print("DRY RUN - no changes will be made")
-        print()
-
-    print(f"Decay settings: global={age_days} calendar days, project={project_working_days} working days, purge after {retention_days} days")
-    print()
-
-    total_archived = 0
-    all_archived_learnings = []
-
-    # Process global memory (calendar-day decay)
-    global_file = get_global_memory_file()
-    if global_file.exists():
-        count, learnings = decay_file(global_file, age_days, args.dry_run)
-        if count > 0:
-            print(f"Global memory: archived {count} learning(s)")
-            total_archived += count
-            all_archived_learnings.extend(learnings)
-
-    # Process project memory files (working-day decay)
-    project_dir = get_project_memory_dir()
-    if project_dir.exists():
-        work_days_map = build_project_work_days_map()
-        for project_file in project_dir.glob("*-long-term-memory.md"):
-            work_days = work_days_map.get(project_file.name, [])
-            count, learnings = decay_file(
-                project_file, age_days, args.dry_run,
-                project_work_days=work_days if work_days else None,
-                project_decay_threshold=project_working_days if work_days else None,
-            )
-            if count > 0:
-                print(f"{project_file.name}: archived {count} learning(s)")
-                total_archived += count
-                all_archived_learnings.extend(learnings)
-
-    # Append to archive
-    if all_archived_learnings:
-        append_to_archive(all_archived_learnings, args.dry_run)
-        print(f"\nTotal archived: {total_archived} learning(s)")
-    else:
-        print("No learnings to archive")
-
-    # Purge old archives
-    purged = purge_old_archives(retention_days, args.dry_run)
-    if purged > 0:
-        print(f"Purged {purged} old archive section(s)")
-
-    return 0
+    return run(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
