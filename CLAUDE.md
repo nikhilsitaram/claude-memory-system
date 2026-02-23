@@ -15,7 +15,7 @@ claude-memory-system/
 │   ├── indexing.py             # Session discovery, project index, CLI
 │   ├── transcript_ops.py      # Transcript parsing and extraction (split from indexing)
 │   ├── decay.py                # Age-based decay for long-term memory
-│   ├── synthesis.py            # Synthesis output parser and applier
+│   ├── synthesis.py            # Synthesis output parser, applier, state updater
 │   ├── project_manager.py      # Project lifecycle management library
 │   └── devtools.py             # Dev diagnostics + mark-routed dedup migration
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
@@ -164,4 +164,5 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
 | Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read; `synthesis.py` applies output |
 | Zero-tool synthesis | `synthesis.py` parses structured output, applies daily files + LTM routes; `load_memory.py` embeds all inputs in prompt |
+| Incremental synthesis | `.synthesis-state.json` tracks per-session byte offset + line count; skips unchanged, delta-extracts grown sessions; merge context for existing dailies |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
