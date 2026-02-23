@@ -2,7 +2,7 @@
 """
 Developer tools for Claude Code Memory System.
 
-Repo-local utility — NOT installed to ~/.claude/scripts/.
+Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/ via symlink.
 
 Usage:
     python scripts/devtools.py verify-install [--mode all|install-only|verify-only|smoke-test]
@@ -60,7 +60,8 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
         print("\nVerifying scripts...")
         scripts = [
             "memory_utils.py", "load_memory.py", "indexing.py",
-            "transcript_ops.py", "project_manager.py", "decay.py", "token_usage.py",
+            "transcript_ops.py", "project_manager.py", "decay.py", "synthesis.py",
+            "token_usage.py",
         ]
         for name in scripts:
             src = REPO_DIR / "scripts" / name

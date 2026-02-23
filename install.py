@@ -119,6 +119,7 @@ def link_scripts(script_dir: Path) -> None:
         "project_manager.py",  # Project lifecycle management
         "decay.py",  # Age-based decay for long-term memory
         "devtools.py",  # Dev diagnostics and mark-routed migration
+        "synthesis.py",  # Zero-tool background synthesis
         "token_usage.py",  # Token usage calculation for /settings
     ]
 
