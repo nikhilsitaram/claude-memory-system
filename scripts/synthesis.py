@@ -15,6 +15,7 @@ Requirements: Python 3.9+
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -26,7 +27,13 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from memory_utils import get_memory_dir  # noqa: E402
+from memory_utils import (  # noqa: E402
+    get_daily_dir,
+    get_global_memory_file,
+    get_memory_dir,
+    get_project_memory_dir,
+    update_synthesis_state,
+)
 
 __all__ = [
     "DailyFile",
@@ -208,8 +215,6 @@ def mark_routed_entries(
 def write_daily_files(dailies: list[DailyFile], daily_dir: Path | None = None) -> list[str]:
     """Write daily summary files atomically. Returns list of written file paths."""
     if daily_dir is None:
-        from memory_utils import get_daily_dir
-
         daily_dir = get_daily_dir()
     daily_dir.mkdir(parents=True, exist_ok=True)
 
@@ -237,12 +242,8 @@ def append_to_ltm(
     Creates project files from template if missing.
     """
     if global_file is None:
-        from memory_utils import get_global_memory_file
-
         global_file = get_global_memory_file()
     if ltm_dir is None:
-        from memory_utils import get_project_memory_dir
-
         ltm_dir = get_project_memory_dir()
     if template_dir is None:
         template_dir = get_memory_dir() / "templates"
@@ -317,6 +318,7 @@ def append_to_ltm(
 def run_post_processing(
     sidecar_paths: list[str],
     extract_paths: list[str],
+    offsets_json: str | None = None,
 ) -> None:
     """Run mark-captured, cleanup, decay, validation, and timestamp update."""
     from datetime import datetime, timezone
@@ -337,7 +339,10 @@ def run_post_processing(
             )
 
     # Cleanup temp files
-    for path in extract_paths + sidecar_paths:
+    paths_to_clean = extract_paths + sidecar_paths
+    if offsets_json:
+        paths_to_clean.append(offsets_json)
+    for path in paths_to_clean:
         try:
             Path(path).unlink(missing_ok=True)
         except OSError:
@@ -373,6 +378,7 @@ def apply_results(
     output_file: str,
     sidecar_paths: list[str],
     extract_paths: list[str],
+    offsets_json: str | None = None,
 ) -> None:
     """Full pipeline: parse output -> mark routed -> write files -> post-process."""
     text = Path(output_file).read_text(encoding="utf-8")
@@ -400,8 +406,16 @@ def apply_results(
         total_entries = sum(len(r.entries) for r in result.routes)
         print(f"Routed {total_entries} entries to LTM")
 
+    # Update synthesis state with new high water marks
+    if offsets_json:
+        try:
+            offsets = json.loads(Path(offsets_json).read_text(encoding="utf-8"))
+            update_synthesis_state(offsets)
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"Warning: Could not update synthesis state: {e}", file=sys.stderr)
+
     # Post-processing
-    run_post_processing(sidecar_paths, extract_paths)
+    run_post_processing(sidecar_paths, extract_paths, offsets_json=offsets_json)
     print("Post-processing complete")
 
 
@@ -414,10 +428,16 @@ def main() -> int:
     apply_parser.add_argument("output_file", help="Path to synthesis output file")
     apply_parser.add_argument("--sidecars", nargs="*", default=[], help="Sidecar file paths")
     apply_parser.add_argument("--extracts", nargs="*", default=[], help="Extract file paths to clean up")
+    apply_parser.add_argument("--offsets-json", default=None, help="Path to session offsets JSON for state update")
 
     args = parser.parse_args()
     if args.command == "apply":
-        apply_results(args.output_file, args.sidecars, args.extracts)
+        apply_results(
+            args.output_file,
+            args.sidecars,
+            args.extracts,
+            offsets_json=getattr(args, "offsets_json", None),
+        )
         return 0
     else:
         parser.print_help()

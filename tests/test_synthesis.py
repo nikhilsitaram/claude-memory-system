@@ -516,6 +516,164 @@ class TestApplyResults:
 
 
 # =============================================================================
+# apply_results --offsets-json Tests
+# =============================================================================
+
+
+class TestApplyResultsWithOffsets:
+    """Test state update when --offsets-json is provided."""
+
+    def test_updates_synthesis_state(self, tmp_path):
+        """apply_results calls update_synthesis_state when offsets_json provided."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        global_ltm = tmp_path / "global-long-term-memory.md"
+        global_ltm.write_text("## Key Learnings\n<!-- decay -->\n\n")
+
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Learnings
+- [global/pattern] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        offsets_file = tmp_path / "offsets.json"
+        offsets_file.write_text('{"s1": {"offset": 500, "lines": 10}}')
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=global_ltm), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(
+                output_file=str(output_file),
+                sidecar_paths=[],
+                extract_paths=[],
+                offsets_json=str(offsets_file),
+            )
+
+        mock_update.assert_called_once_with({"s1": {"offset": 500, "lines": 10}})
+
+    def test_no_offsets_no_state_update(self, tmp_path):
+        """apply_results does not call update_synthesis_state when no offsets."""
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(str(output_file), [], [])
+
+        mock_update.assert_not_called()
+
+    def test_offsets_file_missing_warns(self, tmp_path):
+        """apply_results warns if offsets file doesn't exist."""
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            # Should not crash even with missing file
+            apply_results(
+                str(output_file), [], [],
+                offsets_json=str(tmp_path / "missing.json"),
+            )
+
+        mock_update.assert_not_called()
+
+    def test_offsets_file_invalid_json_warns(self, tmp_path, capsys):
+        """apply_results warns if offsets file has invalid JSON."""
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        offsets_file = tmp_path / "bad.json"
+        offsets_file.write_text("{invalid json")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(
+                str(output_file), [], [],
+                offsets_json=str(offsets_file),
+            )
+
+        mock_update.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Could not update synthesis state" in captured.err
+
+
+class TestRunPostProcessingOffsetsCleanup:
+    """Test that run_post_processing cleans up offsets file."""
+
+    def test_cleans_up_offsets_file(self, tmp_path):
+        """Offsets file is cleaned up during post-processing."""
+        offsets_file = tmp_path / "offsets.json"
+        offsets_file.write_text('{"s1": {"offset": 100}}')
+
+        with patch("synthesis.subprocess.run"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing(
+                sidecar_paths=[],
+                extract_paths=[],
+                offsets_json=str(offsets_file),
+            )
+
+        assert not offsets_file.exists()
+
+    def test_no_offsets_no_error(self, tmp_path):
+        """run_post_processing works fine without offsets_json."""
+        with patch("synthesis.subprocess.run"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing(sidecar_paths=[], extract_paths=[])
+
+        # Should not raise
+
+
+# =============================================================================
 # End-to-End Integration Tests
 # =============================================================================
 
