@@ -41,6 +41,7 @@ from memory_utils import (
     load_settings,
     load_synthesis_state,
     project_name_to_filename,
+    resolve_worktree_to_main_repo,
 )
 from transcript_ops import (
     extract_transcripts_incremental,
@@ -752,8 +753,8 @@ def main() -> None:
         print(global_content)
         print()
 
-    # Detect current project
-    pwd = os.getcwd()
+    # Detect current project (resolve worktree to main repo for matching)
+    pwd = resolve_worktree_to_main_repo(os.getcwd())
     projects_index = load_json_file(get_projects_index_file(), {})
     current_project = find_current_project(projects_index, pwd, include_subdirs)
 
