@@ -11,7 +11,6 @@ from unittest import mock
 
 import pytest
 from load_memory import (
-    _build_autoextract_prompt,
     _build_preextracted_prompt,
     _build_synthesis_instructions,
     _build_synthesis_prompt,
@@ -418,17 +417,25 @@ class TestPreExtractTranscripts:
 
 
 class TestSynthesisPromptRoutedMarker:
-    """Verify [routed] marking is handled by post-synthesis mark-routed script, not subagent."""
+    """Verify [routed] marking is handled by synthesis.py, not subagent."""
 
-    def test_prompt_does_not_contain_routed_instruction(self):
-        """Subagent should NOT be told to mark [routed] -- devtools.py mark-routed handles it."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
+    def test_prompt_does_not_contain_routed_instruction(self, tmp_path):
+        """Subagent should NOT be told to mark [routed] -- synthesis.py handles it."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"], {"2026-02-01": str(extract)}
+        )
         assert "Dedup marking" not in prompt
 
-    def test_prompt_contains_mark_routed_in_cleanup(self):
-        """Step 3 bash command should run mark-routed after synthesis."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
-        assert "devtools.py mark-routed" in prompt
+    def test_prompt_contains_synthesis_apply(self, tmp_path):
+        """Prompt should instruct subagent to run synthesis.py apply."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"], {"2026-02-01": str(extract)}
+        )
+        assert "synthesis.py apply" in prompt
 
 
 # =============================================================================
@@ -492,9 +499,9 @@ class TestBuildSynthesisInstructions:
         assert "DEDUP REQUIREMENT" in instructions
         assert "GRANULARITY CAP" in instructions
 
-    def test_contains_batching_requirement(self):
+    def test_contains_dedup_requirement(self):
         instructions = _build_synthesis_instructions("`proj`")
-        assert "CRITICAL batching requirement" in instructions
+        assert "DEDUP REQUIREMENT" in instructions
 
     def test_contains_daily_summary_template(self):
         instructions = _build_synthesis_instructions("`proj`")
@@ -510,41 +517,86 @@ class TestBuildSynthesisInstructions:
 
 
 class TestBuildPreextractedPrompt:
-    def test_contains_file_references(self, tmp_path):
-        transcript = tmp_path / "extract-2026-02-01.txt"
-        transcript.write_text("line1\nline2\nline3\n")
+    """Tests for _build_preextracted_prompt with embedded content and structured output."""
+
+    def test_embeds_transcript_content(self, tmp_path):
+        """Transcript content should be embedded inline, not as file paths."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("SESSION DATA HERE")
 
         prompt = _build_preextracted_prompt(
-            ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
-            "SYNTHESIS_INSTRUCTIONS_PLACEHOLDER",
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": str(extract_file)},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={"transcripts": {"2026-02-22": "SESSION DATA HERE"}},
         )
-        assert str(transcript) in prompt
-        assert "4 lines" in prompt  # 3 newlines + 1
+        assert "SESSION DATA HERE" in prompt
+        assert "===DAILY:" in prompt  # structured output format
+        assert "===ROUTE:" in prompt
+        assert "===END===" in prompt
+        assert "Step 1: Read" not in prompt  # no Read instructions
+
+    def test_embeds_ltm_content(self, tmp_path):
+        """Global and project LTM content should be embedded inline."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "transcript"},
+                "global_ltm": "## Key Learnings\n- existing",
+                "project_ltms": {"proj": "## Key Learnings\n- proj existing"},
+            },
+        )
+        assert "## Key Learnings" in prompt
+        assert "- existing" in prompt
+        assert "- proj existing" in prompt
+
+    def test_structured_output_instructions(self, tmp_path):
+        """Prompt should include delivery instructions and prohibitions."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={"transcripts": {"2026-02-22": "data"}},
+        )
+        assert "synthesis.py apply" in prompt
+        assert "Do NOT generate a summary" in prompt
+        assert "Do NOT use any other tools" in prompt
+
+    def test_no_auto_extract_fallback(self):
+        """_build_autoextract_prompt should no longer exist."""
+        import load_memory
+        assert not hasattr(load_memory, "_build_autoextract_prompt")
 
     def test_contains_synthesis_instructions(self, tmp_path):
-        transcript = tmp_path / "extract.txt"
-        transcript.write_text("content\n")
+        """Synthesis instructions block is included in the prompt."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
 
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
+            {"2026-02-01": str(extract)},
             "MY_CUSTOM_INSTRUCTIONS",
         )
         assert "MY_CUSTOM_INSTRUCTIONS" in prompt
 
-    def test_contains_mark_captured_commands(self, tmp_path):
-        transcript = tmp_path / "extract-2026-02-01.txt"
-        transcript.write_text("content\n")
+    def test_contains_sidecar_references(self, tmp_path):
+        """Prompt includes sidecar paths for synthesis.py apply."""
+        extract = tmp_path / "extract-2026-02-01.txt"
+        extract.write_text("content\n")
 
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
-            {"2026-02-01": str(transcript)},
+            {"2026-02-01": str(extract)},
             "instructions",
         )
-        assert "mark-captured --sidecar" in prompt
+        sidecar = str(extract).rsplit(".", 1)[0] + ".sessions"
+        assert sidecar in prompt
+        assert "synthesis.py apply" in prompt
 
-    def test_contains_read_instructions_for_all_dates(self, tmp_path):
+    def test_contains_all_dates(self, tmp_path):
+        """All pending dates appear in the prompt."""
         f1 = tmp_path / "extract-01.txt"
         f2 = tmp_path / "extract-02.txt"
         f1.write_text("a\n")
@@ -557,43 +609,27 @@ class TestBuildPreextractedPrompt:
         )
         assert "2026-02-01" in prompt
         assert "2026-02-02" in prompt
-        assert "Read(`~/.claude/memory/daily/2026-02-01.md`)" in prompt
-        assert "Read(`~/.claude/memory/daily/2026-02-02.md`)" in prompt
 
-    def test_handles_unreadable_file(self, tmp_path):
-        """Falls back to 2000 line count when file is unreadable."""
+    def test_reads_from_extract_file_when_not_embedded(self, tmp_path):
+        """Falls back to reading extract file when transcripts not in embedded_files."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("CONTENT FROM FILE")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        assert "CONTENT FROM FILE" in prompt
+
+    def test_handles_unreadable_file(self):
+        """Shows unavailable message when extract file doesn't exist and not embedded."""
         prompt = _build_preextracted_prompt(
             ["2026-02-01"],
             {"2026-02-01": "/nonexistent/file.txt"},
             "instructions",
         )
-        assert "2000 lines" in prompt
-
-
-# =============================================================================
-# _build_autoextract_prompt Tests
-# =============================================================================
-
-
-class TestBuildAutoextractPrompt:
-    def test_contains_extract_command(self):
-        prompt = _build_autoextract_prompt(" --exclude-session abc", ["2026-02-01"], "instructions")
-        assert "indexing.py extract" in prompt
-        assert "--exclude-session abc" in prompt
-
-    def test_contains_synthesis_instructions(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01"], "MY_INSTRUCTIONS")
-        assert "MY_INSTRUCTIONS" in prompt
-
-    def test_contains_all_dates(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01", "2026-02-02"], "instructions")
-        assert "2026-02-01, 2026-02-02" in prompt
-
-    def test_contains_mark_captured_and_cleanup(self):
-        prompt = _build_autoextract_prompt("", ["2026-02-01"], "instructions")
-        assert "mark-captured --sidecar" in prompt
-        assert "devtools.py mark-routed" in prompt
-        assert "decay.py" in prompt
+        assert "(transcript unavailable)" in prompt
 
 
 # =============================================================================
@@ -602,29 +638,49 @@ class TestBuildAutoextractPrompt:
 
 
 class TestBuildSynthesisPromptIntegration:
-    """Test the orchestrator dispatches correctly to sub-functions."""
+    """Test the orchestrator dispatches correctly to _build_preextracted_prompt."""
 
-    def test_autoextract_path(self):
-        """Without extracted_files, returns autoextract prompt."""
-        prompt = _build_synthesis_prompt("", ["2026-02-01"])
-        assert "indexing.py extract" in prompt
-        assert "Pre-extracted transcript files" not in prompt
-
-    def test_preextracted_path(self, tmp_path):
-        """With extracted_files, returns preextracted prompt."""
+    def test_includes_synthesis_instructions(self, tmp_path):
+        """Prompt includes shared synthesis instructions from _build_synthesis_instructions."""
         transcript = tmp_path / "extract.txt"
         transcript.write_text("content\n")
 
         prompt = _build_synthesis_prompt(
-            "", ["2026-02-01"],
+            ["2026-02-01"],
             extracted_files={"2026-02-01": str(transcript)},
         )
-        assert "Pre-extracted transcript files" in prompt
-        assert "indexing.py extract YYYY-MM-DD" not in prompt
+        # Should contain instructions generated by _build_synthesis_instructions
+        assert "[scope/type]" in prompt
+        assert "Long-term routing" in prompt
 
-    def test_exclude_flag_passed_to_autoextract(self):
-        prompt = _build_synthesis_prompt(" --exclude-session xyz", ["2026-02-01"])
-        assert "--exclude-session xyz" in prompt
+    def test_passes_embedded_files(self, tmp_path):
+        """embedded_files are forwarded to _build_preextracted_prompt."""
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"],
+            extracted_files={"2026-02-01": str(transcript)},
+            embedded_files={
+                "transcripts": {"2026-02-01": "EMBEDDED TRANSCRIPT DATA"},
+                "global_ltm": "GLOBAL LTM CONTENT",
+            },
+        )
+        assert "EMBEDDED TRANSCRIPT DATA" in prompt
+        assert "GLOBAL LTM CONTENT" in prompt
+
+    def test_structured_output_format(self, tmp_path):
+        """Prompt includes structured output delimiters."""
+        transcript = tmp_path / "extract.txt"
+        transcript.write_text("content\n")
+
+        prompt = _build_synthesis_prompt(
+            ["2026-02-01"],
+            extracted_files={"2026-02-01": str(transcript)},
+        )
+        assert "===DAILY:" in prompt
+        assert "===ROUTE:" in prompt
+        assert "===END===" in prompt
 
 
 if __name__ == "__main__":

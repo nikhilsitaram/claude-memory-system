@@ -219,12 +219,8 @@ def _get_project_names_str() -> str:
 
 
 def _build_synthesis_instructions(project_names_str: str) -> str:
-    """Build the shared synthesis instructions block (tagging, routing, dedup, batching)."""
-    return '''**Daily summary** — Write to `~/.claude/memory/daily/YYYY-MM-DD.md`:
-
-ALWAYS use a single **Write** call per daily file — even if the file already exists.
-If an earlier version exists (from Step 1 Read), merge its content into your output, then Write the complete file.
-Never use multiple Edit calls on daily files.
+    """Build the shared synthesis instructions block (tagging, routing, dedup)."""
+    return '''**Daily summary format:**
 
 ```markdown
 # YYYY-MM-DD
@@ -260,193 +256,144 @@ Route daily entries to corresponding LTM sections:
 - Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
 - Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
 Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
-Destinations: `[global/*]` → `~/.claude/memory/global-long-term-memory.md`, `[{project-name}/*]` → `~/.claude/memory/project-memory/{project-name}-long-term-memory.md`
+Destinations: `[global/*]` → global LTM, `[{project-name}/*]` → project LTM
 Only use registered project names for routing: ''' + project_names_str + '''
 Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped).
 
-**DEDUP REQUIREMENT:** In Step 1 you read the LTM files. Before adding ANY entry, check your Step 1 reads for existing entries that cover the same concept — even if worded differently. If an existing entry covers the topic, do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
+**DEDUP REQUIREMENT:** Before adding ANY routed entry, check the existing LTM content provided below. If an existing entry covers the same concept — even if worded differently — do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
 
 **GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run. If you have more, consolidate related items (e.g., multiple gotchas from one debugging session → one summary entry). Prefer fewer, denser entries over many granular ones.
 
-Create missing project files from template at `~/.claude/memory/templates/project-long-term-memory.md`.
-
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.
-
-**CRITICAL batching requirement**: Collect ALL items to route across all dates, then make ONE Edit call per target file with ALL new entries at once.
-Do NOT make separate Edit calls per learning — batch them into a single Edit per file.
-Example: old_string ends with section header + comment, new_string = same header + comment + all new entries appended.'''
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.'''
 
 
 def _build_preextracted_prompt(
     pending_dates: list[str],
     extracted_files: dict[str, str],
     synthesis_instructions: str,
+    embedded_files: dict | None = None,
 ) -> str:
-    """Build synthesis prompt for pre-extracted mode (manual /synthesize)."""
+    """Build synthesis prompt with embedded content and structured output format.
+
+    Args:
+        pending_dates: List of dates to process (YYYY-MM-DD)
+        extracted_files: Dict mapping date -> extract file path (for sidecar references)
+        synthesis_instructions: Shared instructions block
+        embedded_files: Pre-read content to embed inline:
+            - "transcripts": dict[date, content] - transcript text per date
+            - "global_ltm": str - global LTM file content
+            - "project_ltms": dict[project, content] - project LTM content
+    """
+    if embedded_files is None:
+        embedded_files = {}
+
     dates_str = ", ".join(pending_dates)
+    transcripts = embedded_files.get("transcripts", {})
+    global_ltm = embedded_files.get("global_ltm", "")
+    project_ltms = embedded_files.get("project_ltms", {})
 
-    # Count lines per file for Read limit hints
-    file_metadata: list[tuple[str, str, int]] = []
-    for date, path in sorted(extracted_files.items()):
-        try:
-            line_count = Path(path).read_text(encoding="utf-8").count("\n") + 1
-        except IOError:
-            line_count = 2000
-        file_metadata.append((date, path, line_count))
+    # Build embedded transcript sections
+    transcript_sections = []
+    for date in sorted(pending_dates):
+        content = transcripts.get(date, "")
+        if not content:
+            # Fallback: read from extract file if not embedded
+            path = extracted_files.get(date, "")
+            if path:
+                try:
+                    content = Path(path).read_text(encoding="utf-8")
+                except IOError:
+                    content = "(transcript unavailable)"
+        transcript_sections.append(f"### Transcript: {date}\n{content}")
+    transcript_block = "\n\n".join(transcript_sections)
 
-    file_list = "\n".join(
-        f"- **{date}**: `{path}` ({lines} lines)"
-        for date, path, lines in file_metadata
-    )
-    read_transcript_lines = "\n".join(
-        f"- Read(`{path}`, limit={lines + 100}) — transcript for {date}"
-        for date, path, lines in file_metadata
-    )
-    read_daily_lines = "\n".join(
-        f"- Read(`~/.claude/memory/daily/{d}.md`) — may not exist, Read error is expected"
-        for d in pending_dates
-    )
-    mark_captured_lines = "\n".join(
-        f'python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar {path.rsplit(".", 1)[0]}.sessions && rm {path} {path.rsplit(".", 1)[0]}.sessions &&'
-        for date, path in sorted(extracted_files.items())
-    )
-    return f'''Process pre-extracted memory transcripts into daily summaries and route key learnings to long-term memory.
+    # Build LTM sections for dedup context
+    ltm_sections = []
+    if global_ltm:
+        ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
+    for project, content in sorted(project_ltms.items()):
+        if content:
+            ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
+    ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
 
-**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
+    # Build sidecar and extract paths for synthesis.py apply command
+    sidecar_paths = []
+    extract_paths = []
+    for date in sorted(extracted_files.keys()):
+        path = extracted_files[date]
+        sidecar = path.rsplit(".", 1)[0] + ".sessions"
+        sidecar_paths.append(sidecar)
+        extract_paths.append(path)
+    sidecars_arg = " ".join(sidecar_paths)
+    extracts_arg = " ".join(extract_paths)
 
-Pending dates: {dates_str}
+    return f'''Synthesize these session transcripts into daily summaries and route key learnings.
 
-Pre-extracted transcript files:
-{file_list}
+## Inputs
 
-## Tool Guidelines
+**Pending dates:** {dates_str}
 
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
+{transcript_block}
 
-## Process
+## Existing Long-Term Memory (for dedup)
 
-### Step 1: Read all inputs
+{ltm_block}
 
-Make exactly ONE parallel tool call with ALL of these Read calls simultaneously:
-{read_transcript_lines}
-- Read(`~/.claude/memory/global-long-term-memory.md`)
-{read_daily_lines}
-
-If you already know which projects are referenced, include their LTM files in this SAME parallel call:
-- Read(`~/.claude/memory/project-memory/{{project}}-long-term-memory.md`)
-
-**Do NOT read files one at a time. All reads MUST be in a single parallel call.**
-
-### Step 2: Synthesize + Route + Write
-
-In **one reasoning step**, produce daily summaries AND long-term routing edits for ALL {len(pending_dates)} dates.
-Then make ALL file Write/Edit calls in a single parallel tool call:
-- Write each daily summary file (one per date)
-- Edit global LTM ONCE with ALL global-scope learnings from ALL dates batched together
-- Edit project LTM ONCE per project with ALL project-scope learnings batched together
-
-CRITICAL: Do NOT make separate Edit calls per learning. Collect all items first, batch into one Edit per file.
+## Instructions
 
 {synthesis_instructions}
 
-### Step 3: Mark captured, clean up & finalize
+## Output Format
 
-Run ALL of this in a **single Bash call**:
-```bash
-{mark_captured_lines}
-python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
+Generate EXACTLY this structure — nothing else:
+
+```
+===DAILY:YYYY-MM-DD===
+[full daily file markdown for that date]
+
+===ROUTE:scope:section===
+- (YYYY-MM-DD) [type] Description
+
+===END===
 ```
 
-Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+Where:
+- `===DAILY:YYYY-MM-DD===` contains the complete daily summary for that date
+- `===ROUTE:scope:section===` contains entries to route to LTM (scope = `global` or project name, section = `Key Actions`, `Key Decisions`, `Key Learnings`, or `Key Lessons`)
+- `===END===` marks the end of output
 
+## Delivery
 
-def _build_autoextract_prompt(
-    exclude_flag: str,
-    pending_dates: list[str],
-    synthesis_instructions: str,
-) -> str:
-    """Build synthesis prompt for auto-extract mode (auto-synthesis)."""
-    dates_str = ", ".join(pending_dates)
+Write your structured output to a temp file, then run the apply script:
 
-    return f'''Process pending memory transcripts into daily summaries and route key learnings to long-term memory.
+1. Write(`/tmp/synthesis-output-$$.txt`, <your structured output above>)
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply /tmp/synthesis-output-$$.txt --sidecars {sidecars_arg} --extracts {extracts_arg}`
 
-**CRITICAL: Process all dates in a single pass. If a tool call fails, handle the error and continue. Do NOT restart the synthesis process from the beginning.**
-
-Pending dates to process: {dates_str}
-
-## Tool Guidelines
-
-**File operations** - use tilde paths (`~/.claude/...`):
-- `Read(~/.claude/memory/daily/YYYY-MM-DD.md)`
-- `Read(~/.claude/memory/global-long-term-memory.md)`
-- `Edit(~/.claude/memory/...)` for updates
-
-**Transcript extraction** - use `$HOME` in bash with `--output` to write to temp file, then Read (Bash output truncates at 30K chars; temp file avoids this):
-```
-python3 $HOME/.claude/scripts/indexing.py extract YYYY-MM-DD{exclude_flag} --output /tmp/memory-extract-YYYY-MM-DD-$$.txt
-```
-Then read the content and sidecar:
-```
-Read(/tmp/memory-extract-YYYY-MM-DD-$$.txt)            # transcript content
-```
-
-## Process
-
-For each pending date ({dates_str}), do a **single combined pass** (extract + summarize + route + mark):
-
-### Step 1: Extract & Read
-
-Run Bash to extract transcripts to temp file. Then in a **single parallel tool call**, Read all of:
-- `/tmp/memory-extract-YYYY-MM-DD-$$.txt` (transcript content)
-- `~/.claude/memory/global-long-term-memory.md`
-- Any existing daily file: `~/.claude/memory/daily/YYYY-MM-DD.md`
-- `~/.claude/memory/project-memory/{{project}}-long-term-memory.md` (if project entries exist in transcript)
-
-### Step 2: Summarize + Route + Write
-
-In **one reasoning step**, produce BOTH the daily summary AND any long-term routing edits.
-Then make ALL Write/Edit calls in a single parallel tool call.
-CRITICAL: Do NOT make separate Edit calls per learning — batch all items into one Edit per target file.
-
-{synthesis_instructions}
-
-### Step 3: Mark captured, clean up & finalize
-
-Run ALL of this in a **single Bash call** — mark captured, remove temp files, run decay, and update timestamp:
-```bash
-python3 $HOME/.claude/scripts/indexing.py mark-captured --sidecar /tmp/memory-extract-YYYY-MM-DD-$$.sessions && rm /tmp/memory-extract-YYYY-MM-DD-$$.txt /tmp/memory-extract-YYYY-MM-DD-$$.sessions && python3 $HOME/.claude/scripts/devtools.py mark-routed && python3 $HOME/.claude/scripts/devtools.py validate-ltm; python3 $HOME/.claude/scripts/decay.py && python3 -c "from datetime import datetime, timezone; from pathlib import Path; Path.home().joinpath('.claude/memory/.last-synthesis').write_text(datetime.now(timezone.utc).isoformat())"
-```
-
-Return a summary: "Processed N days. Created/updated daily summaries for [dates]. Routed X items to long-term memory (list them). Archived Y old items."'''
+Do NOT generate a summary. Do NOT use any other tools besides Write and Bash.'''
 
 
 def _build_synthesis_prompt(
-    exclude_flag: str,
     pending_dates: list[str],
-    extracted_files: dict[str, str] | None = None,
+    extracted_files: dict[str, str],
+    embedded_files: dict | None = None,
 ) -> str:
     """
     Build the embedded synthesis prompt for the subagent.
 
-    Two modes:
-    - Pre-extracted (manual /synthesize): files already on disk, skip extraction
-    - Dates-only (auto-synthesis): subagent extracts each date
+    Pre-extraction is required. If pre-extraction fails, synthesis is skipped
+    (no auto-extract fallback).
 
     Args:
-        exclude_flag: The --exclude-session flag string (or empty)
         pending_dates: List of pending date strings (YYYY-MM-DD)
-        extracted_files: Optional dict mapping date -> file path (pre-extracted)
+        extracted_files: Dict mapping date -> file path (pre-extracted)
+        embedded_files: Pre-read content to embed inline (transcripts, LTM content)
     """
     project_names_str = _get_project_names_str()
     synthesis_instructions = _build_synthesis_instructions(project_names_str)
 
-    if extracted_files:
-        return _build_preextracted_prompt(pending_dates, extracted_files, synthesis_instructions)
-    else:
-        return _build_autoextract_prompt(exclude_flag, pending_dates, synthesis_instructions)
+    return _build_preextracted_prompt(
+        pending_dates, extracted_files, synthesis_instructions, embedded_files
+    )
 
 
 def pre_extract_transcripts(
@@ -540,35 +487,27 @@ def main() -> None:
         synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
-        # Build exclude flag for subagent
-        exclude_flag = ""
-        if current_session_id:
-            exclude_flag = f" --exclude-session {current_session_id}"
-
         # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
         extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=current_session_id)
 
         if extracted_files:
             synth_prompt = _build_synthesis_prompt(
-                exclude_flag, list(extracted_files.keys()), extracted_files
+                list(extracted_files.keys()), extracted_files
             )
-        else:
-            # Fallback: subagent extracts (slower but handles edge cases)
-            synth_prompt = _build_synthesis_prompt(exclude_flag, pending_dates)
 
-        print("## AUTO-SYNTHESIZE REQUIRED")
-        print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
-        print()
-        if synthesis_background:
-            print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
-        else:
-            print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
-        print("```")
-        print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
-              f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
-        print(synth_prompt)
-        print("```")
-        print()
+            print("## AUTO-SYNTHESIZE REQUIRED")
+            print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
+            print()
+            if synthesis_background:
+                print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
+            else:
+                print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
+            print("```")
+            print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
+                  f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
+            print(synth_prompt)
+            print("```")
+            print()
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
@@ -634,10 +573,8 @@ if __name__ == "__main__":
     # --synthesis-prompt: output just the subagent prompt (for /synthesize skill)
     if len(sys.argv) > 1 and sys.argv[1] == "--synthesis-prompt":
         exclude_id = None
-        exclude_flag = ""
         if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
             exclude_id = sys.argv[3]
-            exclude_flag = f" --exclude-session {sys.argv[3]}"
 
         settings = load_settings()
         model = settings.get("synthesis", {}).get("model", "sonnet")
@@ -656,6 +593,6 @@ if __name__ == "__main__":
             sys.exit(0)
 
         print(f"model={model}")
-        print(_build_synthesis_prompt(exclude_flag, list(extracted_files.keys()), extracted_files))
+        print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files))
     else:
         main()
