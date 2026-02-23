@@ -18,14 +18,14 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
    ```
    - If output says "No pending transcripts", inform the user and stop.
    - First line: `model=<model>`. Second line: `prompt_file=<path>`.
-   - Read the prompt file to get the subagent prompt.
 
-2. Launch a synthesis subagent (**foreground** — manual `/synthesize` always blocks so user sees results):
+2. Launch a synthesis subagent (**foreground** — manual `/synthesize` always blocks so user sees results).
+   **IMPORTANT:** Do NOT read the prompt file. Pass the file path to the subagent and let it read the file itself. This avoids the main agent regenerating ~50K tokens of prompt content.
    ```
    Task(
      subagent_type: "general-purpose",
      model: <model from first line>,
-     prompt: <contents of prompt_file>
+     prompt: "Read <prompt_file path> and follow the instructions in it exactly. Use only Write and Bash tools."
    )
    ```
 
