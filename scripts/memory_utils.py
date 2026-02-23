@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 __all__ = [
     # Constants
@@ -47,10 +47,6 @@ __all__ = [
     # Sessions index
     "load_sessions_index",
     "get_sessions_original_path",
-    # Session tracking
-    "get_captured_sessions",
-    "add_captured_session",
-    "remove_captured_session",
     # Content filtering
     "filter_daily_content",
     "find_current_project",
@@ -60,7 +56,7 @@ __all__ = [
     "load_synthesis_state",
     "save_synthesis_state",
     "update_synthesis_state",
-    "prune_captured_from_state",
+    "prune_stale_state_entries",
     # Utilities
     "estimate_tokens",
     "project_name_to_filename",
@@ -81,14 +77,14 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Path helpers:
 #   get_memory_dir() -> Path              get_daily_dir() -> Path
 #   get_project_memory_dir() -> Path      get_projects_dir() -> Path
-#   get_global_memory_file() -> Path      get_captured_file() -> Path
-#   get_settings_file() -> Path           get_projects_index_file() -> Path
+#   get_global_memory_file() -> Path      get_settings_file() -> Path
+#   get_projects_index_file() -> Path
 # Settings:
 #   load_settings() -> dict               save_settings(settings) -> None
-# Session tracking:
-#   get_captured_sessions() -> set[str]
-#   add_captured_session(session_id, captured_set?) -> None
-#   remove_captured_session(session_id) -> bool
+# Synthesis state:
+#   load_synthesis_state() -> dict        save_synthesis_state(state) -> None
+#   update_synthesis_state(updates) -> None
+#   prune_stale_state_entries(max_age_days?) -> int
 # Content:
 #   filter_daily_content(content, scope) -> str
 #   find_current_project(index, pwd, include_subdirs?) -> dict | None
@@ -182,11 +178,6 @@ def get_projects_index_file() -> Path:
 def get_global_memory_file() -> Path:
     """Get the global long-term memory file."""
     return get_memory_dir() / "global-long-term-memory.md"
-
-
-def get_captured_file() -> Path:
-    """Get the .captured file that tracks saved session IDs."""
-    return get_memory_dir() / ".captured"
 
 
 # Token limit formulas
@@ -481,69 +472,6 @@ def project_name_to_filename(project_name: str) -> str:
     return f"{kebab}-long-term-memory.md"
 
 
-def get_captured_sessions() -> set[str]:
-    """Get set of already-captured session IDs."""
-    captured_file = get_captured_file()
-    if not captured_file.exists():
-        return set()
-    try:
-        content = captured_file.read_text(encoding="utf-8")
-        return set(line.strip() for line in content.splitlines() if line.strip())
-    except IOError:
-        return set()
-
-
-def add_captured_session(session_id: str, captured_set: Optional[set[str]] = None) -> None:
-    """
-    Add a session ID to the captured list.
-
-    Args:
-        session_id: The session ID to add
-        captured_set: Optional pre-loaded set to avoid re-reading file
-    """
-    captured_file = get_captured_file()
-    captured_file.parent.mkdir(parents=True, exist_ok=True)
-
-    with FileLock(captured_file.parent / ".captured.lock", timeout=5.0):
-        # Check if already captured (use provided set or load from file)
-        if captured_set is not None:
-            if session_id in captured_set:
-                return
-        else:
-            captured = get_captured_sessions()
-            if session_id in captured:
-                return
-
-        # Append to file
-        with open(captured_file, "a", encoding="utf-8") as f:
-            f.write(f"{session_id}\n")
-
-
-def remove_captured_session(session_id: str) -> bool:
-    """
-    Remove a session ID from .captured. Returns True if found and removed.
-
-    Args:
-        session_id: The session ID to remove
-    """
-    captured_file = get_captured_file()
-    if not captured_file.exists():
-        return False
-
-    with FileLock(captured_file.parent / ".captured.lock", timeout=5.0):
-        try:
-            lines = captured_file.read_text(encoding="utf-8").splitlines()
-        except IOError:
-            return False
-        new_lines = [line for line in lines if line.strip() != session_id]
-
-        if len(new_lines) == len(lines):
-            return False  # Not found
-
-        captured_file.write_text("\n".join(new_lines) + "\n" if new_lines else "", encoding="utf-8")
-        return True
-
-
 def get_working_days(days_limit: int) -> list[str]:
     """
     Get the most recent N working days (days with daily files).
@@ -758,12 +686,46 @@ def update_synthesis_state(session_updates: dict[str, dict]) -> None:
     save_synthesis_state(state)
 
 
-def prune_captured_from_state(captured_ids: set[str]) -> None:
-    """Remove captured session IDs from synthesis state (cleanup)."""
+def prune_stale_state_entries(max_age_days: int = 7) -> int:
+    """Remove state entries for sessions older than max_age_days or missing from disk.
+
+    Scans .synthesis-state.json and removes entries where the session's .jsonl
+    file has mtime older than max_age_days or no longer exists on disk.
+
+    Returns number of entries pruned.
+    """
     state = load_synthesis_state()
-    for sid in captured_ids:
-        state["sessions"].pop(sid, None)
-    save_synthesis_state(state)
+    sessions = state.get("sessions", {})
+    if not sessions:
+        return 0
+
+    cutoff = datetime.now(timezone.utc).timestamp() - (max_age_days * 86400)
+    projects_dir = get_projects_dir()
+    to_remove = []
+
+    for sid in sessions:
+        # Find the session file across project dirs
+        found = False
+        if projects_dir.exists():
+            for proj_dir in projects_dir.iterdir():
+                if not proj_dir.is_dir():
+                    continue
+                session_file = proj_dir / f"{sid}.jsonl"
+                if session_file.exists():
+                    found = True
+                    if session_file.stat().st_mtime < cutoff:
+                        to_remove.append(sid)
+                    break
+        if not found:
+            to_remove.append(sid)
+
+    for sid in to_remove:
+        sessions.pop(sid, None)
+
+    if to_remove:
+        save_synthesis_state(state)
+
+    return len(to_remove)
 
 
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:

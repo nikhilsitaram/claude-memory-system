@@ -6,8 +6,8 @@ Split from indexing.py to reduce file size for faster reads.
 
 Provides:
 1. JSONL transcript parsing (extract assistant messages, filter noise)
-2. Transcript extraction (group by day, format for synthesis)
-3. Pending days calculation
+2. Incremental transcript extraction (group by day, format for synthesis)
+3. Recent days calculation
 
 Requirements: Python 3.9+
 """
@@ -23,8 +23,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from indexing import get_session_date, list_pending_sessions
-from memory_utils import get_captured_sessions
+from indexing import get_session_date, list_recent_sessions
 
 __all__ = [
     # Parsing
@@ -33,11 +32,10 @@ __all__ = [
     "parse_jsonl_file",
     "parse_jsonl_file_from_line",
     # Extraction
-    "extract_transcripts",
     "extract_transcripts_incremental",
     "format_transcripts_for_output",
     "format_transcripts_incremental",
-    "get_pending_days",
+    "get_recent_days",
 ]
 
 # =============================================================================
@@ -48,9 +46,10 @@ __all__ = [
 #   should_skip_message(content) -> bool
 #   parse_jsonl_file(filepath) -> list[dict]
 # Extraction:
-#   extract_transcripts(day?, exclude_session_id?) -> dict[str, list[dict]]
+#   extract_transcripts_incremental(state, exclude_session_id?) -> dict[str, list[dict]]
 #   format_transcripts_for_output(daily_data) -> str
-#   get_pending_days(exclude_session_id?) -> list[str]
+#   format_transcripts_incremental(daily_data) -> str
+#   get_recent_days(exclude_session_id?) -> list[str]
 # =============================================================================
 
 
@@ -175,49 +174,6 @@ def parse_jsonl_file_from_line(
     return messages, line_count
 
 
-def extract_transcripts(
-    specific_day: str | None = None,
-    exclude_session_id: str | None = None,
-) -> dict[str, list[dict]]:
-    """
-    Extract pending transcripts directly from Claude Code's projects directory.
-
-    Args:
-        specific_day: Optional specific day to extract (YYYY-MM-DD format)
-        exclude_session_id: Optional session ID to exclude
-
-    Returns:
-        Dict mapping date strings to lists of session dicts.
-    """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, exclude_session_id=exclude_session_id)
-
-    if specific_day:
-        pending = [s for s in pending if get_session_date(s) == specific_day]
-
-    if not pending:
-        return {}
-
-    daily_data: dict[str, list[dict]] = defaultdict(list)
-
-    for session in pending:
-        day = get_session_date(session)
-        messages = parse_jsonl_file(session.transcript_path)
-
-        if messages:
-            daily_data[day].append(
-                {
-                    "session_id": session.session_id,
-                    "filepath": str(session.transcript_path),
-                    "project_path": session.project_path,
-                    "message_count": len(messages),
-                    "messages": messages,
-                }
-            )
-
-    return dict(daily_data)
-
-
 def extract_transcripts_incremental(
     state: dict,
     exclude_session_id: str | None = None,
@@ -239,8 +195,7 @@ def extract_transcripts_incremental(
     Returns:
         Dict mapping date -> list of session dicts (only sessions with content).
     """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(captured, exclude_session_id=exclude_session_id)
+    pending = list_recent_sessions(exclude_session_id=exclude_session_id)
 
     sessions_state = state.get("sessions", {})
     daily_data: dict[str, list[dict]] = defaultdict(list)
@@ -401,20 +356,16 @@ def format_transcripts_incremental(
     return "\n".join(output)
 
 
-def get_pending_days(exclude_session_id: str | None = None) -> list[str]:
-    """
-    List all days that have pending transcripts.
+def get_recent_days(exclude_session_id: str | None = None) -> list[str]:
+    """List all days that have recent transcripts.
 
     Args:
         exclude_session_id: Optional session ID to exclude
     """
-    captured = get_captured_sessions()
-    pending = list_pending_sessions(
-        captured, exclude_session_id=exclude_session_id, verify_content=True
+    recent = list_recent_sessions(
+        exclude_session_id=exclude_session_id, verify_content=True
     )
-
     days = set()
-    for session in pending:
+    for session in recent:
         days.add(get_session_date(session))
-
     return sorted(days)

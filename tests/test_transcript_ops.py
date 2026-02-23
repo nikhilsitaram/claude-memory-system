@@ -11,92 +11,39 @@ from unittest import mock
 import pytest
 from helpers import make_jsonl_content, make_session_info  # noqa: I001
 from transcript_ops import (
-    extract_transcripts,
     format_transcripts_for_output,
-    get_pending_days,
     parse_jsonl_file_from_line,
 )
 
 # =============================================================================
-# extract_transcripts Tests
+# get_recent_days Tests
 # =============================================================================
 
 
-class TestExtractTranscripts:
-    def test_extracts_specific_day(self, tmp_path):
-        """Filters to only the requested day."""
-        # Create a transcript file with assistant content
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("assistant", "I found the bug in the code"),
-        ]))
-
-        session = make_session_info(
-            session_id="s1",
-            transcript_path=transcript,
-            created=datetime(2026, 2, 5, 12, 0, tzinfo=timezone.utc),
-        )
-
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
-             mock.patch("transcript_ops.get_session_date", return_value="2026-02-05"):
-            result = extract_transcripts(specific_day="2026-02-05")
-            assert "2026-02-05" in result
-            assert len(result["2026-02-05"]) == 1
-            assert result["2026-02-05"][0]["session_id"] == "s1"
-
-    def test_excludes_non_matching_day(self):
-        """Sessions from other days are excluded when specific_day is set."""
-        session = make_session_info(session_id="s1")
-
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
-             mock.patch("transcript_ops.get_session_date", return_value="2026-02-06"):
-            result = extract_transcripts(specific_day="2026-02-05")
-            assert result == {}
-
-    def test_empty_when_no_pending(self):
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[]):
-            result = extract_transcripts()
-            assert result == {}
-
-
-# =============================================================================
-# get_pending_days Tests
-# =============================================================================
-
-
-class TestGetPendingDays:
+class TestGetRecentDays:
     def test_returns_sorted_dates(self):
-        sessions = [
-            make_session_info("s1"),
-            make_session_info("s2"),
-        ]
+        from transcript_ops import get_recent_days
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=sessions), \
+        sessions = [make_session_info("s1"), make_session_info("s2")]
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=sessions), \
              mock.patch("transcript_ops.get_session_date", side_effect=["2026-02-05", "2026-02-03"]):
-            result = get_pending_days()
+            result = get_recent_days()
             assert result == ["2026-02-03", "2026-02-05"]
 
     def test_deduplicates_dates(self):
-        """Multiple sessions on same day produce one date entry."""
-        sessions = [
-            make_session_info("s1"),
-            make_session_info("s2"),
-        ]
+        from transcript_ops import get_recent_days
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=sessions), \
+        sessions = [make_session_info("s1"), make_session_info("s2")]
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=sessions), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-05"):
-            result = get_pending_days()
+            result = get_recent_days()
             assert result == ["2026-02-05"]
 
-    def test_empty_when_all_captured(self):
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[]):
-            result = get_pending_days()
+    def test_empty_when_none_recent(self):
+        from transcript_ops import get_recent_days
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[]):
+            result = get_recent_days()
             assert result == []
 
 
@@ -267,8 +214,7 @@ class TestExtractTranscriptsIncremental:
         )
         state = {"sessions": {}}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             result = extract_transcripts_incremental(state)
 
@@ -293,8 +239,7 @@ class TestExtractTranscriptsIncremental:
         )
         state = {"sessions": {"old-sess": {"offset": fsize, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             result = extract_transcripts_incremental(state)
 
@@ -323,8 +268,7 @@ class TestExtractTranscriptsIncremental:
         )
         state = {"sessions": {"grown-sess": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             result = extract_transcripts_incremental(state)
 
@@ -365,8 +309,7 @@ class TestExtractTranscriptsIncremental:
             "s2": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"},
         }}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=sessions), \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=sessions), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             result = extract_transcripts_incremental(state)
 
@@ -391,8 +334,7 @@ class TestExtractTranscriptsIncremental:
         )
         state = {"sessions": {}}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             result = extract_transcripts_incremental(state)
 
@@ -403,21 +345,20 @@ class TestExtractTranscriptsIncremental:
         assert sess["current_lines"] >= 1
 
     def test_exclude_session_id(self, tmp_path):
-        """Exclude session ID is forwarded to list_pending_sessions."""
+        """Exclude session ID is forwarded to list_recent_sessions."""
         from transcript_ops import extract_transcripts_incremental
 
         state = {"sessions": {}}
 
-        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
-             mock.patch("transcript_ops.list_pending_sessions", return_value=[]) as mock_lps, \
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[]) as mock_lrs, \
              mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
             extract_transcripts_incremental(state, exclude_session_id="skip-me")
 
-        mock_lps.assert_called_once()
-        call_kwargs = mock_lps.call_args
+        mock_lrs.assert_called_once()
+        call_kwargs = mock_lrs.call_args
         # Check exclude_session_id was passed
         assert call_kwargs[1].get("exclude_session_id") == "skip-me" or \
-               (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "skip-me")
+               (len(call_kwargs[0]) > 0 and call_kwargs[0][0] == "skip-me")
 
 
 # =============================================================================

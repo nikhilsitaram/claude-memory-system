@@ -16,14 +16,13 @@ from load_memory import (
     _build_preextracted_prompt,
     _build_synthesis_instructions,
     _build_synthesis_prompt,
-    _find_projects_in_sidecars,
+    _find_projects_in_extracts,
     _get_project_names_str,
     _strip_profile_sections,
     load_daily_summaries,
     load_global_memory,
     load_project_history,
     load_project_memory,
-    pre_extract_transcripts,
     pre_extract_transcripts_incremental,
     should_synthesize,
 )
@@ -424,88 +423,6 @@ class TestLoadProjectHistory:
 # =============================================================================
 
 
-class TestPreExtractTranscripts:
-    """Tests for pre_extract_transcripts helper."""
-
-    def _mock_daily_data(self, session_id="s1"):
-        """Build a minimal extract_transcripts return value."""
-        return {
-            "project-a": [
-                {
-                    "session_id": session_id,
-                    "messages": [{"role": "assistant", "content": "hello"}],
-                }
-            ]
-        }
-
-    def test_returns_extracted_files_dict(self, tmp_path):
-        """pre_extract_transcripts returns dict mapping date -> path."""
-        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data()), \
-             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted output"):
-            result = pre_extract_transcripts(
-                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        assert "2026-02-18" in result
-        assert Path(result["2026-02-18"]).exists()
-
-    def test_creates_sidecar_file(self, tmp_path):
-        """Sidecar .sessions file is created alongside the output file."""
-        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data("sess-abc")), \
-             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
-            result = pre_extract_transcripts(
-                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        sidecar = Path(result["2026-02-18"]).with_suffix(".sessions")
-        assert sidecar.exists()
-        assert "sess-abc" in sidecar.read_text()
-
-    def test_skips_dates_with_no_data(self, tmp_path):
-        """Dates where extract_transcripts returns empty dict are skipped."""
-        with mock.patch("load_memory.extract_transcripts", return_value={}), \
-             mock.patch("load_memory.format_transcripts_for_output", return_value=""):
-            result = pre_extract_transcripts(
-                ["2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        assert result == {}
-
-    def test_handles_extraction_error_gracefully(self, tmp_path):
-        """Extraction errors for one date don't prevent other dates."""
-        def side_effect(date, exclude_session_id=None):
-            if date == "2026-02-17":
-                raise RuntimeError("disk full")
-            return self._mock_daily_data()
-
-        with mock.patch("load_memory.extract_transcripts", side_effect=side_effect), \
-             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
-            result = pre_extract_transcripts(
-                ["2026-02-17", "2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        assert "2026-02-17" not in result
-        assert "2026-02-18" in result
-
-    def test_passes_exclude_session_id(self, tmp_path):
-        """exclude_session_id is forwarded to extract_transcripts."""
-        with mock.patch("load_memory.extract_transcripts", return_value={}) as mock_extract, \
-             mock.patch("load_memory.format_transcripts_for_output", return_value=""):
-            pre_extract_transcripts(
-                ["2026-02-18"], exclude_session_id="sess-xyz", output_dir=str(tmp_path)
-            )
-        mock_extract.assert_called_once_with("2026-02-18", exclude_session_id="sess-xyz")
-
-    def test_multiple_dates(self, tmp_path):
-        """Multiple dates each get their own output and sidecar files."""
-        with mock.patch("load_memory.extract_transcripts", return_value=self._mock_daily_data()), \
-             mock.patch("load_memory.format_transcripts_for_output", return_value="formatted"):
-            result = pre_extract_transcripts(
-                ["2026-02-17", "2026-02-18"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        assert len(result) == 2
-        assert result["2026-02-17"] != result["2026-02-18"]
-        for path in result.values():
-            assert Path(path).exists()
-            assert Path(path).with_suffix(".sessions").exists()
-
-
 class TestSynthesisPromptRoutedMarker:
     """Verify [routed] marking is handled by synthesis.py, not subagent."""
 
@@ -671,8 +588,8 @@ class TestBuildPreextractedPrompt:
         )
         assert "MY_CUSTOM_INSTRUCTIONS" in prompt
 
-    def test_contains_sidecar_references(self, tmp_path):
-        """Prompt includes sidecar paths for synthesis.py apply."""
+    def test_contains_extract_references(self, tmp_path):
+        """Prompt includes extract paths for synthesis.py apply (no sidecars)."""
         extract = tmp_path / "extract-2026-02-01.txt"
         extract.write_text("content\n")
 
@@ -681,9 +598,9 @@ class TestBuildPreextractedPrompt:
             {"2026-02-01": str(extract)},
             "instructions",
         )
-        sidecar = str(extract).rsplit(".", 1)[0] + ".sessions"
-        assert sidecar in prompt
+        assert str(extract) in prompt
         assert "synthesis.py apply" in prompt
+        assert "--sidecars" not in prompt
 
     def test_contains_all_dates(self, tmp_path):
         """All pending dates appear in the prompt."""
@@ -808,7 +725,7 @@ class TestBuildEmbeddedFiles:
         assert "## Key Learnings" in result["global_ltm"]
 
     def test_reads_project_ltms(self, tmp_path):
-        """Project LTM files are read when project found in sidecars."""
+        """Project LTM files are read when project found in extracts."""
         proj_dir = tmp_path / "project-memory"
         proj_dir.mkdir()
         (proj_dir / "myproject-long-term-memory.md").write_text("project content")
@@ -817,7 +734,7 @@ class TestBuildEmbeddedFiles:
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value={"myproject"}):
+             mock.patch("load_memory._find_projects_in_extracts", return_value={"myproject"}):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = proj_dir
             result = _build_embedded_files({"2026-02-01": str(extract)})
@@ -855,7 +772,7 @@ class TestBuildEmbeddedFiles:
         assert result["project_ltms"] == {}
 
     def test_multiple_projects(self, tmp_path):
-        """Multiple project LTM files are read when found in sidecars."""
+        """Multiple project LTM files are read when found in extracts."""
         proj_dir = tmp_path / "project-memory"
         proj_dir.mkdir()
         (proj_dir / "alpha-long-term-memory.md").write_text("alpha content")
@@ -865,7 +782,7 @@ class TestBuildEmbeddedFiles:
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value={"alpha", "beta"}):
+             mock.patch("load_memory._find_projects_in_extracts", return_value={"alpha", "beta"}):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = proj_dir
             result = _build_embedded_files({"2026-02-01": str(extract)})
@@ -874,7 +791,7 @@ class TestBuildEmbeddedFiles:
         assert result["project_ltms"]["beta"] == "beta content"
 
     def test_filters_unmentioned_projects(self, tmp_path):
-        """Project LTMs not in sidecars are excluded."""
+        """Project LTMs not in extracts are excluded."""
         proj_dir = tmp_path / "project-memory"
         proj_dir.mkdir()
         (proj_dir / "mentioned-long-term-memory.md").write_text("included")
@@ -884,7 +801,7 @@ class TestBuildEmbeddedFiles:
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value={"mentioned"}):
+             mock.patch("load_memory._find_projects_in_extracts", return_value={"mentioned"}):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = proj_dir
             result = _build_embedded_files({"2026-02-01": str(extract)})
@@ -894,110 +811,55 @@ class TestBuildEmbeddedFiles:
 
 
 # =============================================================================
-# _find_projects_in_sidecars Tests
+# _find_projects_in_extracts Tests
 # =============================================================================
 
 
-class TestFindProjectsInSidecars:
-    """Tests for _find_projects_in_sidecars helper."""
+class TestFindProjectsInExtracts:
+    """Tests for _find_projects_in_extracts helper."""
 
-    def test_maps_session_to_project(self, tmp_path):
-        """Session ID in sidecar maps to project name via projects-index."""
-        # Set up extract + sidecar
-        extract = tmp_path / "extract.txt"
-        extract.write_text("data")
-        sidecar = tmp_path / "extract.sessions"
-        sidecar.write_text("abc-123\n")
-
-        # Set up Claude projects dir with session file
-        claude_proj = tmp_path / "projects" / "-home-user-myproject"
-        claude_proj.mkdir(parents=True)
-        (claude_proj / "abc-123.jsonl").write_text("")
-
-        index = {"projects": {"/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}}}
-
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
-             mock.patch("load_memory.get_projects_dir") as mock_pd:
+    def test_maps_project_path_to_name(self, tmp_path):
+        index = {"projects": {
+            "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
+        }}
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
-            mock_pd.return_value = tmp_path / "projects"
-            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
-
+            result = _find_projects_in_extracts({
+                "2026-02-01": [{"session_id": "s1", "project_path": "/home/user/myproject"}]
+            })
         assert result == {"myproject"}
 
-    def test_multiple_sessions_different_projects(self, tmp_path):
-        """Sessions from different projects return both project names."""
-        extract = tmp_path / "extract.txt"
-        extract.write_text("data")
-        sidecar = tmp_path / "extract.sessions"
-        sidecar.write_text("sess-1\nsess-2\n")
-
-        claude_proj_a = tmp_path / "projects" / "-proj-a"
-        claude_proj_a.mkdir(parents=True)
-        (claude_proj_a / "sess-1.jsonl").write_text("")
-
-        claude_proj_b = tmp_path / "projects" / "-proj-b"
-        claude_proj_b.mkdir(parents=True)
-        (claude_proj_b / "sess-2.jsonl").write_text("")
-
+    def test_multiple_projects(self, tmp_path):
         index = {"projects": {
-            "/proj/a": {"name": "alpha", "encodedPaths": ["-proj-a"]},
-            "/proj/b": {"name": "beta", "encodedPaths": ["-proj-b"]},
+            "/proj/a": {"name": "alpha", "encodedPaths": []},
+            "/proj/b": {"name": "beta", "encodedPaths": []},
         }}
-
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
-             mock.patch("load_memory.get_projects_dir") as mock_pd:
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
-            mock_pd.return_value = tmp_path / "projects"
-            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
-
+            result = _find_projects_in_extracts({
+                "2026-02-01": [
+                    {"session_id": "s1", "project_path": "/proj/a"},
+                    {"session_id": "s2", "project_path": "/proj/b"},
+                ]
+            })
         assert result == {"alpha", "beta"}
 
-    def test_no_sidecar_returns_empty(self, tmp_path):
-        """Missing sidecar file returns empty set."""
-        extract = tmp_path / "extract.txt"
-        extract.write_text("data")
-        # No .sessions file created
-
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
-             mock.patch("load_memory.get_projects_dir") as mock_pd:
-            mock_idx.return_value = tmp_path / "index.json"
-            (tmp_path / "index.json").write_text("{}")
-            mock_pd.return_value = tmp_path / "projects"
-            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
-
-        assert result == set()
-
-    def test_empty_extracted_files(self):
-        """Empty extracted_files returns empty set."""
+    def test_empty_data_returns_empty(self):
         with mock.patch("load_memory.get_projects_index_file") as mock_idx:
             mock_idx.return_value = Path("/nonexistent/index.json")
-            result = _find_projects_in_sidecars({})
-
+            result = _find_projects_in_extracts({})
         assert result == set()
 
-    def test_session_not_in_index_skipped(self, tmp_path):
-        """Session in unknown project dir is silently skipped."""
-        extract = tmp_path / "extract.txt"
-        extract.write_text("data")
-        sidecar = tmp_path / "extract.sessions"
-        sidecar.write_text("orphan-sess\n")
-
-        claude_proj = tmp_path / "projects" / "-unknown-dir"
-        claude_proj.mkdir(parents=True)
-        (claude_proj / "orphan-sess.jsonl").write_text("")
-
-        # Index has no entry for -unknown-dir
+    def test_unknown_project_skipped(self, tmp_path):
         index = {"projects": {}}
-
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
-             mock.patch("load_memory.get_projects_dir") as mock_pd:
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
-            mock_pd.return_value = tmp_path / "projects"
-            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
-
+            result = _find_projects_in_extracts({
+                "2026-02-01": [{"session_id": "s1", "project_path": "/unknown/path"}]
+            })
         assert result == set()
 
 
@@ -1064,40 +926,30 @@ class TestPreExtractTranscriptsIncremental:
             ]
         }
 
-    def test_returns_extracted_files_and_offsets(self, tmp_path):
-        """Returns both extracted_files dict and session_offsets dict."""
+    def test_returns_extracted_files_offsets_and_daily_data(self, tmp_path):
+        """Returns extracted_files dict, session_offsets dict, and daily_data."""
         with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data()), \
              mock.patch("load_memory.format_transcripts_incremental", return_value="formatted output"), \
              mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
-            extracted, offsets = pre_extract_transcripts_incremental(
+            extracted, offsets, daily_data = pre_extract_transcripts_incremental(
                 ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
             )
         assert "2026-02-22" in extracted
         assert Path(extracted["2026-02-22"]).exists()
         assert offsets["s1"]["offset"] == 500
         assert offsets["s1"]["lines"] == 5
-
-    def test_creates_sidecar(self, tmp_path):
-        """Sidecar .sessions file contains session IDs."""
-        with mock.patch("load_memory.extract_transcripts_incremental", return_value=self._mock_daily_data("abc")), \
-             mock.patch("load_memory.format_transcripts_incremental", return_value="formatted"), \
-             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
-            extracted, _ = pre_extract_transcripts_incremental(
-                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
-            )
-        sidecar = Path(extracted["2026-02-22"]).with_suffix(".sessions")
-        assert sidecar.exists()
-        assert "abc" in sidecar.read_text()
+        assert "2026-02-22" in daily_data
 
     def test_skips_empty_dates(self, tmp_path):
         """Dates with no incremental content are excluded."""
         with mock.patch("load_memory.extract_transcripts_incremental", return_value={}), \
              mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
-            extracted, offsets = pre_extract_transcripts_incremental(
+            extracted, offsets, daily_data = pre_extract_transcripts_incremental(
                 ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
             )
         assert extracted == {}
         assert offsets == {}
+        assert daily_data == {}
 
     def test_collects_offsets_from_multiple_sessions(self, tmp_path):
         """Multiple sessions across dates accumulate in offsets dict."""
@@ -1116,7 +968,7 @@ class TestPreExtractTranscriptsIncremental:
         with mock.patch("load_memory.extract_transcripts_incremental", return_value=multi), \
              mock.patch("load_memory.format_transcripts_incremental", return_value="data"), \
              mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}):
-            _, offsets = pre_extract_transcripts_incremental(
+            _, offsets, _ = pre_extract_transcripts_incremental(
                 ["2026-02-21", "2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
             )
         assert offsets["s1"]["offset"] == 100
@@ -1143,7 +995,7 @@ class TestBuildEmbeddedFilesWithDailies:
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
              mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = tmp_path / "nonexistent-proj"
             mock_dd.return_value = daily_dir
@@ -1164,7 +1016,7 @@ class TestBuildEmbeddedFilesWithDailies:
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
              mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = tmp_path / "nonexistent-proj"
             mock_dd.return_value = daily_dir
@@ -1180,7 +1032,7 @@ class TestBuildEmbeddedFilesWithDailies:
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
              mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = tmp_path / "nonexistent-proj"
             result = _build_embedded_files({"2026-02-22": str(tmp_path / "x.txt")})

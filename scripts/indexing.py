@@ -9,23 +9,11 @@ Provides:
 Transcript extraction is in transcript_ops.py (split for smaller reads).
 
 Usage:
-    # Extract transcripts for a specific day (pure read, no marking)
-    python indexing.py extract 2026-02-02 --output /tmp/extract.txt
-    python indexing.py extract 2026-02-02 --exclude-session SESSION_ID --output /tmp/extract.txt
-
-    # Mark sessions captured after successful synthesis
-    python indexing.py mark-captured --sidecar /tmp/extract.sessions
-    python indexing.py mark-captured SESSION_ID [SESSION_ID ...]
-
-    # Uncapture sessions (make pending again)
-    python indexing.py uncapture SESSION_ID [SESSION_ID ...]
-    python indexing.py uncapture-date 2026-01-25 2026-02-02
-
     # Build/rebuild project index
     python indexing.py build-index
 
-    # List pending transcript days
-    python indexing.py list-pending
+    # List days with recent transcripts
+    python indexing.py list-recent
 
 Requirements: Python 3.9+
 """
@@ -35,7 +23,7 @@ import json
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -45,32 +33,32 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (
-    add_captured_session,
     check_python_version,
     from_iso_z,
-    get_captured_sessions,
     get_memory_dir,
     get_projects_dir,
     get_projects_index_file,
     get_sessions_original_path,
     load_sessions_index,
-    prune_captured_from_state,
-    remove_captured_session,
     to_iso_z,
 )
 
-# Sessions smaller than this are likely empty/metadata-only (2-3 messages ≈ 1000 bytes)
+# Sessions smaller than this are likely empty/metadata-only (2-3 messages ~ 1000 bytes)
 MIN_SESSION_SIZE_BYTES = 1000
+
+# Default window for recent session filtering (days)
+DEFAULT_RECENCY_WINDOW_DAYS = 7
 
 __all__ = [
     # Constants
     "MIN_SESSION_SIZE_BYTES",
+    "DEFAULT_RECENCY_WINDOW_DAYS",
     # Data classes
     "SessionInfo",
     # Session discovery
     "list_all_sessions",
     "has_assistant_message",
-    "list_pending_sessions",
+    "list_recent_sessions",
     "get_session_date",
     # Project index
     "build_projects_index",
@@ -82,12 +70,12 @@ __all__ = [
 # Session discovery:
 #   SessionInfo                            dataclass: session_id, transcript_path, ...
 #   list_all_sessions() -> list[SessionInfo]
-#   list_pending_sessions(captured, ...) -> list[SessionInfo]
+#   list_recent_sessions(max_age_days, ...) -> list[SessionInfo]
 #   has_assistant_message(filepath) -> bool
 #   get_session_date(session) -> str
 # Project index:
 #   build_projects_index() -> dict
-# CLI: python indexing.py {extract,mark-captured,uncapture,uncapture-date,build-index,list-pending}
+# CLI: python indexing.py {build-index,list-recent}
 # =============================================================================
 
 
@@ -236,33 +224,36 @@ def has_assistant_message(filepath: Path) -> bool:
     return False
 
 
-def list_pending_sessions(
-    captured: set[str],
+def list_recent_sessions(
+    max_age_days: int = DEFAULT_RECENCY_WINDOW_DAYS,
     min_file_size: int = MIN_SESSION_SIZE_BYTES,
     exclude_session_id: str | None = None,
     verify_content: bool = False,
 ) -> list[SessionInfo]:
     """
-    Filter to unprocessed sessions.
+    List recent sessions eligible for synthesis.
+
+    Filters by file modification time instead of a captured set.
 
     Args:
-        captured: Set of already-captured session IDs
+        max_age_days: Only include sessions modified within this many days
         min_file_size: Minimum file size in bytes (default MIN_SESSION_SIZE_BYTES)
         exclude_session_id: Optional session ID to exclude (e.g., the active session)
         verify_content: If True, parse JSONL to verify at least one assistant message exists
 
     Returns list of SessionInfo for sessions that:
-    - Have not been captured
+    - Have mtime within max_age_days
     - Meet minimum file size threshold
     - Are not the excluded session
     - (If verify_content) contain at least one assistant message
     """
     all_sessions = list_all_sessions()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
     return [
         s
         for s in all_sessions
-        if s.session_id not in captured
+        if s.file_mtime >= cutoff
         and s.file_size >= min_file_size
         and s.session_id != exclude_session_id
         and (not verify_content or has_assistant_message(s.transcript_path))
@@ -459,41 +450,6 @@ def print_index_summary(index: dict) -> None:
 # =============================================================================
 
 
-def cmd_extract(args: argparse.Namespace) -> int:
-    """Handle extract command. Pure read operation — never marks sessions."""
-    from transcript_ops import extract_transcripts, format_transcripts_for_output
-    exclude_id = getattr(args, "exclude_session", None)
-    daily_data = extract_transcripts(args.day, exclude_session_id=exclude_id)
-
-    if not daily_data:
-        print("No pending transcripts found.", file=sys.stderr)
-        return 1
-
-    if args.json:
-        # JSON output
-        output = json.dumps(daily_data, indent=2)
-    else:
-        # Human-readable output
-        output = format_transcripts_for_output(daily_data)
-
-    if args.output:
-        Path(args.output).write_text(output, encoding="utf-8")
-        print(f"Output written to: {args.output}", file=sys.stderr)
-
-        # Write sidecar .sessions file with session IDs and file sizes
-        sidecar_path = Path(args.output).with_suffix(".sessions")
-        sidecar_lines = []
-        for day_sessions in daily_data.values():
-            for session in day_sessions:
-                sidecar_lines.append(session["session_id"])
-        sidecar_path.write_text("\n".join(sidecar_lines) + "\n", encoding="utf-8")
-        print(f"Session IDs written to: {sidecar_path}", file=sys.stderr)
-    else:
-        print(output)
-
-    return 0
-
-
 def cmd_build_index(args: argparse.Namespace) -> int:
     """Handle build-index command."""
     index = build_projects_index()
@@ -501,140 +457,16 @@ def cmd_build_index(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list_pending(args: argparse.Namespace) -> int:
-    """Handle list-pending command."""
-    from transcript_ops import get_pending_days
-    days = get_pending_days()
+def cmd_list_recent(args: argparse.Namespace) -> int:
+    """Handle list-recent command."""
+    from transcript_ops import get_recent_days
+    days = get_recent_days()
     if days:
-        print("Pending transcript days:")
+        print("Recent transcript days:")
         for day in days:
             print(f"  {day}")
     else:
-        print("No pending transcripts.")
-    return 0
-
-
-def cmd_mark_captured(args: argparse.Namespace) -> int:
-    """
-    Mark sessions as captured.
-
-    Two modes:
-    1. --sidecar: Read session IDs from sidecar file, skip today's sessions
-    2. Explicit IDs: Mark listed sessions unconditionally
-    """
-    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    if args.sidecar:
-        # Mode 1: Read from sidecar file, skip today's sessions
-        sidecar_path = Path(args.sidecar)
-        if not sidecar_path.exists():
-            print(f"Sidecar file not found: {sidecar_path}", file=sys.stderr)
-            return 1
-
-        session_ids = [
-            line.strip()
-            for line in sidecar_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-
-        if not session_ids:
-            print("No session IDs in sidecar file.", file=sys.stderr)
-            return 1
-
-        # Look up dates for each session to determine if it's "today"
-        captured = get_captured_sessions()
-        all_sessions = list_all_sessions()
-        session_lookup = {s.session_id: s for s in all_sessions}
-
-        marked = 0
-        skipped_today = 0
-
-        for sid in session_ids:
-            session = session_lookup.get(sid)
-            if session:
-                session_date = get_session_date(session)
-                if session_date == today_utc:
-                    skipped_today += 1
-                    continue
-
-            add_captured_session(sid, captured)
-            captured.add(sid)
-            marked += 1
-
-        print(f"Marked {marked} sessions, skipped {skipped_today} (today's sessions)", file=sys.stderr)
-
-        # Prune newly marked sessions from synthesis state (cleanup)
-        if marked > 0:
-            try:
-                prune_captured_from_state(set(session_ids))
-            except Exception:
-                pass  # Non-critical cleanup
-
-    else:
-        # Mode 2: Explicit IDs — mark unconditionally
-        if not args.session_ids:
-            print("Provide session IDs or --sidecar file.", file=sys.stderr)
-            return 1
-
-        captured = get_captured_sessions()
-        for sid in args.session_ids:
-            add_captured_session(sid, captured)
-            captured.add(sid)
-
-        print(f"Marked {len(args.session_ids)} sessions as captured.", file=sys.stderr)
-
-        # Prune newly marked sessions from synthesis state (cleanup)
-        try:
-            prune_captured_from_state(set(args.session_ids))
-        except Exception:
-            pass  # Non-critical cleanup
-
-    return 0
-
-
-def cmd_uncapture(args: argparse.Namespace) -> int:
-    """Remove session IDs from .captured to make them pending again."""
-    if not args.session_ids:
-        print("Provide at least one session ID.", file=sys.stderr)
-        return 1
-
-    removed = 0
-    for sid in args.session_ids:
-        if remove_captured_session(sid):
-            removed += 1
-
-    print(f"Uncaptured {removed} of {len(args.session_ids)} sessions.", file=sys.stderr)
-    return 0
-
-
-def cmd_uncapture_date(args: argparse.Namespace) -> int:
-    """Uncapture all sessions for given date(s)."""
-    if not args.dates:
-        print("Provide at least one date (YYYY-MM-DD).", file=sys.stderr)
-        return 1
-
-    target_dates = set(args.dates)
-    captured = get_captured_sessions()
-    all_sessions = list_all_sessions()
-
-    # Find captured sessions that fall on the target dates
-    to_uncapture = []
-    for session in all_sessions:
-        if session.session_id in captured:
-            session_date = get_session_date(session)
-            if session_date in target_dates:
-                to_uncapture.append(session.session_id)
-
-    if not to_uncapture:
-        print(f"No captured sessions found for dates: {', '.join(sorted(target_dates))}", file=sys.stderr)
-        return 0
-
-    removed = 0
-    for sid in to_uncapture:
-        if remove_captured_session(sid):
-            removed += 1
-
-    print(f"Uncaptured {removed} sessions for dates: {', '.join(sorted(target_dates))}", file=sys.stderr)
+        print("No recent transcripts.")
     return 0
 
 
@@ -647,55 +479,17 @@ def main() -> int:
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Extract command (pure read — never marks sessions)
-    extract_parser = subparsers.add_parser(
-        "extract", help="Extract transcripts for synthesis (does not mark captured)"
-    )
-    extract_parser.add_argument("day", nargs="?", help="Specific day to extract (YYYY-MM-DD)")
-    extract_parser.add_argument("--output", "-o", help="Output file path (also creates .sessions sidecar)")
-    extract_parser.add_argument("--json", action="store_true", help="Output as JSON")
-    extract_parser.add_argument(
-        "--exclude-session",
-        help="Exclude this session ID from extraction (e.g., the active session)",
-    )
-    extract_parser.set_defaults(func=cmd_extract)
-
-    # Mark-captured command
-    mark_parser = subparsers.add_parser(
-        "mark-captured", help="Mark sessions as captured after successful synthesis"
-    )
-    mark_parser.add_argument("session_ids", nargs="*", help="Session IDs to mark (unconditional)")
-    mark_parser.add_argument(
-        "--sidecar",
-        help="Read session IDs from sidecar file (skips today's sessions)",
-    )
-    mark_parser.set_defaults(func=cmd_mark_captured)
-
-    # Uncapture command
-    uncapture_parser = subparsers.add_parser(
-        "uncapture", help="Remove sessions from captured list (make pending again)"
-    )
-    uncapture_parser.add_argument("session_ids", nargs="+", help="Session IDs to uncapture")
-    uncapture_parser.set_defaults(func=cmd_uncapture)
-
-    # Uncapture-date command
-    uncapture_date_parser = subparsers.add_parser(
-        "uncapture-date", help="Uncapture all sessions for given date(s)"
-    )
-    uncapture_date_parser.add_argument("dates", nargs="+", help="Dates to uncapture (YYYY-MM-DD)")
-    uncapture_date_parser.set_defaults(func=cmd_uncapture_date)
-
     # Build-index command
     build_parser = subparsers.add_parser(
         "build-index", help="Build/rebuild project index"
     )
     build_parser.set_defaults(func=cmd_build_index)
 
-    # List-pending command
+    # List-recent command
     list_parser = subparsers.add_parser(
-        "list-pending", help="List days with pending transcripts"
+        "list-recent", help="List days with recent transcripts"
     )
-    list_parser.set_defaults(func=cmd_list_pending)
+    list_parser.set_defaults(func=cmd_list_recent)
 
     args = parser.parse_args()
 
