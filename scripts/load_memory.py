@@ -35,22 +35,17 @@ from memory_utils import (
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
-    get_projects_dir,
     get_projects_index_file,
-    get_synthesis_state_file,
     get_working_days,
     load_json_file,
     load_settings,
     load_synthesis_state,
     project_name_to_filename,
-    remove_captured_session,
 )
 from transcript_ops import (
-    extract_transcripts,
     extract_transcripts_incremental,
-    format_transcripts_for_output,
     format_transcripts_incremental,
-    get_pending_days,
+    get_recent_days,
 )
 
 # Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
@@ -322,7 +317,7 @@ def _build_preextracted_prompt(
 
     Args:
         pending_dates: List of dates to process (YYYY-MM-DD)
-        extracted_files: Dict mapping date -> extract file path (for sidecar references)
+        extracted_files: Dict mapping date -> extract file path
         synthesis_instructions: Shared instructions block
         embedded_files: Pre-read content to embed inline:
             - "transcripts": dict[date, content] - transcript text per date
@@ -381,15 +376,10 @@ These daily files already exist from a previous synthesis run. When you see sess
 
 """
 
-    # Build sidecar and extract paths for synthesis.py apply command
-    sidecar_paths = []
+    # Build extract paths for synthesis.py apply command
     extract_paths = []
     for date in sorted(extracted_files.keys()):
-        path = extracted_files[date]
-        sidecar = path.rsplit(".", 1)[0] + ".sessions"
-        sidecar_paths.append(sidecar)
-        extract_paths.append(path)
-    sidecars_arg = " ".join(sidecar_paths)
+        extract_paths.append(extracted_files[date])
     extracts_arg = " ".join(extract_paths)
 
     # Pre-compute output filename with PID so Write and Bash use the same path
@@ -439,7 +429,7 @@ Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing
 Only use the Write and Bash tools — no other tools.
 
 1. Write(`{output_filename}`, <your structured output>)
-2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}{offsets_arg}`
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --extracts {extracts_arg}{offsets_arg}`
 
 ## Synthesis Instructions
 
@@ -484,51 +474,39 @@ def _build_synthesis_prompt(
     )
 
 
-def _find_projects_in_sidecars(extracted_files: dict[str, str]) -> set[str]:
-    """Find project names from session IDs in sidecar files.
+def _find_projects_in_extracts(daily_data: dict[str, list[dict]]) -> set[str]:
+    """Find project names from extracted session data.
 
-    Reads .sessions sidecar files, locates each session's project directory
-    under ~/.claude/projects/, and maps to project names via projects-index.
+    Args:
+        daily_data: Dict mapping date -> list of session dicts
 
-    Returns set of project names that had sessions in the extracted files.
+    Returns set of project names that had sessions extracted.
     """
     projects_index = load_json_file(get_projects_index_file(), {})
+    projects = projects_index.get("projects", {})
 
-    # Build reverse lookup: encoded dir name -> project name
-    encoded_to_name: dict[str, str] = {}
-    for data in projects_index.get("projects", {}).values():
-        name = data.get("name", "")
-        if name:
-            for enc in data.get("encodedPaths", []):
-                encoded_to_name[enc] = name
+    # Collect unique project paths from sessions
+    project_paths: set[str] = set()
+    for sessions in daily_data.values():
+        for s in sessions:
+            pp = s.get("project_path")
+            if pp:
+                project_paths.add(pp)
 
-    # Collect all session IDs from sidecar files
-    session_ids: set[str] = set()
-    for path in extracted_files.values():
-        sidecar = Path(path).with_suffix(".sessions")
-        if sidecar.exists():
-            try:
-                for line in sidecar.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line:
-                        session_ids.add(line)
-            except IOError:
-                pass
-
-    # Map session IDs to project names via their parent directory
-    claude_projects_dir = get_projects_dir()
+    # Map to project names
     result: set[str] = set()
-    for sid in session_ids:
-        for proj_dir in claude_projects_dir.iterdir():
-            if (proj_dir / f"{sid}.jsonl").exists():
-                name = encoded_to_name.get(proj_dir.name)
-                if name:
-                    result.add(name)
-                break
+    for path in project_paths:
+        data = projects.get(path)
+        if data and data.get("name"):
+            result.add(data["name"])
     return result
 
 
-def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool = False) -> dict:
+def _build_embedded_files(
+    extracted_files: dict[str, str],
+    include_dailies: bool = False,
+    daily_data: dict[str, list[dict]] | None = None,
+) -> dict:
     """Pre-read all files for embedding in synthesis prompt.
 
     Reads transcript extracts, global LTM, and project LTMs into memory
@@ -537,6 +515,7 @@ def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool
     Args:
         extracted_files: Dict mapping date -> extract file path
         include_dailies: If True, read existing daily summary files as merge context
+        daily_data: Dict mapping date -> list of session dicts (for project detection)
 
     Returns:
         Dict with keys: transcripts, global_ltm, project_ltms, (existing_dailies)
@@ -556,7 +535,7 @@ def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool
         except IOError:
             pass
     # Only include project LTMs for projects that had sessions extracted
-    relevant_projects = _find_projects_in_sidecars(extracted_files)
+    relevant_projects = _find_projects_in_extracts(daily_data or {})
     proj_dir = get_project_memory_dir()
     if proj_dir.exists():
         for f in proj_dir.glob("*-long-term-memory.md"):
@@ -580,58 +559,22 @@ def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool
     return embedded
 
 
-def pre_extract_transcripts(
-    pending_dates: list,
-    exclude_session_id: str | None = None,
-    output_dir: str = "/tmp",
-) -> dict:
-    """Pre-extract transcripts to temp files with sidecar session lists.
-
-    For each pending date, extracts transcripts, writes formatted output to a
-    temp file, and writes a .sessions sidecar with session IDs for mark-captured.
-
-    Returns dict mapping date -> output file path.
-    """
-    pid = os.getpid()
-    extracted_files: dict[str, str] = {}
-    for date in pending_dates:
-        try:
-            daily_data = extract_transcripts(date, exclude_session_id=exclude_session_id)
-            if daily_data:
-                output_path = f"{output_dir}/memory-extract-{date}-{pid}.txt"
-                Path(output_path).write_text(
-                    format_transcripts_for_output(daily_data, total_line_budget=TRANSCRIPT_LINE_BUDGET),
-                    encoding="utf-8",
-                )
-                sidecar_path = Path(output_path).with_suffix(".sessions")
-                session_ids = [
-                    s["session_id"]
-                    for sessions in daily_data.values()
-                    for s in sessions
-                ]
-                sidecar_path.write_text(
-                    "\n".join(session_ids) + "\n", encoding="utf-8"
-                )
-                extracted_files[date] = output_path
-        except Exception as e:
-            print(f"Warning: Failed to extract {date}: {e}", file=sys.stderr)
-    return extracted_files
-
 
 def pre_extract_transcripts_incremental(
     pending_dates: list,
     exclude_session_id: str | None = None,
     output_dir: str = "/tmp",
-) -> tuple[dict[str, str], dict[str, dict]]:
+) -> tuple[dict[str, str], dict[str, dict], dict[str, list[dict]]]:
     """Pre-extract transcripts incrementally using high water marks.
 
-    Like pre_extract_transcripts but uses synthesis state to skip unchanged
-    sessions and only extract delta content from grown sessions.
+    Uses synthesis state to skip unchanged sessions and only extract delta
+    content from grown sessions.
 
     Returns:
-        (extracted_files, session_offsets) where:
+        (extracted_files, session_offsets, daily_data) where:
         - extracted_files: dict mapping date -> output file path
         - session_offsets: dict mapping session_id -> {"offset": int, "lines": int}
+        - daily_data: dict mapping date -> list of session dicts (for project detection)
     """
     state = load_synthesis_state()
     pid = os.getpid()
@@ -644,7 +587,7 @@ def pre_extract_transcripts_incremental(
         )
     except Exception as e:
         print(f"Warning: Incremental extraction failed: {e}", file=sys.stderr)
-        return {}, {}
+        return {}, {}, {}
 
     for date in sorted(pending_dates):
         sessions = daily_data.get(date)
@@ -658,10 +601,6 @@ def pre_extract_transcripts_incremental(
             encoding="utf-8",
         )
 
-        sidecar_path = Path(output_path).with_suffix(".sessions")
-        session_ids = [s["session_id"] for s in sessions]
-        sidecar_path.write_text("\n".join(session_ids) + "\n", encoding="utf-8")
-
         extracted_files[date] = output_path
 
         for s in sessions:
@@ -670,27 +609,21 @@ def pre_extract_transcripts_incremental(
                 "lines": s["current_lines"],
             }
 
-    return extracted_files, session_offsets
+    return extracted_files, session_offsets, daily_data
 
 
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
 
-    # Parse session_id and source from SessionStart hook stdin JSON
+    # Parse session_id from SessionStart hook stdin JSON
     current_session_id = None
-    source = None
     try:
         if not sys.stdin.isatty():
             hook_input = json.load(sys.stdin)
             current_session_id = hook_input.get("session_id")
-            source = hook_input.get("source")
     except (json.JSONDecodeError, IOError):
         pass  # Not called from hook, or invalid input — safe to continue
-
-    # Auto-uncapture on session resume (user may add new content to resumed session)
-    if source == "resume" and current_session_id:
-        remove_captured_session(current_session_id)
 
     # Load settings
     settings = load_settings()
@@ -715,7 +648,7 @@ def main() -> None:
 
     # Check for pending transcripts (only if synthesis scheduling allows)
     # Exclude current session — it's still active and shouldn't be synthesized
-    pending_dates = get_pending_days(exclude_session_id=current_session_id)
+    pending_dates = get_recent_days(exclude_session_id=current_session_id)
     if pending_dates and should_synthesize(settings):
         # Write timestamp eagerly to prevent duplicate synthesis when multiple
         # sessions start simultaneously (all would see stale timestamp otherwise)
@@ -727,21 +660,16 @@ def main() -> None:
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
         # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
-        session_offsets = None
-
-        if get_synthesis_state_file().exists():
-            extracted_files, session_offsets = pre_extract_transcripts_incremental(
-                pending_dates, exclude_session_id=current_session_id
-            )
-        else:
-            extracted_files = pre_extract_transcripts(
-                pending_dates, exclude_session_id=current_session_id
-            )
+        extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
+            pending_dates, exclude_session_id=current_session_id
+        )
 
         if extracted_files:
             # Pre-read all files for embedding in prompt (zero tool calls for subagent)
-            include_dailies = session_offsets is not None
-            embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+            include_dailies = bool(session_offsets)
+            embedded = _build_embedded_files(
+                extracted_files, include_dailies=include_dailies, daily_data=daily_data
+            )
 
             # Write session offsets to temp file for synthesis.py state update
             if session_offsets:
@@ -838,28 +766,25 @@ if __name__ == "__main__":
         model = settings.get("synthesis", {}).get("model", "sonnet")
 
         # Pre-compute pending dates
-        pending_dates = get_pending_days(exclude_session_id=exclude_id)
+        pending_dates = get_recent_days(exclude_session_id=exclude_id)
         if not pending_dates:
             print("No pending transcripts.")
             sys.exit(0)
 
-        # Pre-extract transcripts (check for incremental mode)
-        session_offsets = None
-
-        if get_synthesis_state_file().exists():
-            extracted_files, session_offsets = pre_extract_transcripts_incremental(
-                pending_dates, exclude_session_id=exclude_id
-            )
-        else:
-            extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
+        # Pre-extract transcripts incrementally
+        extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
+            pending_dates, exclude_session_id=exclude_id
+        )
 
         if not extracted_files:
             print("No pending transcripts with content.")
             sys.exit(0)
 
         # Pre-read all files for embedding in prompt
-        include_dailies = session_offsets is not None
-        embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+        include_dailies = bool(session_offsets)
+        embedded = _build_embedded_files(
+            extracted_files, include_dailies=include_dailies, daily_data=daily_data
+        )
 
         # Write session offsets to temp file for synthesis.py state update
         if session_offsets:
