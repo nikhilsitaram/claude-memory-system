@@ -1224,5 +1224,39 @@ class TestPromptMergeContext:
         assert "Existing daily summary" not in prompt
 
 
+# =============================================================================
+# Incremental Wiring Tests
+# =============================================================================
+
+
+class TestIncrementalWiring:
+    """Verify incremental extraction is wired into the prompt."""
+
+    def test_offsets_arg_in_prompt_when_offsets_present(self):
+        """When offsets_path is in embedded_files, apply command includes --offsets-json."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "data"},
+                "offsets_path": "/tmp/synthesis-offsets-123.json",
+            },
+        )
+        assert "--offsets-json /tmp/synthesis-offsets-123.json" in prompt
+
+    def test_no_offsets_arg_when_no_offsets(self):
+        """Without offsets_path, apply command has no --offsets-json."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "data"},
+            },
+        )
+        assert "--offsets-json" not in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -37,6 +37,7 @@ from memory_utils import (
     get_project_memory_dir,
     get_projects_dir,
     get_projects_index_file,
+    get_synthesis_state_file,
     get_working_days,
     load_json_file,
     load_settings,
@@ -395,6 +396,10 @@ These daily files already exist from a previous synthesis run. When you see sess
     # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
     output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
 
+    # Build --offsets-json arg for incremental synthesis state update
+    offsets_path = embedded_files.get("offsets_path", "")
+    offsets_arg = f" --offsets-json {offsets_path}" if offsets_path else ""
+
     first_date = sorted(pending_dates)[0]
 
     return f'''You are a structured data extractor. Your job is to read session transcripts and produce ONLY delimited structured output — no prose, no commentary, no summary.
@@ -434,7 +439,7 @@ Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing
 Only use the Write and Bash tools — no other tools.
 
 1. Write(`{output_filename}`, <your structured output>)
-2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}`
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}{offsets_arg}`
 
 ## Synthesis Instructions
 
@@ -722,11 +727,28 @@ def main() -> None:
         synthesis_background = settings.get("synthesis", {}).get("background", True)
 
         # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
-        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=current_session_id)
+        session_offsets = None
+
+        if get_synthesis_state_file().exists():
+            extracted_files, session_offsets = pre_extract_transcripts_incremental(
+                pending_dates, exclude_session_id=current_session_id
+            )
+        else:
+            extracted_files = pre_extract_transcripts(
+                pending_dates, exclude_session_id=current_session_id
+            )
 
         if extracted_files:
             # Pre-read all files for embedding in prompt (zero tool calls for subagent)
-            embedded = _build_embedded_files(extracted_files)
+            include_dailies = session_offsets is not None
+            embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+
+            # Write session offsets to temp file for synthesis.py state update
+            if session_offsets:
+                offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
+                Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
+                embedded["offsets_path"] = offsets_path
+
             synth_prompt = _build_synthesis_prompt(
                 list(extracted_files.keys()), extracted_files, embedded
             )
@@ -821,15 +843,29 @@ if __name__ == "__main__":
             print("No pending transcripts.")
             sys.exit(0)
 
-        # Pre-extract transcripts (manual path — user is already waiting)
-        extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
+        # Pre-extract transcripts (check for incremental mode)
+        session_offsets = None
+
+        if get_synthesis_state_file().exists():
+            extracted_files, session_offsets = pre_extract_transcripts_incremental(
+                pending_dates, exclude_session_id=exclude_id
+            )
+        else:
+            extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=exclude_id)
 
         if not extracted_files:
             print("No pending transcripts with content.")
             sys.exit(0)
 
         # Pre-read all files for embedding in prompt
-        embedded = _build_embedded_files(extracted_files)
+        include_dailies = session_offsets is not None
+        embedded = _build_embedded_files(extracted_files, include_dailies=include_dailies)
+
+        # Write session offsets to temp file for synthesis.py state update
+        if session_offsets:
+            offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
+            Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
+            embedded["offsets_path"] = offsets_path
 
         print(f"model={model}")
         print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded))
