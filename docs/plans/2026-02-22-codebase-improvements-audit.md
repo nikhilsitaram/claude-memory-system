@@ -2,6 +2,7 @@
 
 **Date:** 2026-02-22
 **Scope:** Full codebase audit across speed, efficiency, design, logic, pipeline, and implementation.
+**Last updated:** 2026-02-22 (after zero-tool synthesis implementation)
 
 ---
 
@@ -12,20 +13,22 @@
 - **What:** `if role == "user": continue` discards every user message. The synthesis subagent only sees assistant responses, making it much harder to understand what was being worked on.
 - **Benefit:** Including user messages (even truncated) would dramatically improve synthesis quality. The subagent could understand intent, not just output.
 
-### 2. Settings SKILL.md has wrong default values
+### 2. ~~Settings SKILL.md has wrong default values~~ ✅ FIXED
 - **Where:** `skills/settings/SKILL.md:51-52, 66-70`
 - **What:** Lists `tokenLimit` defaults as 5,000 but code uses 3,000. Total budget shows 16,750 but actual is 11,250.
 - **Benefit:** Users reading the skill would have correct expectations.
+- **Fixed in:** `ab5a378` (Task 7 of zero-tool synthesis) — corrected all default values and total budget calculation.
 
 ### 3. `load_project_history()` scans ALL daily files on every session start
 - **Where:** `scripts/load_memory.py:185`
 - **What:** `daily_dir.glob("*.md")` reads every daily file ever created, then filters for project content. With months of files, this grows linearly. Meanwhile `load_daily_summaries()` uses `get_working_days()` which only returns recent N files.
 - **Benefit:** Capping the scan (e.g., last 60 days max) or using a date-based approach would keep load time constant.
 
-### 4. No validation that synthesis subagent completed successfully
+### 4. ~~No validation that synthesis subagent completed successfully~~ ✅ FIXED
 - **Where:** `scripts/load_memory.py:536-538`
 - **What:** Eager timestamp write prevents duplicate synthesis but also masks failures. If the subagent crashes, the timestamp is already written. Failed dates stay pending until `intervalHours` expires or next UTC day.
-- **Benefit:** Moving timestamp write to end of synthesis (or to synthesis.py apply) ensures only successful synthesis updates the clock. *(Note: the zero-tool design already addresses this -- `synthesis.py apply` writes the timestamp last.)*
+- **Benefit:** Moving timestamp write to end of synthesis (or to synthesis.py apply) ensures only successful synthesis updates the clock.
+- **Fixed in:** Zero-tool synthesis implementation — `synthesis.py apply` writes the timestamp as the last step of `run_post_processing()`. The eager write in `load_memory.py` remains as a race-condition guard, but the authoritative timestamp is now set by `synthesis.py` only on success.
 
 ### 5. Global LTM exceeds budget with no enforcement
 - **Where:** `scripts/load_memory.py:109-119`
@@ -136,14 +139,16 @@
 ### 27. `_deep_merge()` shallow copy shares nested dicts
 - **Where:** `memory_utils.py:277`
 
-### 28. `_build_preextracted_prompt()` re-reads files to count lines
+### 28. ~~`_build_preextracted_prompt()` re-reads files to count lines~~ ✅ FIXED
 - **Where:** `load_memory.py:291-295`
+- **Fixed in:** Zero-tool synthesis — `_build_preextracted_prompt()` was fully rewritten. File contents are now pre-read by `_build_embedded_files()` and embedded inline. No line counting or re-reading.
 
 ### 29. No settings validation (invalid values cause crashes)
 - **Where:** `memory_utils.py:223-246`
 
-### 30. `devtools.py` docstring says "NOT installed" but it IS installed
+### 30. ~~`devtools.py` docstring says "NOT installed" but it IS installed~~ ✅ FIXED
 - **Where:** `devtools.py:6` vs `install.py:121`
+- **Fixed in:** `ab5a378` (Task 7 of zero-tool synthesis) — docstring updated to "Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/ via symlink."
 
 ### 31. Global STM perpetually 0 tokens (all entries routed)
 - **Where:** `memory_utils.py:615` filtering, routed entries always skipped
@@ -163,11 +168,11 @@
 
 ## Quick Wins (minimal effort, clear benefit)
 
-| # | Fix | Effort | Impact |
-|---|-----|--------|--------|
-| 2 | Fix SKILL.md default values | 5 min | Correct user docs |
-| 11 | Remove duplicate PreToolUse hook entry | 5 min | -15ms per tool call |
-| 28 | Return line counts from pre_extract instead of re-reading | 10 min | Eliminate redundant I/O |
-| 30 | Fix devtools.py docstring | 1 min | Accurate docs |
-| 16 | Pass `captured_set` through call chain | 15 min | Eliminate 2 file reads |
-| 25 | Check `should_synthesize()` BEFORE `get_pending_days()` | 5 min | Skip expensive scan when synthesis not due |
+| # | Fix | Effort | Impact | Status |
+|---|-----|--------|--------|--------|
+| 2 | Fix SKILL.md default values | 5 min | Correct user docs | ✅ Done |
+| 11 | Remove duplicate PreToolUse hook entry | 5 min | -15ms per tool call | Open |
+| 28 | Return line counts from pre_extract instead of re-reading | 10 min | Eliminate redundant I/O | ✅ Done (rewritten) |
+| 30 | Fix devtools.py docstring | 1 min | Accurate docs | ✅ Done |
+| 16 | Pass `captured_set` through call chain | 15 min | Eliminate 2 file reads | Open |
+| 25 | Check `should_synthesize()` BEFORE `get_pending_days()` | 5 min | Skip expensive scan when synthesis not due | Open |
