@@ -73,6 +73,9 @@ class TestExtractTextContent:
     "<command-name>/synthesize</command-name> some content",
     "Some text with <system-reminder> embedded",
     "[Request interrupted by user]",
+    "===DAILY:2026-02-20===\n# 2026-02-20\n## Actions\n- [global/implement] something",
+    "python3 $HOME/.claude/scripts/synthesis.py apply /tmp/output.txt --sidecars /tmp/s.sessions",
+    "## AUTO-SYNTHESIZE REQUIRED\nThere are 2 pending date(s)",
 ])
 def test_should_skip(content):
     assert should_skip_message(content)

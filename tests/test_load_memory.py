@@ -5,6 +5,7 @@ Unit tests for load_memory.py
 Run with: python -m pytest tests/test_load_memory.py -v
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -15,7 +16,9 @@ from load_memory import (
     _build_preextracted_prompt,
     _build_synthesis_instructions,
     _build_synthesis_prompt,
+    _find_projects_in_sidecars,
     _get_project_names_str,
+    _strip_profile_sections,
     load_daily_summaries,
     load_global_memory,
     load_project_history,
@@ -23,6 +26,91 @@ from load_memory import (
     pre_extract_transcripts,
     should_synthesize,
 )
+
+# =============================================================================
+# _strip_profile_sections Tests
+# =============================================================================
+
+
+SAMPLE_GLOBAL_LTM = """# Long-Term Memory
+
+## About Me
+- **Name**: Test User
+- **Role**: Developer
+
+## Current Projects
+- **ProjectA**: Building stuff
+
+## Technical Environment
+- **OS**: Linux
+- **Tools**: vim, git
+
+## Patterns & Preferences
+- Prefers tabs over spaces
+
+## Pinned
+- (2026-01-01) [pattern] Important pinned item
+
+## Key Actions
+- (2026-02-01) [implement] Built feature X
+
+## Key Decisions
+- (2026-02-01) [design] Chose architecture Y
+
+## Key Learnings
+- (2026-02-01) [gotcha] Watch out for Z
+
+## Key Lessons
+- (2026-02-01) [tip] Use command W
+"""
+
+
+class TestStripProfileSections:
+    def test_strips_profile_sections(self):
+        """About Me, Current Projects, Technical Environment, Patterns & Preferences removed."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## About Me" not in result
+        assert "Test User" not in result
+        assert "## Current Projects" not in result
+        assert "ProjectA" not in result
+        assert "## Technical Environment" not in result
+        assert "## Patterns & Preferences" not in result
+        assert "tabs over spaces" not in result
+
+    def test_keeps_key_sections(self):
+        """Key Actions/Decisions/Learnings/Lessons preserved."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## Key Actions" in result
+        assert "Built feature X" in result
+        assert "## Key Decisions" in result
+        assert "Chose architecture Y" in result
+        assert "## Key Learnings" in result
+        assert "Watch out for Z" in result
+        assert "## Key Lessons" in result
+        assert "Use command W" in result
+
+    def test_keeps_pinned(self):
+        """Pinned section preserved."""
+        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
+        assert "## Pinned" in result
+        assert "Important pinned item" in result
+
+    def test_empty_content(self):
+        """Empty string returns empty."""
+        assert _strip_profile_sections("") == ""
+
+    def test_project_ltm_unchanged(self):
+        """Content without profile sections passes through unchanged."""
+        project_content = """# Project Memory
+
+## Pinned
+- Important
+
+## Key Learnings
+- (2026-02-01) [pattern] Something useful
+"""
+        assert _strip_profile_sections(project_content) == project_content
+
 
 # =============================================================================
 # should_synthesize Tests
@@ -562,8 +650,8 @@ class TestBuildPreextractedPrompt:
             embedded_files={"transcripts": {"2026-02-22": "data"}},
         )
         assert "synthesis.py apply" in prompt
-        assert "Do NOT generate a summary" in prompt
-        assert "Do NOT use any other tools" in prompt
+        assert "Output only the structured format" in prompt
+        assert "Only use the Write and Bash tools" in prompt
 
     def test_no_auto_extract_fallback(self):
         """_build_autoextract_prompt should no longer exist."""
@@ -719,16 +807,19 @@ class TestBuildEmbeddedFiles:
         assert "## Key Learnings" in result["global_ltm"]
 
     def test_reads_project_ltms(self, tmp_path):
-        """Project LTM files are read and keyed by project name."""
+        """Project LTM files are read when project found in sidecars."""
         proj_dir = tmp_path / "project-memory"
         proj_dir.mkdir()
         (proj_dir / "myproject-long-term-memory.md").write_text("project content")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"myproject"}):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = proj_dir
-            result = _build_embedded_files({})
+            result = _build_embedded_files({"2026-02-01": str(extract)})
 
         assert result["project_ltms"]["myproject"] == "project content"
 
@@ -763,20 +854,150 @@ class TestBuildEmbeddedFiles:
         assert result["project_ltms"] == {}
 
     def test_multiple_projects(self, tmp_path):
-        """Multiple project LTM files are all read."""
+        """Multiple project LTM files are read when found in sidecars."""
         proj_dir = tmp_path / "project-memory"
         proj_dir.mkdir()
         (proj_dir / "alpha-long-term-memory.md").write_text("alpha content")
         (proj_dir / "beta-long-term-memory.md").write_text("beta content")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
 
         with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"alpha", "beta"}):
             mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
             mock_pd.return_value = proj_dir
-            result = _build_embedded_files({})
+            result = _build_embedded_files({"2026-02-01": str(extract)})
 
         assert result["project_ltms"]["alpha"] == "alpha content"
         assert result["project_ltms"]["beta"] == "beta content"
+
+    def test_filters_unmentioned_projects(self, tmp_path):
+        """Project LTMs not in sidecars are excluded."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "mentioned-long-term-memory.md").write_text("included")
+        (proj_dir / "unrelated-long-term-memory.md").write_text("excluded")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value={"mentioned"}):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert "mentioned" in result["project_ltms"]
+        assert "unrelated" not in result["project_ltms"]
+
+
+# =============================================================================
+# _find_projects_in_sidecars Tests
+# =============================================================================
+
+
+class TestFindProjectsInSidecars:
+    """Tests for _find_projects_in_sidecars helper."""
+
+    def test_maps_session_to_project(self, tmp_path):
+        """Session ID in sidecar maps to project name via projects-index."""
+        # Set up extract + sidecar
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("abc-123\n")
+
+        # Set up Claude projects dir with session file
+        claude_proj = tmp_path / "projects" / "-home-user-myproject"
+        claude_proj.mkdir(parents=True)
+        (claude_proj / "abc-123.jsonl").write_text("")
+
+        index = {"projects": {"/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}}}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == {"myproject"}
+
+    def test_multiple_sessions_different_projects(self, tmp_path):
+        """Sessions from different projects return both project names."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("sess-1\nsess-2\n")
+
+        claude_proj_a = tmp_path / "projects" / "-proj-a"
+        claude_proj_a.mkdir(parents=True)
+        (claude_proj_a / "sess-1.jsonl").write_text("")
+
+        claude_proj_b = tmp_path / "projects" / "-proj-b"
+        claude_proj_b.mkdir(parents=True)
+        (claude_proj_b / "sess-2.jsonl").write_text("")
+
+        index = {"projects": {
+            "/proj/a": {"name": "alpha", "encodedPaths": ["-proj-a"]},
+            "/proj/b": {"name": "beta", "encodedPaths": ["-proj-b"]},
+        }}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == {"alpha", "beta"}
+
+    def test_no_sidecar_returns_empty(self, tmp_path):
+        """Missing sidecar file returns empty set."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        # No .sessions file created
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text("{}")
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == set()
+
+    def test_empty_extracted_files(self):
+        """Empty extracted_files returns empty set."""
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+            mock_idx.return_value = Path("/nonexistent/index.json")
+            result = _find_projects_in_sidecars({})
+
+        assert result == set()
+
+    def test_session_not_in_index_skipped(self, tmp_path):
+        """Session in unknown project dir is silently skipped."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+        sidecar = tmp_path / "extract.sessions"
+        sidecar.write_text("orphan-sess\n")
+
+        claude_proj = tmp_path / "projects" / "-unknown-dir"
+        claude_proj.mkdir(parents=True)
+        (claude_proj / "orphan-sess.jsonl").write_text("")
+
+        # Index has no entry for -unknown-dir
+        index = {"projects": {}}
+
+        with mock.patch("load_memory.get_projects_index_file") as mock_idx, \
+             mock.patch("load_memory.get_projects_dir") as mock_pd:
+            mock_idx.return_value = tmp_path / "index.json"
+            (tmp_path / "index.json").write_text(json.dumps(index))
+            mock_pd.return_value = tmp_path / "projects"
+            result = _find_projects_in_sidecars({"2026-02-01": str(extract)})
+
+        assert result == set()
 
 
 # =============================================================================

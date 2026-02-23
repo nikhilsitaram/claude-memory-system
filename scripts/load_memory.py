@@ -35,6 +35,7 @@ from memory_utils import (
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
+    get_projects_dir,
     get_projects_index_file,
     get_working_days,
     load_json_file,
@@ -218,6 +219,42 @@ def _get_project_names_str() -> str:
     return ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
 
 
+import re
+
+# Profile sections in global LTM that are never dedup targets
+_PROFILE_HEADERS_RE = re.compile(
+    r"^## (?:About Me|Current Projects|Technical Environment|Patterns & Preferences)\s*$"
+)
+
+
+def _strip_profile_sections(content: str) -> str:
+    """Strip auto-pinned profile sections from global LTM for synthesis prompts.
+
+    Removes About Me, Current Projects, Technical Environment, and
+    Patterns & Preferences sections (including their content) since these
+    are never dedup targets and add ~4KB of bloat.
+
+    Keeps: title line, ## Pinned, ## Key * sections, and all other headers.
+    """
+    if not content:
+        return content
+
+    lines = content.split("\n")
+    result: list[str] = []
+    skipping = False
+
+    for line in lines:
+        if _PROFILE_HEADERS_RE.match(line):
+            skipping = True
+            continue
+        if skipping and line.startswith("## "):
+            skipping = False
+        if not skipping:
+            result.append(line)
+
+    return "\n".join(result)
+
+
 def _build_synthesis_instructions(project_names_str: str) -> str:
     """Build the shared synthesis instructions block (tagging, routing, dedup)."""
     return '''**Daily summary format:**
@@ -331,49 +368,64 @@ def _build_preextracted_prompt(
     # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
     output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
 
-    return f'''Synthesize these session transcripts into daily summaries and route key learnings.
+    first_date = sorted(pending_dates)[0]
 
-## Inputs
+    return f'''You are a structured data extractor. Your job is to read session transcripts and produce ONLY delimited structured output — no prose, no commentary, no summary.
 
-**Pending dates:** {dates_str}
+## Output Format
 
-{transcript_block}
+Your output must follow this exact structure. Here is a complete realistic example:
+
+===DAILY:2026-02-20===
+# 2026-02-20
+## Actions
+- [myproject/implement] Built REST API endpoints for user authentication
+- [global/implement] Configured pre-commit hooks for Python linting
+
+## Decisions
+- [myproject/design] JWT tokens over session cookies — stateless scales better for microservices
+
+## Learnings
+- [myproject/gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+- [global/pattern] `pytest -x --tb=short` stops on first failure with compact output — faster debug cycles
+
+## Lessons
+- [global/tip] `git stash -u` includes untracked files — plain `git stash` misses them
+
+===ROUTE:myproject:Key Learnings===
+- (2026-02-20) [gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+
+===ROUTE:global:Key Lessons===
+- (2026-02-20) [tip] `git stash -u` includes untracked files — plain `git stash` misses them
+
+===END===
+
+Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing else.
+
+## Delivery
+
+Only use the Write and Bash tools — no other tools.
+
+1. Write(`{output_filename}`, <your structured output>)
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}`
+
+## Synthesis Instructions
+
+{synthesis_instructions}
 
 ## Existing Long-Term Memory (for dedup)
 
 {ltm_block}
 
-## Instructions
+## Session Transcripts
 
-{synthesis_instructions}
+**Pending dates:** {dates_str}
 
-## Output Format
+{transcript_block}
 
-Generate EXACTLY this structure — nothing else:
+## Reminder
 
-```
-===DAILY:YYYY-MM-DD===
-[full daily file markdown for that date]
-
-===ROUTE:scope:section===
-- (YYYY-MM-DD) [type] Description
-
-===END===
-```
-
-Where:
-- `===DAILY:YYYY-MM-DD===` contains the complete daily summary for that date
-- `===ROUTE:scope:section===` contains entries to route to LTM (scope = `global` or project name, section = `Key Actions`, `Key Decisions`, `Key Learnings`, or `Key Lessons`)
-- `===END===` marks the end of output
-
-## Delivery
-
-Write your structured output to a temp file, then run the apply script:
-
-1. Write(`{output_filename}`, <your structured output above>)
-2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}`
-
-Do NOT generate a summary. Do NOT use any other tools besides Write and Bash.'''
+Output only the structured format shown above. Start with ===DAILY:{first_date}=== and end with ===END===.'''
 
 
 def _build_synthesis_prompt(
@@ -400,6 +452,50 @@ def _build_synthesis_prompt(
     )
 
 
+def _find_projects_in_sidecars(extracted_files: dict[str, str]) -> set[str]:
+    """Find project names from session IDs in sidecar files.
+
+    Reads .sessions sidecar files, locates each session's project directory
+    under ~/.claude/projects/, and maps to project names via projects-index.
+
+    Returns set of project names that had sessions in the extracted files.
+    """
+    projects_index = load_json_file(get_projects_index_file(), {})
+
+    # Build reverse lookup: encoded dir name -> project name
+    encoded_to_name: dict[str, str] = {}
+    for data in projects_index.get("projects", {}).values():
+        name = data.get("name", "")
+        if name:
+            for enc in data.get("encodedPaths", []):
+                encoded_to_name[enc] = name
+
+    # Collect all session IDs from sidecar files
+    session_ids: set[str] = set()
+    for path in extracted_files.values():
+        sidecar = Path(path).with_suffix(".sessions")
+        if sidecar.exists():
+            try:
+                for line in sidecar.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        session_ids.add(line)
+            except IOError:
+                pass
+
+    # Map session IDs to project names via their parent directory
+    claude_projects_dir = get_projects_dir()
+    result: set[str] = set()
+    for sid in session_ids:
+        for proj_dir in claude_projects_dir.iterdir():
+            if (proj_dir / f"{sid}.jsonl").exists():
+                name = encoded_to_name.get(proj_dir.name)
+                if name:
+                    result.add(name)
+                break
+    return result
+
+
 def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
     """Pre-read all files for embedding in synthesis prompt.
 
@@ -421,17 +517,22 @@ def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
     global_ltm_file = get_global_memory_file()
     if global_ltm_file.exists():
         try:
-            embedded["global_ltm"] = global_ltm_file.read_text(encoding="utf-8")
+            embedded["global_ltm"] = _strip_profile_sections(
+                global_ltm_file.read_text(encoding="utf-8")
+            )
         except IOError:
             pass
+    # Only include project LTMs for projects that had sessions extracted
+    relevant_projects = _find_projects_in_sidecars(extracted_files)
     proj_dir = get_project_memory_dir()
     if proj_dir.exists():
         for f in proj_dir.glob("*-long-term-memory.md"):
             name = f.stem.replace("-long-term-memory", "")
-            try:
-                embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
-            except IOError:
-                pass
+            if name in relevant_projects:
+                try:
+                    embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
+                except IOError:
+                    pass
     return embedded
 
 
