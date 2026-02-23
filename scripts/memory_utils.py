@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +55,12 @@ __all__ = [
     "filter_daily_content",
     "find_current_project",
     "get_working_days",
+    # Synthesis state
+    "get_synthesis_state_file",
+    "load_synthesis_state",
+    "save_synthesis_state",
+    "update_synthesis_state",
+    "prune_captured_from_state",
     # Utilities
     "estimate_tokens",
     "project_name_to_filename",
@@ -706,6 +712,58 @@ def is_routed_match(stm_entry: str, ltm_entry: str, threshold: float = 0.5) -> b
     smaller = min(len(stm_kw), len(ltm_kw))
 
     return overlap / smaller >= threshold
+
+
+def get_synthesis_state_file() -> Path:
+    """Get the .synthesis-state.json file path."""
+    return get_memory_dir() / ".synthesis-state.json"
+
+
+def load_synthesis_state() -> dict:
+    """Load synthesis state (high water marks per session)."""
+    state_file = get_synthesis_state_file()
+    data = load_json_file(state_file, default={"sessions": {}})
+    if "sessions" not in data:
+        data["sessions"] = {}
+    return data
+
+
+def save_synthesis_state(state: dict) -> None:
+    """Save synthesis state atomically (write to tmp, rename).
+
+    Not using save_json_file because we need atomic rename (write tmp + rename).
+    """
+    state_file = get_synthesis_state_file()
+    tmp_file = state_file.with_suffix(".tmp")
+    tmp_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    tmp_file.rename(state_file)
+
+
+def update_synthesis_state(session_updates: dict[str, dict]) -> None:
+    """Update synthesis state with new offsets for given sessions.
+
+    Args:
+        session_updates: Dict mapping session_id -> {"offset": int, "lines": int}
+    """
+    state = load_synthesis_state()
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for sid, info in session_updates.items():
+        state["sessions"][sid] = {
+            "offset": info["offset"],
+            "lines": info["lines"],
+            "last_synthesized": now_iso,
+        }
+    save_synthesis_state(state)
+
+
+def prune_captured_from_state(captured_ids: set[str]) -> None:
+    """Remove captured session IDs from synthesis state (cleanup)."""
+    state = load_synthesis_state()
+    for sid in captured_ids:
+        state["sessions"].pop(sid, None)
+    save_synthesis_state(state)
 
 
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
