@@ -1123,5 +1123,106 @@ class TestPreExtractTranscriptsIncremental:
         assert offsets["s2"]["offset"] == 300
 
 
+# =============================================================================
+# _build_embedded_files with dailies Tests
+# =============================================================================
+
+
+class TestBuildEmbeddedFilesWithDailies:
+    """Test that _build_embedded_files includes existing daily files as merge context."""
+
+    def test_includes_existing_daily_when_available(self, tmp_path):
+        """Existing daily file for a date is read into embedded dict."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (daily_dir / "2026-02-22.md").write_text("## Actions\n- [global/implement] Old stuff")
+
+        extract = tmp_path / "extract.txt"
+        extract.write_text("transcript data")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            mock_dd.return_value = daily_dir
+            result = _build_embedded_files(
+                {"2026-02-22": str(extract)},
+                include_dailies=True,
+            )
+
+        assert "existing_dailies" in result
+        assert "2026-02-22" in result["existing_dailies"]
+        assert "Old stuff" in result["existing_dailies"]["2026-02-22"]
+
+    def test_no_daily_returns_empty(self, tmp_path):
+        """When no daily file exists for a date, it's not in embedded dict."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory.get_daily_dir") as mock_dd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            mock_dd.return_value = daily_dir
+            result = _build_embedded_files({}, include_dailies=True)
+
+        assert result.get("existing_dailies", {}) == {}
+
+    def test_include_dailies_false_skips(self, tmp_path):
+        """include_dailies=False (default) does not read daily files."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (daily_dir / "2026-02-22.md").write_text("## Actions\n- stuff")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
+             mock.patch("load_memory._find_projects_in_sidecars", return_value=set()):
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-22": str(tmp_path / "x.txt")})
+
+        assert "existing_dailies" not in result or result["existing_dailies"] == {}
+
+
+# =============================================================================
+# Prompt merge context Tests
+# =============================================================================
+
+
+class TestPromptMergeContext:
+    """Test that prompts include merge instructions when existing dailies present."""
+
+    def test_prompt_includes_existing_daily(self):
+        """When existing_dailies in embedded, prompt includes merge context section."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "new transcript data"},
+                "existing_dailies": {"2026-02-22": "## Actions\n- [global/implement] Old stuff"},
+            },
+        )
+        assert "Existing daily summary" in prompt
+        assert "Old stuff" in prompt
+        assert "merge" in prompt.lower()
+
+    def test_prompt_no_merge_when_no_dailies(self):
+        """Without existing_dailies, no merge section in prompt."""
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-02-22"],
+            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
+            synthesis_instructions="INSTRUCTIONS",
+            embedded_files={
+                "transcripts": {"2026-02-22": "transcript data"},
+            },
+        )
+        assert "Existing daily summary" not in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -360,6 +360,26 @@ def _build_preextracted_prompt(
             ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
     ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
 
+    # Build existing daily merge context (for incremental synthesis)
+    existing_dailies = embedded_files.get("existing_dailies", {})
+    merge_sections = []
+    for date in sorted(pending_dates):
+        existing = existing_dailies.get(date, "")
+        if existing:
+            merge_sections.append(f"### Existing daily summary for {date}\n{existing}")
+
+    merge_instructions = ""
+    if merge_sections:
+        merge_block = "\n\n".join(merge_sections)
+        merge_instructions = f"""
+## Existing Daily Summaries (merge context)
+
+These daily files already exist from a previous synthesis run. When you see sessions marked '(continued — new messages only)', merge new insights into the existing summary. Do NOT duplicate entries already present. Add only genuinely new items.
+
+{merge_block}
+
+"""
+
     # Build sidecar and extract paths for synthesis.py apply command
     sidecar_paths = []
     extract_paths = []
@@ -423,7 +443,7 @@ Only use the Write and Bash tools — no other tools.
 ## Existing Long-Term Memory (for dedup)
 
 {ltm_block}
-
+{merge_instructions}
 ## Session Transcripts
 
 **Pending dates:** {dates_str}
@@ -503,7 +523,7 @@ def _find_projects_in_sidecars(extracted_files: dict[str, str]) -> set[str]:
     return result
 
 
-def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
+def _build_embedded_files(extracted_files: dict[str, str], include_dailies: bool = False) -> dict:
     """Pre-read all files for embedding in synthesis prompt.
 
     Reads transcript extracts, global LTM, and project LTMs into memory
@@ -511,9 +531,10 @@ def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
 
     Args:
         extracted_files: Dict mapping date -> extract file path
+        include_dailies: If True, read existing daily summary files as merge context
 
     Returns:
-        Dict with keys: transcripts, global_ltm, project_ltms
+        Dict with keys: transcripts, global_ltm, project_ltms, (existing_dailies)
     """
     embedded: dict = {"transcripts": {}, "global_ltm": "", "project_ltms": {}}
     for date, path in extracted_files.items():
@@ -538,6 +559,17 @@ def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
             if name in relevant_projects:
                 try:
                     embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
+                except IOError:
+                    pass
+    # Read existing daily files as merge context (for incremental synthesis)
+    if include_dailies:
+        daily_dir = get_daily_dir()
+        embedded["existing_dailies"] = {}
+        for date in extracted_files:
+            daily_file = daily_dir / f"{date}.md"
+            if daily_file.exists():
+                try:
+                    embedded["existing_dailies"][date] = daily_file.read_text(encoding="utf-8")
                 except IOError:
                     pass
     return embedded
