@@ -51,6 +51,9 @@ from transcript_ops import (
 # Maximum output lines for pre-extracted transcripts fed to the synthesis subagent
 TRANSCRIPT_LINE_BUDGET = 1950
 
+# Directory for synthesis prompt temp files (avoids 30K Bash truncation)
+SYNTHESIS_PROMPT_DIR = "/tmp"
+
 # =============================================================================
 # Key Interfaces
 # =============================================================================
@@ -612,6 +615,49 @@ def pre_extract_transcripts_incremental(
     return extracted_files, session_offsets, daily_data
 
 
+def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
+    """Generate synthesis prompt and write to temp file.
+
+    Prints to stdout:
+        model=<model>
+        prompt_file=<path>
+    """
+    settings = load_settings()
+    model = settings.get("synthesis", {}).get("model", "sonnet")
+
+    pending_dates = get_recent_days(exclude_session_id=exclude_session_id)
+    if not pending_dates:
+        print("No pending transcripts.")
+        return
+
+    extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
+        pending_dates, exclude_session_id=exclude_session_id
+    )
+
+    if not extracted_files:
+        print("No pending transcripts with content.")
+        return
+
+    include_dailies = bool(session_offsets)
+    embedded = _build_embedded_files(
+        extracted_files, include_dailies=include_dailies, daily_data=daily_data
+    )
+
+    if session_offsets:
+        offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
+        Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
+        embedded["offsets_path"] = offsets_path
+
+    prompt = _build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded)
+
+    # Write prompt to temp file instead of stdout (avoids 30K Bash truncation)
+    prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{os.getpid()}.txt"
+    Path(prompt_path).write_text(prompt, encoding="utf-8")
+
+    print(f"model={model}")
+    print(f"prompt_file={prompt_path}")
+
+
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
@@ -681,6 +727,10 @@ def main() -> None:
                 list(extracted_files.keys()), extracted_files, embedded
             )
 
+            # Write prompt to temp file (avoids 30K char Bash truncation)
+            prompt_path = f"/tmp/synthesis-prompt-{os.getpid()}.txt"
+            Path(prompt_path).write_text(synth_prompt, encoding="utf-8")
+
             print("## AUTO-SYNTHESIZE REQUIRED")
             print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
             print()
@@ -688,11 +738,9 @@ def main() -> None:
                 print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
             else:
                 print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
-            print("```")
-            print(f'Use the Task tool with subagent_type="general-purpose", model="{synthesis_model}"'
-                  f'{", run_in_background=true" if synthesis_background else ""} and this prompt:')
-            print(synth_prompt)
-            print("```")
+            print(f"Read the prompt file at `{prompt_path}` and use it as the subagent prompt:")
+            print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
+                  f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {prompt_path}>)')
             print()
 
     # Load global long-term memory
@@ -761,38 +809,6 @@ if __name__ == "__main__":
         exclude_id = None
         if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
             exclude_id = sys.argv[3]
-
-        settings = load_settings()
-        model = settings.get("synthesis", {}).get("model", "sonnet")
-
-        # Pre-compute pending dates
-        pending_dates = get_recent_days(exclude_session_id=exclude_id)
-        if not pending_dates:
-            print("No pending transcripts.")
-            sys.exit(0)
-
-        # Pre-extract transcripts incrementally
-        extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
-            pending_dates, exclude_session_id=exclude_id
-        )
-
-        if not extracted_files:
-            print("No pending transcripts with content.")
-            sys.exit(0)
-
-        # Pre-read all files for embedding in prompt
-        include_dailies = bool(session_offsets)
-        embedded = _build_embedded_files(
-            extracted_files, include_dailies=include_dailies, daily_data=daily_data
-        )
-
-        # Write session offsets to temp file for synthesis.py state update
-        if session_offsets:
-            offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
-            Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
-            embedded["offsets_path"] = offsets_path
-
-        print(f"model={model}")
-        print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded))
+        write_synthesis_prompt(exclude_session_id=exclude_id)
     else:
         main()
