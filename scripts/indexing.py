@@ -563,10 +563,10 @@ def cmd_mark_captured(args: argparse.Namespace) -> int:
 
         print(f"Marked {marked} sessions, skipped {skipped_today} (today's sessions)", file=sys.stderr)
 
-        # Prune marked sessions from synthesis state (cleanup)
+        # Prune newly marked sessions from synthesis state (cleanup)
         if marked > 0:
             try:
-                prune_captured_from_state(captured)
+                prune_captured_from_state(set(session_ids))
             except Exception:
                 pass  # Non-critical cleanup
 
@@ -583,9 +583,9 @@ def cmd_mark_captured(args: argparse.Namespace) -> int:
 
         print(f"Marked {len(args.session_ids)} sessions as captured.", file=sys.stderr)
 
-        # Prune marked sessions from synthesis state (cleanup)
+        # Prune newly marked sessions from synthesis state (cleanup)
         try:
-            prune_captured_from_state(captured)
+            prune_captured_from_state(set(args.session_ids))
         except Exception:
             pass  # Non-critical cleanup
 
