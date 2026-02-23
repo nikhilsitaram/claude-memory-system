@@ -78,8 +78,33 @@ def detect_python_command() -> str:
 
 
 def get_script_dir() -> Path:
-    """Get the directory containing this install script."""
-    return Path(__file__).parent.resolve()
+    """Get the directory containing this install script.
+
+    If running from a git worktree, resolves to the main working tree
+    so that symlinks remain valid after worktree cleanup.
+    """
+    this_dir = Path(__file__).parent.resolve()
+
+    # .git is a file (not a directory) in worktrees — detect and redirect
+    git_marker = this_dir / ".git"
+    if git_marker.is_file():
+        try:
+            result = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                capture_output=True, text=True, cwd=this_dir,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith("worktree "):
+                        main_tree = Path(line.split(" ", 1)[1])
+                        if main_tree != this_dir and (main_tree / "install.py").exists():
+                            print(f"Note: Running from worktree; symlinks will target main repo: {main_tree}")
+                            return main_tree
+                        break  # First entry is always the main worktree
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+
+    return this_dir
 
 
 def create_directories() -> None:
