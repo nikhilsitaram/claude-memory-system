@@ -385,7 +385,9 @@ class TestRunPostProcessing:
         extract = tmp_path / "extract.txt"
         extract.write_text("data")
 
-        with patch("synthesis.subprocess.run"), \
+        with patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"):
             run_post_processing(extract_paths=[str(extract)])
 
@@ -393,7 +395,9 @@ class TestRunPostProcessing:
 
     def test_prunes_stale_state(self):
         """Calls prune_stale_state_entries during post-processing."""
-        with patch("synthesis.subprocess.run"), \
+        with patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries") as mock_prune:
             run_post_processing(extract_paths=[])
 
@@ -401,7 +405,9 @@ class TestRunPostProcessing:
 
     def test_updates_timestamp(self, tmp_path):
         """Writes .last-synthesis timestamp file."""
-        with patch("synthesis.subprocess.run"), \
+        with patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
@@ -624,7 +630,9 @@ class TestRunPostProcessingOffsetsCleanup:
         offsets_file = tmp_path / "offsets.json"
         offsets_file.write_text('{"s1": {"offset": 100}}')
 
-        with patch("synthesis.subprocess.run"), \
+        with patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(
@@ -636,12 +644,55 @@ class TestRunPostProcessingOffsetsCleanup:
 
     def test_no_offsets_no_error(self, tmp_path):
         """run_post_processing works fine without offsets_json."""
-        with patch("synthesis.subprocess.run"), \
+        with patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
 
         # Should not raise
+
+
+class TestRunPostProcessingNoSubprocess:
+    """Verify post-processing uses function calls, not subprocess.run."""
+
+    def test_no_subprocess_import(self):
+        """synthesis module should not import subprocess at all."""
+        import synthesis
+
+        assert not hasattr(synthesis, "subprocess"), \
+            "synthesis.py should not import subprocess anymore"
+
+    def test_calls_run_mark_routed(self, tmp_path):
+        """run_post_processing calls run_mark_routed."""
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_mark_routed") as mock_mr, \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"):
+            run_post_processing(extract_paths=[])
+        mock_mr.assert_called_once()
+
+    def test_calls_run_validate_ltm(self, tmp_path):
+        """run_post_processing calls run_validate_ltm."""
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm") as mock_vl, \
+             patch("synthesis.run_decay"):
+            run_post_processing(extract_paths=[])
+        mock_vl.assert_called_once()
+
+    def test_calls_run_decay(self, tmp_path):
+        """run_post_processing calls run_decay."""
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay") as mock_decay:
+            run_post_processing(extract_paths=[])
+        mock_decay.assert_called_once()
 
 
 # =============================================================================

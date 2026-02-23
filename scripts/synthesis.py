@@ -15,9 +15,9 @@ Requirements: Python 3.9+
 """
 
 import argparse
+import io
 import json
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +45,9 @@ __all__ = [
     "write_daily_files",
     "append_to_ltm",
     "apply_results",
+    "run_mark_routed",
+    "run_validate_ltm",
+    "run_decay",
     "run_post_processing",
 ]
 
@@ -316,6 +319,53 @@ def append_to_ltm(
     return warnings
 
 
+def run_mark_routed() -> None:
+    """Run mark-routed dedup as function call (no subprocess)."""
+    try:
+        from devtools import cmd_mark_routed
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            args = argparse.Namespace(dry_run=False)
+            cmd_mark_routed(args)
+        finally:
+            sys.stdout = old_stdout
+    except Exception:
+        pass  # Non-critical
+
+
+def run_validate_ltm() -> None:
+    """Run LTM validation as function call (no subprocess)."""
+    try:
+        from devtools import cmd_validate_ltm
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            args = argparse.Namespace()
+            cmd_validate_ltm(args)
+        finally:
+            sys.stdout = old_stdout
+    except Exception:
+        pass  # Non-critical
+
+
+def run_decay() -> None:
+    """Run decay as function call (no subprocess)."""
+    try:
+        from decay import run as decay_run
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            decay_run(dry_run=False)
+        finally:
+            sys.stdout = old_stdout
+    except Exception:
+        pass  # Non-critical
+
+
 def run_post_processing(
     extract_paths: list[str],
     offsets_json: str | None = None,
@@ -339,26 +389,10 @@ def run_post_processing(
         except OSError:
             pass
 
-    # Run mark-routed (deterministic, from devtools)
-    subprocess.run(
-        [sys.executable, str(script_dir / "devtools.py"), "mark-routed"],
-        capture_output=True,
-        timeout=30,
-    )
-
-    # Validate LTM
-    subprocess.run(
-        [sys.executable, str(script_dir / "devtools.py"), "validate-ltm"],
-        capture_output=True,
-        timeout=30,
-    )
-
-    # Run decay
-    subprocess.run(
-        [sys.executable, str(script_dir / "decay.py")],
-        capture_output=True,
-        timeout=60,
-    )
+    # Direct function calls instead of subprocesses
+    run_mark_routed()
+    run_validate_ltm()
+    run_decay()
 
     # Update timestamp
     ts_file = get_memory_dir() / ".last-synthesis"
