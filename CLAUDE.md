@@ -104,9 +104,7 @@ python3 -m pytest tests/ -q                  # Run all unit tests (do this first
 python3 -m pytest tests/ -v                  # Verbose output for debugging
 python3 install.py                           # Apply changes
 python3 ~/.claude/scripts/load_memory.py     # Test memory loading
-python3 ~/.claude/scripts/indexing.py list-pending  # Test indexing
-python3 ~/.claude/scripts/indexing.py extract 2026-02-06 --output /tmp/test.txt  # Test extract (no marking)
-python3 ~/.claude/scripts/indexing.py mark-captured --sidecar /tmp/test.sessions  # Test marking
+python3 ~/.claude/scripts/indexing.py list-recent  # Test recent session listing
 python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 ```
 
@@ -158,9 +156,9 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 |---------|----------------|
 | Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]` |
 | Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
-| Safe capture workflow | `extract` is pure read (never marks); `mark-captured --sidecar` skips today's sessions; subagent failure = full retry |
-| Session exclusion | `--exclude-session` flag + auto-uncapture on resume prevent active session data loss |
-| Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.captured` file tracks processed sessions |
+| Session exclusion | `--exclude-session` flag prevents active session from being synthesized |
+| Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.synthesis-state.json` tracks processing state |
+| Mtime-based recency | Sessions filtered by file modification time (default 7 days); stale state entries auto-pruned |
 | Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
 | Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read; `synthesis.py` applies output |
 | Zero-tool synthesis | `synthesis.py` parses structured output, applies daily files + LTM routes; `load_memory.py` embeds all inputs in prompt |
