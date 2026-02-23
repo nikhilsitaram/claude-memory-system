@@ -672,6 +672,46 @@ class TestBuildProjectsIndex:
 
         assert len(result["projects"]) == 0
 
+    def test_worktree_session_merges_into_parent_project(self, env):
+        """A session whose CWD is a worktree should merge into the main repo project."""
+        projects_dir, memory_dir, index_file = env
+
+        # Main repo project folder
+        main_folder = projects_dir / "main-repo"
+        main_folder.mkdir(parents=True)
+        sessions_index = {
+            "originalPath": "/home/user/myproject",
+            "entries": [{"created": "2026-01-15T10:00:00Z", "projectPath": "/home/user/myproject"}],
+        }
+        (main_folder / "sessions-index.json").write_text(json.dumps(sessions_index))
+
+        # Worktree session folder (different encoded name, worktree CWD)
+        wt_folder = projects_dir / "worktree-feature"
+        wt_folder.mkdir()
+        wt_sessions = {
+            "originalPath": "/home/user/myproject/.worktrees/feature",
+            "entries": [{"created": "2026-01-16T10:00:00Z", "projectPath": "/home/user/myproject/.worktrees/feature"}],
+        }
+        (wt_folder / "sessions-index.json").write_text(json.dumps(wt_sessions))
+
+        with mock.patch("indexing.resolve_worktree_to_main_repo") as mock_resolve:
+            # Worktree path resolves to main repo
+            def side_effect(p):
+                if ".worktrees" in p:
+                    return "/home/user/myproject"
+                return p
+            mock_resolve.side_effect = side_effect
+
+            index = build_projects_index()
+
+        projects = index["projects"]
+        canonical = "/home/user/myproject"
+
+        assert canonical in projects
+        assert len(projects) == 1, f"Expected 1 project, got {len(projects)}: {list(projects.keys())}"
+        assert "2026-01-15" in projects[canonical]["workDays"]
+        assert "2026-01-16" in projects[canonical]["workDays"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

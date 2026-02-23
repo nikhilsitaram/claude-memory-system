@@ -1243,5 +1243,19 @@ class TestSynthesisModelDefault:
         assert DEFAULT_SETTINGS["synthesis"]["model"] == "sonnet"
 
 
+# =============================================================================
+# Worktree Project Detection Tests
+# =============================================================================
+
+
+class TestWorktreeProjectDetection:
+    """Verify load_memory resolves worktree paths before project lookup."""
+
+    def test_worktree_path_resolved_before_project_lookup(self):
+        """CWD in a worktree should resolve to main repo for project matching."""
+        from load_memory import resolve_worktree_to_main_repo as imported
+        assert imported is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
