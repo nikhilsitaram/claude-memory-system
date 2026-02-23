@@ -40,6 +40,7 @@ from memory_utils import (
     get_projects_index_file,
     get_sessions_original_path,
     load_sessions_index,
+    resolve_worktree_to_main_repo,
     to_iso_z,
 )
 
@@ -352,6 +353,8 @@ def build_projects_index() -> dict:
         data = load_sessions_index(project_folder)
         if data:
             original_path = get_sessions_original_path(data)
+            if original_path:
+                original_path = resolve_worktree_to_main_repo(original_path)
 
             # Extract work days from session entries
             for entry in data.get("entries", []):
@@ -367,6 +370,8 @@ def build_projects_index() -> dict:
         jsonl_path, jsonl_days = _extract_from_jsonl(project_folder)
         if not original_path:
             original_path = jsonl_path
+            if original_path:
+                original_path = resolve_worktree_to_main_repo(original_path)
         work_days.update(jsonl_days)
 
         if not original_path or not work_days:
