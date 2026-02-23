@@ -866,6 +866,30 @@ class TestSynthesisState:
 # =============================================================================
 
 
+class TestWorktreePatternFallback:
+    """Tests for _worktree_pattern_fallback()."""
+
+    def test_worktree_path_resolves_to_parent(self):
+        """Path with /.worktrees/ returns everything before the marker."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/repo/.worktrees/feature") == "/repo"
+
+    def test_nested_worktree_path(self):
+        """Path with subdirectory after worktree name."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/repo/.worktrees/feature/src/main") == "/repo"
+
+    def test_non_worktree_path_unchanged(self):
+        """Path without /.worktrees/ returns unchanged."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/tmp/not-a-repo") == "/tmp/not-a-repo"
+
+    def test_worktrees_in_deep_path(self):
+        """Worktree marker deep in path resolves correctly."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/home/user/projects/myrepo/.worktrees/bugfix") == "/home/user/projects/myrepo"
+
+
 class TestResolveWorktreeToMainRepo:
     """Tests for resolve_worktree_to_main_repo()."""
 
@@ -889,22 +913,22 @@ class TestResolveWorktreeToMainRepo:
             result = resolve_worktree_to_main_repo("/home/user/project")
             assert result == "/home/user/project"
 
-    def test_non_git_directory_returns_unchanged(self):
-        """Non-git directory (git fails) returns original path."""
+    def test_non_git_non_worktree_returns_unchanged(self):
+        """Non-git directory without /.worktrees/ pattern returns unchanged."""
         with patch("memory_utils.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(128, "git")
             result = resolve_worktree_to_main_repo("/tmp/not-a-repo")
             assert result == "/tmp/not-a-repo"
 
-    def test_git_not_installed_returns_unchanged(self):
-        """If git binary not found, return original path."""
+    def test_git_not_installed_non_worktree_returns_unchanged(self):
+        """If git not found and no worktree pattern, return original path."""
         with patch("memory_utils.subprocess.run") as mock_run:
             mock_run.side_effect = FileNotFoundError("git not found")
             result = resolve_worktree_to_main_repo("/some/path")
             assert result == "/some/path"
 
-    def test_empty_git_output_returns_unchanged(self):
-        """If git returns empty output, return original path."""
+    def test_empty_git_output_non_worktree_returns_unchanged(self):
+        """If git returns empty output and no worktree pattern, return unchanged."""
         with patch("memory_utils.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout="\n"),
@@ -912,22 +936,54 @@ class TestResolveWorktreeToMainRepo:
             result = resolve_worktree_to_main_repo("/some/path")
             assert result == "/some/path"
 
-    def test_git_common_dir_failure_returns_unchanged(self):
-        """If first git call succeeds but second fails, return original path."""
+    def test_git_failure_with_worktree_path_uses_fallback(self):
+        """If git fails but path has /.worktrees/, use pattern fallback."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(128, "git")
+            result = resolve_worktree_to_main_repo("/repo/.worktrees/feature")
+            assert result == "/repo"
+
+    def test_git_common_dir_failure_with_worktree_path_uses_fallback(self):
+        """If second git call fails but path has /.worktrees/, use fallback."""
         with patch("memory_utils.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout="/repo/.worktrees/feature\n"),
                 subprocess.CalledProcessError(128, "git"),
             ]
             result = resolve_worktree_to_main_repo("/repo/.worktrees/feature")
-            assert result == "/repo/.worktrees/feature"
+            assert result == "/repo"
 
-    def test_first_call_nonzero_returns_unchanged(self):
-        """If --show-toplevel returns nonzero exit code, return original path."""
+    def test_first_call_nonzero_non_worktree_returns_unchanged(self):
+        """If --show-toplevel returns nonzero and no worktree pattern, return unchanged."""
         with patch("memory_utils.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=128, stdout="")
             result = resolve_worktree_to_main_repo("/some/path")
             assert result == "/some/path"
+
+    def test_first_call_nonzero_with_worktree_path_uses_fallback(self):
+        """If --show-toplevel returns nonzero but path has /.worktrees/, use fallback."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=128, stdout="")
+            result = resolve_worktree_to_main_repo("/repo/.worktrees/deleted-branch")
+            assert result == "/repo"
+
+    def test_deleted_worktree_resolves_via_fallback(self):
+        """Deleted worktree directory (git fails) resolves via pattern."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("no such directory")
+            result = resolve_worktree_to_main_repo("/home/user/myproject/.worktrees/feature-x")
+            assert result == "/home/user/myproject"
+
+    def test_worktrees_subdir_in_repo_resolves_via_fallback(self):
+        """/.worktrees/ subdirectory inside a repo (not a real git worktree) uses pattern fallback."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            # Git succeeds — toplevel and common_dir parent match (not a real worktree)
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/home/user/project\n"),
+                MagicMock(returncode=0, stdout="/home/user/project/.git\n"),
+            ]
+            result = resolve_worktree_to_main_repo("/home/user/project/.worktrees/feature")
+            assert result == "/home/user/project"
 
 
 if __name__ == "__main__":

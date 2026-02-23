@@ -730,12 +730,26 @@ def prune_stale_state_entries(max_age_days: int = 7) -> int:
     return len(to_remove)
 
 
+def _worktree_pattern_fallback(path: str) -> str:
+    """Resolve a worktree path using /.worktrees/ directory convention.
+
+    Fallback for when git is unavailable (directory deleted, git not installed).
+    If path contains /.worktrees/, returns everything before it.
+    """
+    marker = "/.worktrees/"
+    idx = path.find(marker)
+    if idx != -1:
+        return path[:idx]
+    return path
+
+
 def resolve_worktree_to_main_repo(path: str) -> str:
     """Resolve a git worktree path to its main repository root.
 
     Uses git rev-parse to detect if the given path is inside a worktree.
     If so, returns the main repository root. Otherwise returns the
-    original path unchanged. Non-git directories return unchanged.
+    original path unchanged. Falls back to /.worktrees/ path pattern
+    when git is unavailable (e.g. deleted worktree directories).
     """
     try:
         toplevel_result = subprocess.run(
@@ -743,20 +757,20 @@ def resolve_worktree_to_main_repo(path: str) -> str:
             capture_output=True, text=True, timeout=5,
         )
         if toplevel_result.returncode != 0:
-            return path
+            return _worktree_pattern_fallback(path)
         toplevel = toplevel_result.stdout.strip()
         if not toplevel:
-            return path
+            return _worktree_pattern_fallback(path)
 
         common_result = subprocess.run(
             ["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
         )
         if common_result.returncode != 0:
-            return path
+            return _worktree_pattern_fallback(path)
         common_dir = common_result.stdout.strip()
         if not common_dir:
-            return path
+            return _worktree_pattern_fallback(path)
 
         # common_dir is the main repo's .git/ directory
         # Its parent is the main repo root
@@ -766,9 +780,11 @@ def resolve_worktree_to_main_repo(path: str) -> str:
             # We're in a worktree — return the main repo root
             return main_repo_root
 
-        return path
+        # Git says not a worktree, but path may use /.worktrees/ convention
+        # (e.g. subdirectory within repo named .worktrees/)
+        return _worktree_pattern_fallback(path)
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return path
+        return _worktree_pattern_fallback(path)
 
 
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
