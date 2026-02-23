@@ -367,3 +367,149 @@ class TestAppendToLtm:
             template_dir=tmp_path / "no-templates",
         )
         assert len(warnings) > 0
+
+
+# =============================================================================
+# apply_results / run_post_processing Tests
+# =============================================================================
+
+
+from unittest.mock import patch  # noqa: E402
+
+from synthesis import apply_results, run_post_processing  # noqa: E402
+
+
+class TestRunPostProcessing:
+    def test_marks_captured_sessions(self, tmp_path):
+        """Runs mark-captured for each sidecar that exists."""
+        sidecar = tmp_path / "test.sessions"
+        sidecar.write_text("session-1\nsession-2\n")
+
+        with patch("synthesis.subprocess.run") as mock_run:
+            run_post_processing(
+                sidecar_paths=[str(sidecar)],
+                extract_paths=[],
+            )
+
+        # Should have been called for mark-captured, mark-routed, validate-ltm, decay
+        assert mock_run.call_count >= 1
+        # First call should be mark-captured with the sidecar
+        first_call_args = mock_run.call_args_list[0]
+        cmd = first_call_args[0][0]
+        assert "mark-captured" in cmd
+        assert str(sidecar) in cmd
+
+    def test_cleans_up_temp_files(self, tmp_path):
+        """Removes sidecar and extract temp files."""
+        sidecar = tmp_path / "test.sessions"
+        sidecar.write_text("data")
+        extract = tmp_path / "extract.txt"
+        extract.write_text("data")
+
+        with patch("synthesis.subprocess.run"):
+            run_post_processing(
+                sidecar_paths=[str(sidecar)],
+                extract_paths=[str(extract)],
+            )
+
+        assert not sidecar.exists()
+        assert not extract.exists()
+
+    def test_skips_missing_sidecar(self, tmp_path):
+        """Does not call mark-captured for sidecars that don't exist."""
+        missing = tmp_path / "nonexistent.sessions"
+
+        with patch("synthesis.subprocess.run") as mock_run:
+            run_post_processing(
+                sidecar_paths=[str(missing)],
+                extract_paths=[],
+            )
+
+        # mark-captured should NOT be called (sidecar missing)
+        for call in mock_run.call_args_list:
+            cmd = call[0][0]
+            assert "mark-captured" not in cmd
+
+    def test_updates_timestamp(self, tmp_path):
+        """Writes .last-synthesis timestamp file."""
+        with patch("synthesis.subprocess.run"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing(sidecar_paths=[], extract_paths=[])
+
+        ts_file = tmp_path / ".last-synthesis"
+        assert ts_file.exists()
+        content = ts_file.read_text()
+        assert "T" in content  # ISO format
+
+
+class TestApplyResults:
+    def test_full_pipeline(self, tmp_path):
+        """Integration test: parse -> mark_routed -> write -> append."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        global_ltm = tmp_path / "global-long-term-memory.md"
+        global_ltm.write_text(
+            "## Key Learnings\n<!-- decay -->\n\n"
+        )
+
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Learnings
+- [global/pattern] Important pattern
+
+===ROUTE:global:Key Learnings===
+- (2026-02-22) [pattern] Important pattern
+
+===END==="""
+
+        output_file = tmp_path / "synthesis-output.txt"
+        output_file.write_text(output_text)
+
+        with patch("memory_utils.get_daily_dir", return_value=daily_dir), \
+             patch("memory_utils.get_global_memory_file", return_value=global_ltm), \
+             patch("memory_utils.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"):
+            apply_results(
+                output_file=str(output_file),
+                sidecar_paths=[],
+                extract_paths=[],
+            )
+
+        # Daily file written with [routed] marking
+        daily_content = (daily_dir / "2026-02-22.md").read_text()
+        assert "[routed]" in daily_content
+
+        # LTM updated
+        ltm_content = global_ltm.read_text()
+        assert "Important pattern" in ltm_content
+
+    def test_no_dailies_skips_everything(self, tmp_path):
+        """If output has no ===DAILY: blocks, nothing happens."""
+        output_file = tmp_path / "bad-output.txt"
+        output_file.write_text("just garbage text")
+
+        with patch("synthesis.run_post_processing") as mock_post:
+            apply_results(str(output_file), [], [])
+            mock_post.assert_not_called()
+
+    def test_warnings_printed_to_stderr(self, tmp_path, capsys):
+        """Warnings from parsing are printed to stderr."""
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something"""
+        # No ===END=== marker
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        with patch("memory_utils.get_daily_dir", return_value=tmp_path / "daily"), \
+             patch("memory_utils.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("memory_utils.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [], [])
+
+        captured = capsys.readouterr()
+        assert "Warning:" in captured.err

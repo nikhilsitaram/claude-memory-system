@@ -14,7 +14,9 @@ Usage:
 Requirements: Python 3.9+
 """
 
+import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +25,8 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
+
+from memory_utils import get_memory_dir  # noqa: E402
 
 # Delimiter patterns
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")
@@ -229,8 +233,6 @@ def append_to_ltm(
 
         ltm_dir = get_project_memory_dir()
     if template_dir is None:
-        from memory_utils import get_memory_dir
-
         template_dir = get_memory_dir() / "templates"
 
     from memory_utils import project_name_to_filename
@@ -298,3 +300,117 @@ def append_to_ltm(
         target_file.write_text("\n".join(lines), encoding="utf-8")
 
     return warnings
+
+
+def run_post_processing(
+    sidecar_paths: list[str],
+    extract_paths: list[str],
+) -> None:
+    """Run mark-captured, cleanup, decay, validation, and timestamp update."""
+    from datetime import datetime, timezone
+
+    # Mark captured sessions
+    for sidecar in sidecar_paths:
+        if Path(sidecar).exists():
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(script_dir / "indexing.py"),
+                    "mark-captured",
+                    "--sidecar",
+                    sidecar,
+                ],
+                capture_output=True,
+                timeout=30,
+            )
+
+    # Cleanup temp files
+    for path in extract_paths + sidecar_paths:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # Run mark-routed (deterministic, from devtools)
+    subprocess.run(
+        [sys.executable, str(script_dir / "devtools.py"), "mark-routed"],
+        capture_output=True,
+        timeout=30,
+    )
+
+    # Validate LTM
+    subprocess.run(
+        [sys.executable, str(script_dir / "devtools.py"), "validate-ltm"],
+        capture_output=True,
+        timeout=30,
+    )
+
+    # Run decay
+    subprocess.run(
+        [sys.executable, str(script_dir / "decay.py")],
+        capture_output=True,
+        timeout=60,
+    )
+
+    # Update timestamp
+    ts_file = get_memory_dir() / ".last-synthesis"
+    ts_file.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
+def apply_results(
+    output_file: str,
+    sidecar_paths: list[str],
+    extract_paths: list[str],
+) -> None:
+    """Full pipeline: parse output -> mark routed -> write files -> post-process."""
+    text = Path(output_file).read_text(encoding="utf-8")
+    result = parse_synthesis_output(text)
+
+    if not result.dailies:
+        print("No daily blocks found in output. Synthesis may have failed.", file=sys.stderr)
+        return
+
+    for warning in result.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    # Mark routed entries in daily files
+    marked_dailies = mark_routed_entries(result.dailies, result.routes)
+
+    # Write daily files
+    written = write_daily_files(marked_dailies)
+    print(f"Wrote {len(written)} daily file(s)")
+
+    # Append to LTM
+    ltm_warnings = append_to_ltm(result.routes)
+    for w in ltm_warnings:
+        print(f"LTM warning: {w}", file=sys.stderr)
+    if result.routes:
+        total_entries = sum(len(r.entries) for r in result.routes)
+        print(f"Routed {total_entries} entries to LTM")
+
+    # Post-processing
+    run_post_processing(sidecar_paths, extract_paths)
+    print("Post-processing complete")
+
+
+def main() -> int:
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(description="Synthesis output processor")
+    sub = parser.add_subparsers(dest="command")
+
+    apply_parser = sub.add_parser("apply", help="Apply synthesis output")
+    apply_parser.add_argument("output_file", help="Path to synthesis output file")
+    apply_parser.add_argument("--sidecars", nargs="*", default=[], help="Sidecar file paths")
+    apply_parser.add_argument("--extracts", nargs="*", default=[], help="Extract file paths to clean up")
+
+    args = parser.parse_args()
+    if args.command == "apply":
+        apply_results(args.output_file, args.sidecars, args.extracts)
+        return 0
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
