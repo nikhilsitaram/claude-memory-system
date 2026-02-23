@@ -7,7 +7,7 @@ Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/
 Usage:
     python scripts/devtools.py verify-install [--mode all|install-only|verify-only|smoke-test]
     python scripts/devtools.py memory-status [--mode all|pending|tokens|synthesis|decay|daily]
-    python scripts/devtools.py extract-debug [DAY] [--mode all|sessions|extract|captured|content]
+    python scripts/devtools.py extract-debug [DAY] [--mode all|sessions|extract|state|content]
 
 Requirements: Python 3.9+
 """
@@ -98,7 +98,7 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
         print("\nSmoke tests...")
         for label, cmd in [
             ("memory_utils.py", [sys.executable, str(SCRIPTS_DIR / "memory_utils.py")]),
-            ("indexing.py list-pending", [sys.executable, str(SCRIPTS_DIR / "indexing.py"), "list-pending"]),
+            ("indexing.py list-recent", [sys.executable, str(SCRIPTS_DIR / "indexing.py"), "list-recent"]),
             ("decay.py --dry-run", [sys.executable, str(SCRIPTS_DIR / "decay.py"), "--dry-run"]),
         ]:
             rc, out, err = _run(cmd)
@@ -119,10 +119,10 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
 
     settings = load_settings()
 
-    if do_all or args.mode == "pending":
-        print("Pending transcripts:")
-        from transcript_ops import get_pending_days
-        days = get_pending_days()
+    if do_all or args.mode == "recent":
+        print("Recent transcripts:")
+        from transcript_ops import get_recent_days
+        days = get_recent_days()
         for d in days:
             print(f"  {d}")
         if not days:
@@ -176,41 +176,51 @@ def cmd_extract_debug(args: argparse.Namespace) -> int:
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from indexing import get_session_date, list_all_sessions
-    from memory_utils import get_captured_sessions
+    from memory_utils import load_synthesis_state
 
-    captured = get_captured_sessions()
+    state = load_synthesis_state()
+    sessions_state = state.get("sessions", {})
 
-    if do_all or args.mode in ("sessions", "captured"):
+    if do_all or args.mode in ("sessions", "state"):
         all_sessions = list_all_sessions()
         day_sessions = [s for s in all_sessions if get_session_date(s) == day]
 
-        if args.mode != "captured":
+        if args.mode != "state":
             print(f"Sessions for {day}:")
             for s in day_sessions:
-                status = "captured" if s.session_id in captured else "pending"
+                prev = sessions_state.get(s.session_id)
+                if prev and s.file_size == prev.get("offset", 0):
+                    status = "unchanged"
+                elif prev and s.file_size > prev.get("offset", 0):
+                    status = "grown"
+                elif prev:
+                    status = "shrunk"
+                else:
+                    status = "new"
                 print(f"  {s.session_id[:12]}...  {s.file_size:>8,} bytes  [{status}]")
             if not day_sessions:
                 print("  None")
             print()
 
-        if do_all or args.mode == "captured":
-            print(f"Captured sessions for {day}:")
-            cap = [s for s in day_sessions if s.session_id in captured]
-            for s in cap:
-                print(f"  {s.session_id}")
-            if not cap:
+        if do_all or args.mode == "state":
+            print(f"Synthesized sessions for {day}:")
+            synth = [s for s in day_sessions if s.session_id in sessions_state]
+            for s in synth:
+                prev = sessions_state[s.session_id]
+                print(f"  {s.session_id}  offset={prev.get('offset')} lines={prev.get('lines')}")
+            if not synth:
                 print("  None")
             print()
 
     if do_all or args.mode in ("extract", "content"):
-        from transcript_ops import extract_transcripts
+        from transcript_ops import extract_transcripts_incremental
         print(f"Extracting transcripts for {day}...")
-        daily_data = extract_transcripts(day)
+        daily_data = extract_transcripts_incremental(state)
         if day in daily_data:
             sessions = daily_data[day]
             print(f"  {len(sessions)} session(s) with content")
             for s in sessions:
-                print(f"  {s['session_id'][:12]}...  {s['message_count']} messages")
+                print(f"  {s['session_id'][:12]}...  {s['message_count']} messages  [{s['mode']}]")
                 if do_all or args.mode == "content":
                     for msg in s["messages"][:2]:
                         preview = msg["content"][:200]
@@ -426,12 +436,12 @@ def main() -> int:
     vi.set_defaults(func=cmd_verify_install)
 
     ms = sub.add_parser("memory-status", help="Show memory system status")
-    ms.add_argument("--mode", choices=["all", "pending", "tokens", "synthesis", "decay", "daily"], default="all")
+    ms.add_argument("--mode", choices=["all", "recent", "tokens", "synthesis", "decay", "daily"], default="all")
     ms.set_defaults(func=cmd_memory_status)
 
     ed = sub.add_parser("extract-debug", help="Debug transcript extraction")
     ed.add_argument("day", nargs="?", help="Day to debug (default: today)")
-    ed.add_argument("--mode", choices=["all", "sessions", "extract", "captured", "content"], default="all")
+    ed.add_argument("--mode", choices=["all", "sessions", "extract", "state", "content"], default="all")
     ed.set_defaults(func=cmd_extract_debug)
 
     mr = sub.add_parser("mark-routed", help="Mark daily entries that exist in LTM with [routed] prefix")
