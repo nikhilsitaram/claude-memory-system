@@ -11,6 +11,7 @@ from unittest import mock
 
 import pytest
 from load_memory import (
+    _build_embedded_files,
     _build_preextracted_prompt,
     _build_synthesis_instructions,
     _build_synthesis_prompt,
@@ -681,6 +682,141 @@ class TestBuildSynthesisPromptIntegration:
         assert "===DAILY:" in prompt
         assert "===ROUTE:" in prompt
         assert "===END===" in prompt
+
+
+# =============================================================================
+# _build_embedded_files Tests
+# =============================================================================
+
+
+class TestBuildEmbeddedFiles:
+    """Tests for _build_embedded_files helper."""
+
+    def test_reads_transcript_files(self, tmp_path):
+        """Transcript extract files are read into embedded dict."""
+        extract = tmp_path / "extract-2026-02-01.txt"
+        extract.write_text("transcript content")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-01": str(extract)})
+
+        assert result["transcripts"]["2026-02-01"] == "transcript content"
+
+    def test_reads_global_ltm(self, tmp_path):
+        """Global LTM file content is read into embedded dict."""
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text("## Key Learnings\n- something")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = ltm
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert "## Key Learnings" in result["global_ltm"]
+
+    def test_reads_project_ltms(self, tmp_path):
+        """Project LTM files are read and keyed by project name."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "myproject-long-term-memory.md").write_text("project content")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({})
+
+        assert result["project_ltms"]["myproject"] == "project content"
+
+    def test_handles_missing_transcript_file(self, tmp_path):
+        """Missing transcript files are silently skipped."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({"2026-02-01": "/nonexistent/file.txt"})
+
+        assert "2026-02-01" not in result["transcripts"]
+
+    def test_handles_missing_global_ltm(self, tmp_path):
+        """Missing global LTM returns empty string."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert result["global_ltm"] == ""
+
+    def test_handles_missing_project_dir(self, tmp_path):
+        """Missing project memory dir returns empty project_ltms."""
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = tmp_path / "nonexistent-proj"
+            result = _build_embedded_files({})
+
+        assert result["project_ltms"] == {}
+
+    def test_multiple_projects(self, tmp_path):
+        """Multiple project LTM files are all read."""
+        proj_dir = tmp_path / "project-memory"
+        proj_dir.mkdir()
+        (proj_dir / "alpha-long-term-memory.md").write_text("alpha content")
+        (proj_dir / "beta-long-term-memory.md").write_text("beta content")
+
+        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
+             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
+            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
+            mock_pd.return_value = proj_dir
+            result = _build_embedded_files({})
+
+        assert result["project_ltms"]["alpha"] == "alpha content"
+        assert result["project_ltms"]["beta"] == "beta content"
+
+
+# =============================================================================
+# Output filename PID fix Tests
+# =============================================================================
+
+
+class TestOutputFilenamePid:
+    """Verify delivery instructions use deterministic PID-based filename."""
+
+    def test_prompt_uses_pid_not_dollar_dollar(self, tmp_path):
+        """Output filename should use os.getpid(), not $$."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        # Should NOT contain literal $$
+        assert "/tmp/synthesis-output-$$" not in prompt
+        # Should contain the actual PID
+        import os
+        assert f"/tmp/synthesis-output-{os.getpid()}.txt" in prompt
+
+    def test_write_and_bash_use_same_filename(self, tmp_path):
+        """Both Write and Bash instructions reference identical filename."""
+        extract = tmp_path / "extract.txt"
+        extract.write_text("content\n")
+
+        prompt = _build_preextracted_prompt(
+            ["2026-02-01"],
+            {"2026-02-01": str(extract)},
+            "instructions",
+        )
+        import os
+        expected_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
+        # Should appear exactly twice: once in Write, once in Bash
+        assert prompt.count(expected_filename) == 2
 
 
 if __name__ == "__main__":

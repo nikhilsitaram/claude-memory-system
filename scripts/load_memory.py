@@ -327,6 +327,10 @@ def _build_preextracted_prompt(
     sidecars_arg = " ".join(sidecar_paths)
     extracts_arg = " ".join(extract_paths)
 
+    # Pre-compute output filename with PID so Write and Bash use the same path
+    # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
+    output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
+
     return f'''Synthesize these session transcripts into daily summaries and route key learnings.
 
 ## Inputs
@@ -366,8 +370,8 @@ Where:
 
 Write your structured output to a temp file, then run the apply script:
 
-1. Write(`/tmp/synthesis-output-$$.txt`, <your structured output above>)
-2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply /tmp/synthesis-output-$$.txt --sidecars {sidecars_arg} --extracts {extracts_arg}`
+1. Write(`{output_filename}`, <your structured output above>)
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --sidecars {sidecars_arg} --extracts {extracts_arg}`
 
 Do NOT generate a summary. Do NOT use any other tools besides Write and Bash.'''
 
@@ -394,6 +398,41 @@ def _build_synthesis_prompt(
     return _build_preextracted_prompt(
         pending_dates, extracted_files, synthesis_instructions, embedded_files
     )
+
+
+def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
+    """Pre-read all files for embedding in synthesis prompt.
+
+    Reads transcript extracts, global LTM, and project LTMs into memory
+    so the synthesis prompt can embed them inline (zero tool calls).
+
+    Args:
+        extracted_files: Dict mapping date -> extract file path
+
+    Returns:
+        Dict with keys: transcripts, global_ltm, project_ltms
+    """
+    embedded: dict = {"transcripts": {}, "global_ltm": "", "project_ltms": {}}
+    for date, path in extracted_files.items():
+        try:
+            embedded["transcripts"][date] = Path(path).read_text(encoding="utf-8")
+        except IOError:
+            pass
+    global_ltm_file = get_global_memory_file()
+    if global_ltm_file.exists():
+        try:
+            embedded["global_ltm"] = global_ltm_file.read_text(encoding="utf-8")
+        except IOError:
+            pass
+    proj_dir = get_project_memory_dir()
+    if proj_dir.exists():
+        for f in proj_dir.glob("*-long-term-memory.md"):
+            name = f.stem.replace("-long-term-memory", "")
+            try:
+                embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
+            except IOError:
+                pass
+    return embedded
 
 
 def pre_extract_transcripts(
@@ -491,8 +530,10 @@ def main() -> None:
         extracted_files = pre_extract_transcripts(pending_dates, exclude_session_id=current_session_id)
 
         if extracted_files:
+            # Pre-read all files for embedding in prompt (zero tool calls for subagent)
+            embedded = _build_embedded_files(extracted_files)
             synth_prompt = _build_synthesis_prompt(
-                list(extracted_files.keys()), extracted_files
+                list(extracted_files.keys()), extracted_files, embedded
             )
 
             print("## AUTO-SYNTHESIZE REQUIRED")
@@ -592,7 +633,10 @@ if __name__ == "__main__":
             print("No pending transcripts with content.")
             sys.exit(0)
 
+        # Pre-read all files for embedding in prompt
+        embedded = _build_embedded_files(extracted_files)
+
         print(f"model={model}")
-        print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files))
+        print(_build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded))
     else:
         main()
