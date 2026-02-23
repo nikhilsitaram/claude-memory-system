@@ -272,8 +272,6 @@ class TestCopyTemplates:
         # Defaults created
         assert (memory_dir / "global-long-term-memory.md").read_text() == "# LTM"
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 3
-        # .captured initialized
-        assert (memory_dir / ".captured").exists()
 
     def test_does_not_overwrite_existing_files(self, tmp_path):
         script_dir = tmp_path / "repo"

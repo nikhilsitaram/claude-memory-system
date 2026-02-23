@@ -217,10 +217,6 @@ def copy_templates(script_dir: Path) -> None:
             shutil.copy2(src, settings_file)
             print("Created default memory settings at ~/.claude/memory/settings.json")
 
-    # Initialize .captured file
-    captured_file = memory_dir / ".captured"
-    if not captured_file.exists():
-        captured_file.touch()
 
 
 def hook_entry_key(entry: dict) -> tuple:
