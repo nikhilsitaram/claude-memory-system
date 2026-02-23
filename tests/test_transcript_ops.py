@@ -14,6 +14,7 @@ from transcript_ops import (
     extract_transcripts,
     format_transcripts_for_output,
     get_pending_days,
+    parse_jsonl_file_from_line,
 )
 
 # =============================================================================
@@ -178,6 +179,69 @@ class TestFormatTranscriptsConsistency:
         with_budget = format_transcripts_for_output(data, total_line_budget=10000)
 
         assert full == with_budget
+
+
+# =============================================================================
+# parse_jsonl_file_from_line Tests
+# =============================================================================
+
+
+class TestParseJsonlFileFromLine:
+    def test_full_parse_when_start_line_zero(self, tmp_path):
+        """start_line=0 reads all messages (same as parse_jsonl_file)."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "First message"),
+            ("assistant", "Second message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=0)
+        assert len(messages) == 2
+        assert total_lines == 2
+
+    def test_delta_from_line(self, tmp_path):
+        """start_line=1 skips first line, parses remainder."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Old message"),
+            ("assistant", "New message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=1)
+        assert len(messages) == 1
+        assert "New message" in messages[0]["content"]
+        assert total_lines == 2
+
+    def test_start_line_beyond_file(self, tmp_path):
+        """start_line past EOF returns empty messages and current line count."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Only message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=100)
+        assert messages == []
+        assert total_lines == 1
+
+    def test_filters_skippable_messages(self, tmp_path):
+        """should_skip_message filter still applies to delta messages."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Old message"),
+            ("assistant", "<system-reminder>skip this</system-reminder>"),
+            ("assistant", "New real message"),
+        ]))
+        messages, total_lines = parse_jsonl_file_from_line(transcript, start_line=1)
+        assert len(messages) == 1
+        assert "New real message" in messages[0]["content"]
+        assert total_lines == 3
+
+    def test_returns_total_lines_not_parsed_lines(self, tmp_path):
+        """total_lines counts non-blank JSONL lines only."""
+        transcript = tmp_path / "session.jsonl"
+        content = make_jsonl_content([("assistant", "msg1"), ("assistant", "msg2")])
+        content += "\n"  # trailing blank line
+        transcript.write_text(content)
+        _, total_lines = parse_jsonl_file_from_line(transcript, start_line=0)
+        # total_lines = non-blank JSONL lines (blank lines are skipped in line count)
+        assert total_lines == 2
 
 
 if __name__ == "__main__":

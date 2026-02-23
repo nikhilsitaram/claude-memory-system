@@ -31,6 +31,7 @@ __all__ = [
     "extract_text_content",
     "should_skip_message",
     "parse_jsonl_file",
+    "parse_jsonl_file_from_line",
     # Extraction
     "extract_transcripts",
     "format_transcripts_for_output",
@@ -124,6 +125,52 @@ def parse_jsonl_file(filepath: Path) -> list[dict]:
         print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
 
     return messages
+
+
+def parse_jsonl_file_from_line(
+    filepath: Path, start_line: int = 0
+) -> tuple[list[dict], int]:
+    """Parse a JSONL transcript file, optionally skipping initial lines.
+
+    Args:
+        filepath: Path to JSONL transcript file
+        start_line: Number of non-blank JSONL lines to skip (0 = parse all)
+
+    Returns:
+        (messages, total_lines) where total_lines is the count of all non-blank
+        lines in the file (for updating the high water mark).
+    """
+    messages = []
+    line_count = 0  # non-blank lines seen
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                line_count += 1
+                if line_count <= start_line:
+                    continue
+                try:
+                    obj = json.loads(raw_line)
+                    obj_type = obj.get("type")
+                    if obj_type in ("user", "assistant"):
+                        msg = obj.get("message", {})
+                        role = msg.get("role", obj_type)
+                        content = extract_text_content(msg.get("content", ""))
+                        if content:
+                            if role == "user":
+                                continue
+                            if should_skip_message(content):
+                                continue
+                            messages.append({"role": role, "content": content})
+                except json.JSONDecodeError:
+                    continue
+    except IOError:
+        pass
+
+    return messages, line_count
 
 
 def extract_transcripts(
