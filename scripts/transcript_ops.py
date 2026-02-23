@@ -34,6 +34,7 @@ __all__ = [
     "parse_jsonl_file_from_line",
     # Extraction
     "extract_transcripts",
+    "extract_transcripts_incremental",
     "format_transcripts_for_output",
     "get_pending_days",
 ]
@@ -212,6 +213,72 @@ def extract_transcripts(
                     "messages": messages,
                 }
             )
+
+    return dict(daily_data)
+
+
+def extract_transcripts_incremental(
+    state: dict,
+    exclude_session_id: str | None = None,
+) -> dict[str, list[dict]]:
+    """Extract transcripts incrementally using synthesis state high water marks.
+
+    For each pending session, compares current file size to stored offset:
+    - Not in state: full parse (mode="full")
+    - Same size: skip entirely (no output)
+    - Grew: delta parse from stored line count (mode="delta")
+
+    Each session dict includes: session_id, filepath, project_path, message_count,
+    messages, mode ("full"|"delta"), current_offset, current_lines.
+
+    Args:
+        state: Synthesis state dict with "sessions" key
+        exclude_session_id: Session ID to exclude from extraction
+
+    Returns:
+        Dict mapping date -> list of session dicts (only sessions with content).
+    """
+    captured = get_captured_sessions()
+    pending = list_pending_sessions(captured, exclude_session_id=exclude_session_id)
+
+    sessions_state = state.get("sessions", {})
+    daily_data: dict[str, list[dict]] = defaultdict(list)
+
+    for session in pending:
+        sid = session.session_id
+        current_size = session.file_size
+        prev = sessions_state.get(sid)
+
+        if prev and current_size == prev.get("offset", 0):
+            # Unchanged — skip entirely
+            continue
+
+        if prev and current_size > prev.get("offset", 0):
+            # Grew — delta extraction
+            start_line = prev.get("lines", 0)
+            messages, total_lines = parse_jsonl_file_from_line(
+                session.transcript_path, start_line=start_line
+            )
+            mode = "delta"
+        else:
+            # New session (not in state) — full extraction
+            messages, total_lines = parse_jsonl_file_from_line(
+                session.transcript_path, start_line=0
+            )
+            mode = "full"
+
+        if messages:
+            day = get_session_date(session)
+            daily_data[day].append({
+                "session_id": sid,
+                "filepath": str(session.transcript_path),
+                "project_path": session.project_path,
+                "message_count": len(messages),
+                "messages": messages,
+                "mode": mode,
+                "current_offset": current_size,
+                "current_lines": total_lines,
+            })
 
     return dict(daily_data)
 

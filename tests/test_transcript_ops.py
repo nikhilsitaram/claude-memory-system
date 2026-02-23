@@ -244,5 +244,181 @@ class TestParseJsonlFileFromLine:
         assert total_lines == 2
 
 
+# =============================================================================
+# extract_transcripts_incremental Tests
+# =============================================================================
+
+
+class TestExtractTranscriptsIncremental:
+    def test_new_session_full_extract(self, tmp_path):
+        """Session not in state gets mode='full' with all messages."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Hello"),
+            ("assistant", "World"),
+        ]))
+        session = make_session_info(
+            session_id="new-sess",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert "2026-02-22" in result
+        sess = result["2026-02-22"][0]
+        assert sess["mode"] == "full"
+        assert sess["message_count"] == 2
+
+    def test_unchanged_session_skipped(self, tmp_path):
+        """Session with same file size as state is skipped entirely."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([("assistant", "Hello")]))
+        fsize = transcript.stat().st_size
+
+        session = make_session_info(
+            session_id="old-sess",
+            transcript_path=transcript,
+            file_size=fsize,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {"old-sess": {"offset": fsize, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert result == {}  # no content to process
+
+    def test_grown_session_delta_extract(self, tmp_path):
+        """Session that grew since state gets mode='delta' with only new messages."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        # Write initial content
+        initial_content = make_jsonl_content([("assistant", "Old message")])
+        transcript.write_text(initial_content)
+        initial_size = transcript.stat().st_size
+
+        # Append new content
+        with open(transcript, "a") as f:
+            f.write(make_jsonl_content([("assistant", "New message")]))
+        new_size = transcript.stat().st_size
+
+        session = make_session_info(
+            session_id="grown-sess",
+            transcript_path=transcript,
+            file_size=new_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {"grown-sess": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"}}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        assert "2026-02-22" in result
+        sess = result["2026-02-22"][0]
+        assert sess["mode"] == "delta"
+        assert sess["message_count"] == 1  # only new message
+        assert "New message" in sess["messages"][0]["content"]
+
+    def test_mixed_sessions_same_day(self, tmp_path):
+        """Mix of new, unchanged, and grown sessions on same day."""
+        from transcript_ops import extract_transcripts_incremental
+
+        # Unchanged session
+        t1 = tmp_path / "s1.jsonl"
+        t1.write_text(make_jsonl_content([("assistant", "Old")]))
+
+        # Grown session
+        t2 = tmp_path / "s2.jsonl"
+        initial = make_jsonl_content([("assistant", "Was here")])
+        t2.write_text(initial)
+        initial_size = t2.stat().st_size
+        with open(t2, "a") as f:
+            f.write(make_jsonl_content([("assistant", "Am new")]))
+
+        # New session
+        t3 = tmp_path / "s3.jsonl"
+        t3.write_text(make_jsonl_content([("assistant", "Brand new")]))
+
+        sessions = [
+            make_session_info("s1", t1, t1.stat().st_size, created=datetime(2026, 2, 22, 10, 0, tzinfo=timezone.utc)),
+            make_session_info("s2", t2, t2.stat().st_size, created=datetime(2026, 2, 22, 11, 0, tzinfo=timezone.utc)),
+            make_session_info("s3", t3, t3.stat().st_size, created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc)),
+        ]
+
+        state = {"sessions": {
+            "s1": {"offset": t1.stat().st_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"},
+            "s2": {"offset": initial_size, "lines": 1, "last_synthesized": "2026-02-22T10:00:00Z"},
+        }}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=sessions), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        day_sessions = result["2026-02-22"]
+        modes = {s["session_id"]: s["mode"] for s in day_sessions}
+        assert "s1" not in modes  # unchanged, skipped
+        assert modes["s2"] == "delta"
+        assert modes["s3"] == "full"
+
+    def test_returns_session_offsets(self, tmp_path):
+        """Result includes session_offsets dict for state update."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([("assistant", "Hello")]))
+
+        session = make_session_info(
+            session_id="sess-1",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state)
+
+        sess = result["2026-02-22"][0]
+        assert "current_offset" in sess
+        assert "current_lines" in sess
+        assert sess["current_offset"] == transcript.stat().st_size
+        assert sess["current_lines"] >= 1
+
+    def test_exclude_session_id(self, tmp_path):
+        """Exclude session ID is forwarded to list_pending_sessions."""
+        from transcript_ops import extract_transcripts_incremental
+
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.get_captured_sessions", return_value=set()), \
+             mock.patch("transcript_ops.list_pending_sessions", return_value=[]) as mock_lps, \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            extract_transcripts_incremental(state, exclude_session_id="skip-me")
+
+        mock_lps.assert_called_once()
+        call_kwargs = mock_lps.call_args
+        # Check exclude_session_id was passed
+        assert call_kwargs[1].get("exclude_session_id") == "skip-me" or \
+               (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "skip-me")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
