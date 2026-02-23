@@ -1007,11 +1007,13 @@ git commit -m "feat: embed file contents in synthesis prompt, drop auto-extract 
 
 ---
 
-### Task 7: Update settings default and install.py
+### Task 7: Update settings default, install.py, and fix audit items #2 and #30
 
 **Files:**
 - Modify: `templates/settings.json`
 - Modify: `install.py:114-123`
+- Modify: `scripts/devtools.py:6` (audit #30: fix "NOT installed" docstring)
+- Modify: `skills/settings/SKILL.md` (audit #2: fix wrong default values)
 
 **Step 1: Change default synthesis model to haiku**
 
@@ -1025,27 +1027,44 @@ Update the comment accordingly.
 
 In `install.py:114-123`, add `"synthesis.py"` to the `scripts_to_link` list.
 
-**Step 3: Update devtools.py verify-install**
+**Step 3: Update devtools.py verify-install + fix docstring (audit #30)**
 
 In `scripts/devtools.py:61-63`, add `"synthesis.py"` to the `scripts` list.
 
-**Step 4: Run install and verify**
+Fix the docstring at line 6. Change:
+```
+Repo-local utility — NOT installed to ~/.claude/scripts/.
+```
+to:
+```
+Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/ via symlink.
+```
+
+**Step 4: Fix settings SKILL.md wrong defaults (audit #2)**
+
+In `skills/settings/SKILL.md`, fix the incorrect default values:
+- Change `globalLongTerm.tokenLimit` default from `5,000` to `3,000`
+- Change `projectLongTerm.tokenLimit` default from `5,000` to `3,000`
+- Update the Total budget calculation from `16,750` to `11,250`
+- Update the calculated limits table to match: `3000 + 1500 + 3000 + 3750 = 11,250`
+
+**Step 5: Run install and verify**
 
 ```bash
 python3 install.py
 ls -la ~/.claude/scripts/synthesis.py  # verify symlink exists
 ```
 
-**Step 5: Run full test suite**
+**Step 6: Run full test suite**
 
 Run: `python3 -m pytest tests/ -q`
 Expected: All tests PASS
 
-**Step 6: Commit**
+**Step 7: Commit**
 
 ```bash
-git add templates/settings.json install.py scripts/devtools.py
-git commit -m "chore: default synthesis model to haiku, add synthesis.py to installer"
+git add templates/settings.json install.py scripts/devtools.py skills/settings/SKILL.md
+git commit -m "chore: default synthesis model to haiku, add synthesis.py to installer, fix audit #2 and #30"
 ```
 
 ---
@@ -1234,7 +1253,7 @@ cat ~/.claude/memory/daily/2026-02-22.md  # should contain test content
 | 4 | CLI + post-processing: `apply_results()` | synthesis.py | 2 |
 | 5 | Rewrite prompt builders | load_memory.py | 4 |
 | 6 | Update `main()` flow | load_memory.py | existing |
-| 7 | Settings + installer | settings.json, install.py, devtools.py | - |
+| 7 | Settings + installer + audit fixes #2, #30 | settings.json, install.py, devtools.py, SKILL.md | - |
 | 8 | Exports + docs | synthesis.py, CLAUDE.md | - |
 | 9 | Integration test | test_synthesis.py | 1 |
 | 10 | Manual smoke test | - | manual |
