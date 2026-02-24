@@ -17,6 +17,7 @@ Requirements: Python 3.9+
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,6 +55,7 @@ def remove_hooks(settings: dict) -> dict:
         "load_memory.py",
         "save_session.py",
         "pretooluse-allow-memory.sh",
+        "claude-memory-synthesis",  # SessionEnd hook for deferred synthesis
     ]
 
     removed_count = 0
@@ -129,6 +131,47 @@ def remove_permissions(settings: dict) -> dict:
     return settings
 
 
+def remove_systemd_units() -> None:
+    """Stop and remove systemd user units for deferred synthesis."""
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "stop", "claude-memory-synthesis.timer"],
+            capture_output=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "disable", "claude-memory-synthesis.timer"],
+            capture_output=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "stop", "claude-memory-synthesis.service"],
+            capture_output=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    for unit in [
+        "claude-memory-synthesis.service",
+        "claude-memory-synthesis.timer",
+    ]:
+        unit_file = systemd_dir / unit
+        if unit_file.exists():
+            unit_file.unlink()
+            print(f"  Removed systemd unit: {unit}")
+
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            capture_output=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
 def purge_memory_data() -> None:
     """Delete all memory system files (scripts, skills, hooks, data)."""
     claude_dir = get_claude_dir()
@@ -153,6 +196,9 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "decay.py",
         claude_dir / "scripts" / "token_usage.py",
         claude_dir / "scripts" / "project_manager.py",
+        claude_dir / "scripts" / "synthesis_cron.py",
+        claude_dir / "scripts" / "synthesis.py",
+        claude_dir / "scripts" / "devtools.py",
         # Legacy scripts — removed in past versions but may still exist on disk
         # for users who installed before the removal. Keep in purge list to ensure
         # clean uninstall regardless of which version was originally installed.
@@ -199,7 +245,9 @@ def print_cleanup_instructions() -> None:
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
-    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager}.py")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager,synthesis_cron,synthesis,devtools}.py")
+    print("  systemctl --user stop claude-memory-synthesis.timer")
+    print("  rm -f ~/.config/systemd/user/claude-memory-synthesis.{service,timer}")
 
 
 def main() -> int:
@@ -236,6 +284,9 @@ def main() -> int:
             print(f"Updated {settings_file}")
     else:
         print("No settings.json found, skipping hook/permission removal.")
+
+    # Remove systemd units
+    remove_systemd_units()
 
     # Purge data if requested
     if args.purge:

@@ -145,6 +145,7 @@ def link_scripts(script_dir: Path) -> None:
         "decay.py",  # Age-based decay for long-term memory
         "devtools.py",  # Dev diagnostics and mark-routed migration
         "synthesis.py",  # Zero-tool background synthesis
+        "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
         "token_usage.py",  # Token usage calculation for /settings
     ]
 
@@ -242,6 +243,37 @@ def copy_templates(script_dir: Path) -> None:
             shutil.copy2(src, settings_file)
             print("Created default memory settings at ~/.claude/memory/settings.json")
 
+
+
+def install_systemd_units(script_dir: Path) -> None:
+    """Install systemd user units for deferred synthesis."""
+    systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
+
+    # Check if systemctl is available
+    try:
+        subprocess.run(["systemctl", "--user", "--version"],
+                       capture_output=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("Note: systemctl not available, skipping systemd unit installation")
+        return
+
+    systemd_user_dir.mkdir(parents=True, exist_ok=True)
+
+    units = ["claude-memory-synthesis.service", "claude-memory-synthesis.timer"]
+    for unit in units:
+        src = script_dir / "systemd" / unit
+        if src.exists():
+            dest = systemd_user_dir / unit
+            shutil.copy2(src, dest)
+
+    # Reload and enable timer
+    subprocess.run(["systemctl", "--user", "daemon-reload"],
+                   capture_output=True, timeout=10)
+    subprocess.run(["systemctl", "--user", "enable", "--now",
+                    "claude-memory-synthesis.timer"],
+                   capture_output=True, timeout=10)
+
+    print("Installed systemd units (timer enabled)")
 
 
 def hook_entry_key(entry: dict) -> tuple:
@@ -357,8 +389,19 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 ],
             },
         ],
-        # Note: SessionEnd and PreCompact hooks removed - transcripts are read
-        # directly from Claude Code's storage (~/.claude/projects/)
+        # SessionEnd triggers deferred synthesis via systemd
+        "SessionEnd": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                        "timeout": 5,
+                    }
+                ],
+            }
+        ],
     }
 
     if "hooks" not in settings:
@@ -492,6 +535,7 @@ def main() -> int:
 
     # Link scripts, hooks, and skills (symlinks for auto-apply on repo changes)
     link_scripts(script_dir)
+    install_systemd_units(script_dir)
     link_hooks(script_dir)
     link_skills(script_dir)
     copy_templates(script_dir)

@@ -221,6 +221,7 @@ DEFAULT_SETTINGS = {
         "intervalHours": 2,
         "model": "sonnet",
         "background": True,
+        "deferred": False,
     },
     "decay": {
         "ageDays": 30,

@@ -701,7 +701,8 @@ def main() -> None:
     # Check for pending transcripts (only if synthesis scheduling allows)
     # Exclude current session — it's still active and shouldn't be synthesized
     pending_dates = get_recent_days(exclude_session_id=current_session_id)
-    if pending_dates and should_synthesize(settings):
+    synthesis_deferred = settings.get("synthesis", {}).get("deferred", False)
+    if pending_dates and should_synthesize(settings) and not synthesis_deferred:
         # Write timestamp eagerly to prevent duplicate synthesis when multiple
         # sessions start simultaneously (all would see stale timestamp otherwise)
         get_last_synthesis_file().write_text(

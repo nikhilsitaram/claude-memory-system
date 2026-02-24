@@ -292,3 +292,159 @@ class TestCopyTemplates:
         # Existing files preserved
         assert (memory_dir / "global-long-term-memory.md").read_text() == "# Existing"
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 1
+
+
+# ---------------------------------------------------------------------------
+# install_systemd_units
+# ---------------------------------------------------------------------------
+
+
+class TestInstallSystemdUnits:
+    def test_copies_service_file(self, tmp_path):
+        """Service unit is installed to ~/.config/systemd/user/."""
+        script_dir = tmp_path / "repo"
+        systemd_src = script_dir / "systemd"
+        systemd_src.mkdir(parents=True)
+        (systemd_src / "claude-memory-synthesis.service").write_text("[Service]\nExecStart=/bin/true")
+        (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]\nOnCalendar=*:0/15")
+
+        systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_systemd_units(script_dir)
+
+        assert (systemd_user_dir / "claude-memory-synthesis.service").exists()
+        assert (systemd_user_dir / "claude-memory-synthesis.service").read_text() == "[Service]\nExecStart=/bin/true"
+
+    def test_copies_timer_file(self, tmp_path):
+        """Timer unit is installed to ~/.config/systemd/user/."""
+        script_dir = tmp_path / "repo"
+        systemd_src = script_dir / "systemd"
+        systemd_src.mkdir(parents=True)
+        (systemd_src / "claude-memory-synthesis.service").write_text("[Service]\nExecStart=/bin/true")
+        (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]\nOnCalendar=*:0/15")
+
+        systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_systemd_units(script_dir)
+
+        assert (systemd_user_dir / "claude-memory-synthesis.timer").exists()
+        assert (systemd_user_dir / "claude-memory-synthesis.timer").read_text() == "[Timer]\nOnCalendar=*:0/15"
+
+    def test_calls_daemon_reload_and_enable(self, tmp_path):
+        """After copying, calls systemctl daemon-reload and enable --now."""
+        script_dir = tmp_path / "repo"
+        systemd_src = script_dir / "systemd"
+        systemd_src.mkdir(parents=True)
+        (systemd_src / "claude-memory-synthesis.service").write_text("[Service]")
+        (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]")
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_systemd_units(script_dir)
+
+        # Expect 3 calls: version check, daemon-reload, enable --now
+        assert mock_run.call_count == 3
+        calls = mock_run.call_args_list
+        # First call: version check
+        assert calls[0][0][0] == ["systemctl", "--user", "--version"]
+        # Second call: daemon-reload
+        assert calls[1][0][0] == ["systemctl", "--user", "daemon-reload"]
+        # Third call: enable --now timer
+        assert calls[2][0][0] == [
+            "systemctl", "--user", "enable", "--now",
+            "claude-memory-synthesis.timer",
+        ]
+
+    def test_skips_if_systemd_not_available(self, tmp_path, capsys):
+        """Gracefully skips if systemctl not found."""
+        script_dir = tmp_path / "repo"
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
+            install.install_systemd_units(script_dir)
+
+        output = capsys.readouterr().out
+        assert "systemctl not available" in output
+        # No systemd dir created
+        systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
+        assert not systemd_user_dir.exists()
+
+    def test_skips_if_systemctl_times_out(self, tmp_path, capsys):
+        """Gracefully skips if systemctl --version times out."""
+        script_dir = tmp_path / "repo"
+        import subprocess
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run", side_effect=subprocess.TimeoutExpired("systemctl", 5)):
+            install.install_systemd_units(script_dir)
+
+        output = capsys.readouterr().out
+        assert "systemctl not available" in output
+
+    def test_skips_missing_unit_files(self, tmp_path):
+        """Does not fail if unit files are missing from repo."""
+        script_dir = tmp_path / "repo"
+        # No systemd dir at all
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_systemd_units(script_dir)
+
+        # Systemd user dir created (mkdir) but no files copied
+        systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
+        assert systemd_user_dir.is_dir()
+        assert not (systemd_user_dir / "claude-memory-synthesis.service").exists()
+        assert not (systemd_user_dir / "claude-memory-synthesis.timer").exists()
+
+
+# ---------------------------------------------------------------------------
+# SessionEnd hook
+# ---------------------------------------------------------------------------
+
+
+class TestSessionEndHook:
+    def test_session_end_hook_added_to_settings(self):
+        """merge_hooks adds SessionEnd hook with systemctl command."""
+        settings = {"hooks": {}}
+        result = install.merge_hooks(settings, "python3")
+        assert "SessionEnd" in result["hooks"]
+        hooks = result["hooks"]["SessionEnd"]
+        assert any(
+            "systemctl" in h.get("command", "")
+            for entry in hooks
+            for h in entry.get("hooks", [])
+        )
+
+    def test_session_end_hook_uses_no_block(self):
+        """SessionEnd hook uses --no-block to avoid blocking session exit."""
+        settings = install.merge_hooks({}, "python3")
+        hooks = settings["hooks"]["SessionEnd"]
+        for entry in hooks:
+            for h in entry.get("hooks", []):
+                if "systemctl" in h.get("command", ""):
+                    assert "--no-block" in h["command"]
+
+    def test_session_end_hook_has_short_timeout(self):
+        """SessionEnd hook has a short timeout since it's fire-and-forget."""
+        settings = install.merge_hooks({}, "python3")
+        hooks = settings["hooks"]["SessionEnd"]
+        for entry in hooks:
+            for h in entry.get("hooks", []):
+                if "systemctl" in h.get("command", ""):
+                    assert h.get("timeout", 999) <= 5
+
+    def test_session_end_hook_not_duplicated(self):
+        """Running merge_hooks twice does not duplicate SessionEnd entries."""
+        settings = install.merge_hooks({}, "python3")
+        count_before = len(settings["hooks"]["SessionEnd"])
+        settings = install.merge_hooks(settings, "python3")
+        count_after = len(settings["hooks"]["SessionEnd"])
+        assert count_before == count_after
