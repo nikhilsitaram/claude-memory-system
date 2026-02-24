@@ -1,0 +1,14 @@
+[Unit]
+Description=Claude Memory Synthesis
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.claude/scripts/synthesis_cron.py
+Environment=CLAUDECODE=
+TimeoutStartSec=300
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-synthesis
