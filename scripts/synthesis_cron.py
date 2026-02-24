@@ -58,6 +58,7 @@ def build_claude_command(model: str, prompt_file: str) -> list[str]:
         "-p",
         "--no-session-persistence",
         "--model", model,
+        "--permission-mode", "bypassPermissions",
         "--allowedTools", "Write,Bash,Read",
         (
             f"Read {prompt_file} and follow the instructions in it exactly. "

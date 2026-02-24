@@ -89,8 +89,11 @@ class TestBuildClaudeCommand:
         cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
         assert "--no-session-persistence" in cmd
 
-    def test_does_not_include_dangerous_skip(self):
+    def test_uses_bypass_permissions_mode(self):
+        """Headless synthesis needs permission bypass to avoid interactive prompts."""
         cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        assert "--permission-mode" in cmd
+        assert "bypassPermissions" in cmd
         assert "--dangerously-skip-permissions" not in cmd
 
     def test_prompt_references_prompt_file(self):
