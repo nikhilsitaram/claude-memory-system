@@ -394,10 +394,6 @@ Output ONLY entries from new/continued sessions — do not re-state anything bel
     # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
     output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
 
-    # Build --offsets-json arg for incremental synthesis state update
-    offsets_path = embedded_files.get("offsets_path", "")
-    offsets_arg = f" --offsets-json {offsets_path}" if offsets_path else ""
-
     first_date = sorted(pending_dates)[0]
 
     return f'''You are a structured data extractor. Your job is to read session transcripts and produce ONLY delimited structured output — no prose, no commentary, no summary.
@@ -434,7 +430,7 @@ Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing
 Only use the Write and Bash tools — no other tools.
 
 1. Write(`{output_filename}`, <your structured output>)
-2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --extracts {extracts_arg}{offsets_arg}`
+2. Bash: `python3 $HOME/.claude/scripts/synthesis.py apply {output_filename} --extracts {extracts_arg}`
 
 ## Synthesis Instructions
 
@@ -645,11 +641,6 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
         extracted_files, include_dailies=include_dailies, daily_data=daily_data
     )
 
-    if session_offsets:
-        offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
-        Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
-        embedded["offsets_path"] = offsets_path
-
     prompt = _build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded)
 
     # Write prompt to temp file instead of stdout (avoids 30K Bash truncation)
@@ -723,12 +714,6 @@ def main() -> None:
             embedded = _build_embedded_files(
                 extracted_files, include_dailies=include_dailies, daily_data=daily_data
             )
-
-            # Write session offsets to temp file for synthesis.py state update
-            if session_offsets:
-                offsets_path = f"/tmp/synthesis-offsets-{os.getpid()}.json"
-                Path(offsets_path).write_text(json.dumps(session_offsets), encoding="utf-8")
-                embedded["offsets_path"] = offsets_path
 
             synth_prompt = _build_synthesis_prompt(
                 list(extracted_files.keys()), extracted_files, embedded

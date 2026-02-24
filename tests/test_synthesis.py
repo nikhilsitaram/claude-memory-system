@@ -877,7 +877,211 @@ class TestApplyResults:
 
 
 # =============================================================================
-# apply_results --offsets-json Tests
+# compute_offsets_from_extracts Tests
+# =============================================================================
+
+
+class TestComputeOffsetsFromExtracts:
+    """Test computing session offsets directly from extract files and JSONL sources."""
+
+    def test_finds_sessions_and_computes_offsets(self, tmp_path):
+        """Parses session IDs from extract headers, finds JSONL files, returns offsets."""
+        from synthesis import compute_offsets_from_extracts
+
+        # Create a fake extract file with session headers
+        extract = tmp_path / "extract-2026-02-22.txt"
+        extract.write_text(
+            "======\n"
+            "DAY: 2026-02-22\n"
+            "======\n"
+            "──────\n"
+            "Session: abc-123 [project: myproject]\n"
+            "──────\n"
+            "[CLAUDE]\nDid some work\n"
+        )
+
+        # Create a fake JSONL file for that session
+        projects_dir = tmp_path / "projects"
+        proj_dir = projects_dir / "encoded-path"
+        proj_dir.mkdir(parents=True)
+        jsonl = proj_dir / "abc-123.jsonl"
+        jsonl.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n'
+                         '{"type":"assistant","message":{"role":"assistant","content":"hello"}}\n'
+                         '\n'  # blank line (should not count)
+                         '{"type":"assistant","message":{"role":"assistant","content":"done"}}\n')
+
+        with patch("synthesis.get_projects_dir", return_value=projects_dir):
+            offsets = compute_offsets_from_extracts([str(extract)])
+
+        assert "abc-123" in offsets
+        assert offsets["abc-123"]["offset"] == jsonl.stat().st_size
+        assert offsets["abc-123"]["lines"] == 3  # 3 non-blank lines
+
+    def test_multiple_sessions_across_extracts(self, tmp_path):
+        """Handles multiple sessions across multiple extract files."""
+        from synthesis import compute_offsets_from_extracts
+
+        extract1 = tmp_path / "e1.txt"
+        extract1.write_text("Session: sess-1 [project: p1]\n[CLAUDE]\nstuff\n")
+
+        extract2 = tmp_path / "e2.txt"
+        extract2.write_text("Session: sess-2 [project: p2]\n[CLAUDE]\nmore\n")
+
+        projects_dir = tmp_path / "projects"
+        p1 = projects_dir / "p1"
+        p1.mkdir(parents=True)
+        p1_jsonl = p1 / "sess-1.jsonl"
+        p1_jsonl.write_text('{"type":"user"}\n{"type":"assistant"}\n')
+
+        p2 = projects_dir / "p2"
+        p2.mkdir(parents=True)
+        p2_jsonl = p2 / "sess-2.jsonl"
+        p2_jsonl.write_text('{"type":"user"}\n')
+
+        with patch("synthesis.get_projects_dir", return_value=projects_dir):
+            offsets = compute_offsets_from_extracts([str(extract1), str(extract2)])
+
+        assert len(offsets) == 2
+        assert offsets["sess-1"]["lines"] == 2
+        assert offsets["sess-2"]["lines"] == 1
+
+    def test_empty_extracts_returns_empty(self, tmp_path):
+        """No extract paths returns empty dict."""
+        from synthesis import compute_offsets_from_extracts
+
+        with patch("synthesis.get_projects_dir", return_value=tmp_path):
+            assert compute_offsets_from_extracts([]) == {}
+
+    def test_session_not_found_on_disk_skipped(self, tmp_path):
+        """Session ID in extract but no matching JSONL returns empty for that session."""
+        from synthesis import compute_offsets_from_extracts
+
+        extract = tmp_path / "extract.txt"
+        extract.write_text("Session: ghost-session [project: x]\n[CLAUDE]\ntext\n")
+
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+        (projects_dir / "somedir").mkdir()  # No JSONL inside
+
+        with patch("synthesis.get_projects_dir", return_value=projects_dir):
+            offsets = compute_offsets_from_extracts([str(extract)])
+
+        assert offsets == {}
+
+    def test_missing_extract_file_skipped(self, tmp_path):
+        """Missing extract file path is silently skipped."""
+        from synthesis import compute_offsets_from_extracts
+
+        with patch("synthesis.get_projects_dir", return_value=tmp_path):
+            offsets = compute_offsets_from_extracts(["/nonexistent/file.txt"])
+
+        assert offsets == {}
+
+
+# =============================================================================
+# apply_results offset computation Tests
+# =============================================================================
+
+
+class TestApplyResultsComputesOffsets:
+    """Test that apply_results computes offsets from extracts when --offsets-json not passed."""
+
+    def test_computes_offsets_when_no_offsets_json(self, tmp_path):
+        """apply_results calls compute_offsets_from_extracts and updates state."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Learnings
+- [global/pattern] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        computed = {"s1": {"offset": 5000, "lines": 50}}
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.compute_offsets_from_extracts", return_value=computed) as mock_compute, \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(
+                output_file=str(output_file),
+                extract_paths=["/tmp/e1.txt"],
+            )
+
+        mock_compute.assert_called_once_with(["/tmp/e1.txt"])
+        mock_update.assert_called_once_with(computed)
+
+    def test_skips_state_update_when_no_offsets_computed(self, tmp_path):
+        """No offsets computed (empty extracts) means no state update."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(output_file=str(output_file), extract_paths=[])
+
+        mock_update.assert_not_called()
+
+    def test_offsets_json_overrides_computed(self, tmp_path):
+        """Explicit --offsets-json takes precedence over computed offsets."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        output_text = """===DAILY:2026-02-22===
+# 2026-02-22
+## Actions
+- [global/implement] Something
+
+===END==="""
+
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(output_text)
+
+        cli_offsets = tmp_path / "offsets.json"
+        cli_offsets.write_text('{"s1": {"offset": 9999, "lines": 99}}')
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "g.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "pm"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.run_post_processing"), \
+             patch("synthesis.compute_offsets_from_extracts") as mock_compute, \
+             patch("synthesis.update_synthesis_state") as mock_update:
+            apply_results(
+                output_file=str(output_file),
+                extract_paths=[],
+                offsets_json=str(cli_offsets),
+            )
+
+        # Should not compute if CLI offsets provided
+        mock_compute.assert_not_called()
+        mock_update.assert_called_once_with({"s1": {"offset": 9999, "lines": 99}})
+
+
+# =============================================================================
+# apply_results --offsets-json Tests (legacy)
 # =============================================================================
 
 
