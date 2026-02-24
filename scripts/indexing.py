@@ -42,6 +42,7 @@ from memory_utils import (
     load_sessions_index,
     resolve_worktree_to_main_repo,
     to_iso_z,
+    utc_to_local_datestr,
 )
 
 # Sessions smaller than this are likely empty/metadata-only (2-3 messages ~ 1000 bytes)
@@ -268,8 +269,8 @@ def get_session_date(session: SessionInfo) -> str:
     Prefers index.created if available, falls back to file_mtime.
     """
     if session.created:
-        return session.created.strftime("%Y-%m-%d")
-    return session.file_mtime.strftime("%Y-%m-%d")
+        return utc_to_local_datestr(session.created)
+    return utc_to_local_datestr(session.file_mtime)
 
 
 # =============================================================================
@@ -305,7 +306,7 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
                 timestamp = data.get("timestamp", "")
                 if timestamp:
                     dt = from_iso_z(timestamp)
-                    work_days.add(dt.strftime("%Y-%m-%d"))
+                    work_days.add(utc_to_local_datestr(dt))
         except (json.JSONDecodeError, IOError, ValueError):
             continue
 
@@ -362,7 +363,7 @@ def build_projects_index() -> dict:
                 if created:
                     try:
                         dt = from_iso_z(created)
-                        work_days.add(dt.strftime("%Y-%m-%d"))
+                        work_days.add(utc_to_local_datestr(dt))
                     except ValueError:
                         continue
 

@@ -29,6 +29,7 @@ from memory_utils import (
     load_sessions_index,
     load_settings,
     load_synthesis_state,
+    local_today,
     project_name_to_filename,
     prune_stale_state_entries,
     resolve_worktree_to_main_repo,
@@ -36,6 +37,7 @@ from memory_utils import (
     save_synthesis_state,
     to_iso_z,
     update_synthesis_state,
+    utc_to_local_datestr,
 )
 
 # =============================================================================
@@ -643,6 +645,42 @@ class TestRoutedMatching:
 # =============================================================================
 # ISO Datetime Helper Tests
 # =============================================================================
+
+
+class TestLocalTimezoneHelpers:
+    def test_local_today_returns_date(self):
+        from datetime import date
+        result = local_today()
+        assert isinstance(result, date)
+        # Should match datetime.now().date()
+        assert result == datetime.now().date()
+
+    def test_utc_to_local_datestr_format(self):
+        dt = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        result = utc_to_local_datestr(dt)
+        # Should be YYYY-MM-DD format
+        assert len(result) == 10
+        assert result[4] == "-"
+        assert result[7] == "-"
+
+    def test_utc_to_local_datestr_late_night_utc(self):
+        """A late-night UTC time should map to local date, not UTC date."""
+        # 11:30 PM UTC on Feb 24 = 5:30 PM CT on Feb 24 (CT = UTC-6)
+        # But 5:00 AM UTC on Feb 24 = 11:00 PM CT on Feb 23
+        dt = datetime(2026, 2, 24, 5, 0, 0, tzinfo=timezone.utc)
+        result = utc_to_local_datestr(dt)
+        # Result depends on system timezone, but should be a valid date
+        assert len(result) == 10
+        # The key invariant: result should match what astimezone() gives
+        expected = dt.astimezone().strftime("%Y-%m-%d")
+        assert result == expected
+
+    def test_utc_to_local_datestr_noon_utc(self):
+        """Midday UTC should produce a valid local date string."""
+        dt = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+        result = utc_to_local_datestr(dt)
+        expected = dt.astimezone().strftime("%Y-%m-%d")
+        assert result == expected
 
 
 class TestIsoDatetimeHelpers:
