@@ -1491,6 +1491,27 @@ class TestInjectScopes:
         result = inject_scopes([daily], session_projects)
         assert "- [cartwheel/implement] Built OAuth" in result[0].content
 
+    def test_placeholder_name_gets_rescoped(self):
+        """LLM-leaked {name} placeholder is treated as unscoped and gets project injection."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Actions\n- [{name}/implement] Built OAuth\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [cartwheel/implement] Built OAuth" in result[0].content
+        assert "{name}" not in result[0].content
+
+    def test_placeholder_name_no_project_gets_global(self):
+        """LLM-leaked {name} placeholder defaults to global when no project."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Learnings\n- [{name}/gotcha] Bad thing\n"
+        )
+        session_projects = {"2026-02-23": None}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global/gotcha] Bad thing" in result[0].content
+
     def test_multiple_sessions_different_projects(self):
         """Different dates can have different projects."""
         dailies = [

@@ -297,7 +297,8 @@ _UNSCOPED_ENTRY = re.compile(
 )
 _GLOBAL_MARKER = re.compile(r"^\s*-\s*\[GLOBAL\]")
 # Pattern to detect already-scoped entries: - [scope/type] or - [scope|scope/type]
-_SCOPED_ENTRY = re.compile(r"^\s*-\s*(?:\[routed\])?\s*\[[^\]]+/[^\]]+\]")
+# Scope names must be lowercase alphanumeric + hyphens (rejects placeholders like {name})
+_SCOPED_ENTRY = re.compile(r"^\s*-\s*(?:\[routed\])?\s*\[[a-z0-9-]+(?:\|[a-z0-9-]+)*/[^\]]+\]")
 
 
 def inject_scopes(
@@ -326,6 +327,13 @@ def inject_scopes(
             if not line.strip().startswith("-"):
                 new_lines.append(line)
                 continue
+
+            # Strip LLM-leaked placeholder scopes like [{name}/type] -> [type]
+            line = re.sub(
+                r"(\s*-\s*(?:\[GLOBAL\])?)\[\{[^}]*\}/([a-z]+)\]",
+                r"\1[\2]",
+                line,
+            )
 
             # Already scoped — pass through
             if _SCOPED_ENTRY.match(line):
