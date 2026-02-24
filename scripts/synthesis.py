@@ -257,8 +257,12 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
         new_entries = new.get(section, [])
 
         merged[section] = list(existing_entries)
+        existing_stripped = {ex.strip() for ex in existing_entries}
         for entry in new_entries:
-            # Reject near-duplicates
+            # Reject exact duplicates
+            if entry.strip() in existing_stripped:
+                continue
+            # Reject near-duplicates (by keyword overlap)
             if any(is_routed_match(entry, ex, threshold=0.6) for ex in existing_entries):
                 continue
             merged[section].append(entry)
@@ -319,7 +323,10 @@ def mark_routed_entries(
 
 
 def write_daily_files(dailies: list[DailyFile], daily_dir: Path | None = None) -> list[str]:
-    """Write daily summary files atomically. Returns list of written file paths."""
+    """Write daily summary files atomically. Merges with existing if present.
+
+    Returns list of written file paths.
+    """
     if daily_dir is None:
         daily_dir = get_daily_dir()
     daily_dir.mkdir(parents=True, exist_ok=True)
@@ -327,8 +334,15 @@ def write_daily_files(dailies: list[DailyFile], daily_dir: Path | None = None) -
     written: list[str] = []
     for daily in dailies:
         target = daily_dir / f"{daily.date}.md"
+
+        if target.exists():
+            existing = target.read_text(encoding="utf-8")
+            merged = merge_daily_sections(existing, daily.content)
+        else:
+            merged = daily.content
+
         tmp = target.with_suffix(".tmp")
-        tmp.write_text(daily.content + "\n", encoding="utf-8")
+        tmp.write_text(merged + "\n", encoding="utf-8")
         tmp.rename(target)
         written.append(str(target))
     return written

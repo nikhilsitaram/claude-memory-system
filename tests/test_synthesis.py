@@ -5,8 +5,10 @@ Unit tests for synthesis.py
 Run with: python -m pytest tests/test_synthesis.py -v
 """
 
-from synthesis import (  # noqa: I001
-    DailyFile,  # noqa: F401
+from pathlib import Path  # noqa: F401, I001
+
+from synthesis import (
+    DailyFile,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
@@ -264,13 +266,15 @@ class TestWriteDailyFiles:
         assert "# 2026-02-22" in written
         assert "- something" in written
 
-    def test_overwrites_existing_daily(self, tmp_path):
+    def test_merges_with_existing_daily(self, tmp_path):
         daily_dir = tmp_path / "daily"
         daily_dir.mkdir()
-        (daily_dir / "2026-02-22.md").write_text("old content")
-        dailies = [DailyFile(date="2026-02-22", content="new content")]
+        (daily_dir / "2026-02-22.md").write_text("# 2026-02-22\n## Actions\n- [impl] Old action\n")
+        dailies = [DailyFile(date="2026-02-22", content="# 2026-02-22\n## Actions\n- [impl] New action")]
         write_daily_files(dailies, daily_dir)
-        assert (daily_dir / "2026-02-22.md").read_text().strip() == "new content"
+        content = (daily_dir / "2026-02-22.md").read_text()
+        assert "- [impl] Old action" in content
+        assert "- [impl] New action" in content
 
     def test_creates_daily_dir_if_missing(self, tmp_path):
         daily_dir = tmp_path / "daily"
@@ -302,6 +306,43 @@ class TestWriteDailyFiles:
         write_daily_files(dailies, daily_dir)
         tmp_files = list(daily_dir.glob("*.tmp"))
         assert tmp_files == []
+
+
+# =============================================================================
+# write_daily_files Merge Tests
+# =============================================================================
+
+
+class TestWriteDailyFilesMerge:
+    def test_first_write_creates_file(self, tmp_path):
+        dailies = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        written = write_daily_files(dailies, daily_dir=tmp_path)
+        assert len(written) == 1
+        assert "- [impl] Did A" in Path(written[0]).read_text()
+
+    def test_second_write_merges_not_overwrites(self, tmp_path):
+        # First write
+        first = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(first, daily_dir=tmp_path)
+
+        # Second write with different entries
+        second = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did B")]
+        write_daily_files(second, daily_dir=tmp_path)
+
+        content = (tmp_path / "2026-02-23.md").read_text()
+        assert "- [impl] Did A" in content
+        assert "- [impl] Did B" in content
+
+    def test_second_write_deduplicates(self, tmp_path):
+        first = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(first, daily_dir=tmp_path)
+
+        # Same entry again
+        second = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(second, daily_dir=tmp_path)
+
+        content = (tmp_path / "2026-02-23.md").read_text()
+        assert content.count("- [impl] Did A") == 1
 
 
 # =============================================================================
