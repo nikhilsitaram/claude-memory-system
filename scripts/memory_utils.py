@@ -496,8 +496,8 @@ def get_working_days(days_limit: int) -> list[str]:
     return [f.stem for f in daily_files[:days_limit]]
 
 
-# Regex to extract scope from tagged entries: [scope/type] or [scope]
-TAG_PATTERN = re.compile(r"^\s*-\s*\[([^\]/]+)(?:/[^\]]+)?\]")
+# Regex to extract scope(s) from tagged entries: [scope/type] or [scope1|scope2/type]
+TAG_PATTERN = re.compile(r"^\s*-\s*\[([^\]/]+(?:\|[^\]/]+)*)(?:/[^\]]+)?\]")
 
 
 def filter_daily_content(content: str, scope: str) -> str:
@@ -554,9 +554,9 @@ def filter_daily_content(content: str, scope: str) -> str:
             # Check if this is a tagged entry
             match = TAG_PATTERN.match(line)
             if match:
-                entry_scope = match.group(1).lower()
-                # Include if scope matches (case-insensitive)
-                if entry_scope == scope.lower():
+                entry_scopes = [s.lower() for s in match.group(1).split("|")]
+                # Include if any scope matches (case-insensitive)
+                if scope.lower() in entry_scopes:
                     section_lines.append(line)
                     section_has_content = True
             elif line.strip() == "":

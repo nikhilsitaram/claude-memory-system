@@ -429,6 +429,47 @@ class TestFilterDailyContent:
         assert "[global/implement]" in result
 
 
+class TestFilterDailyContentMultiScope:
+    """Tests for pipe-delimited multi-scope tag filtering."""
+
+    def test_single_scope_unchanged(self):
+        """Existing single-scope tags still work."""
+        content = "# 2026-02-23\n## Actions\n- [cartwheel/implement] Built OAuth\n"
+        result = filter_daily_content(content, "cartwheel")
+        assert "[cartwheel/implement] Built OAuth" in result
+
+    def test_multi_scope_matches_first(self):
+        """Multi-scope entry matches on first scope."""
+        content = "# 2026-02-23\n## Learnings\n- [global|cartwheel/gotcha] MTU issue\n"
+        result = filter_daily_content(content, "global")
+        assert "MTU issue" in result
+
+    def test_multi_scope_matches_second(self):
+        """Multi-scope entry matches on second scope."""
+        content = "# 2026-02-23\n## Learnings\n- [global|cartwheel/gotcha] MTU issue\n"
+        result = filter_daily_content(content, "cartwheel")
+        assert "MTU issue" in result
+
+    def test_multi_scope_no_match(self):
+        """Multi-scope entry doesn't match unrelated scope."""
+        content = "# 2026-02-23\n## Learnings\n- [global|cartwheel/gotcha] MTU issue\n"
+        result = filter_daily_content(content, "investing")
+        assert result == ""
+
+    def test_mixed_single_and_multi_scope(self):
+        """File with both single and multi-scope entries filters correctly."""
+        content = (
+            "# 2026-02-23\n## Actions\n"
+            "- [cartwheel/implement] OAuth flow\n"
+            "- [global|cartwheel/implement] CI pipeline\n"
+            "- [global/implement] Git hooks\n"
+        )
+        result = filter_daily_content(content, "cartwheel")
+        assert "OAuth flow" in result
+        assert "CI pipeline" in result
+        assert "Git hooks" not in result
+
+
 # =============================================================================
 # Find Current Project Tests
 # =============================================================================
@@ -984,6 +1025,40 @@ class TestResolveWorktreeToMainRepo:
             ]
             result = resolve_worktree_to_main_repo("/home/user/project/.worktrees/feature")
             assert result == "/home/user/project"
+
+
+class TestExtractEntryKeywordsMultiScope:
+    """Verify keyword extraction handles multi-scope tags like [global|cartwheel/gotcha]."""
+
+    def test_strips_multi_scope_tag(self):
+        entry = "- [global|cartwheel/gotcha] Tailscale MTU black hole"
+        keywords = extract_entry_keywords(entry)
+        assert "tailscale" in keywords
+        assert "global" not in keywords
+        assert "cartwheel" not in keywords
+        assert "gotcha" not in keywords
+
+    def test_strips_single_scope_unchanged(self):
+        entry = "- [cartwheel/implement] Built OAuth flow"
+        keywords = extract_entry_keywords(entry)
+        assert "oauth" in keywords
+        assert "cartwheel" not in keywords
+
+    def test_strips_multi_scope_with_routed_prefix(self):
+        entry = "- [routed][global|cartwheel/pattern] Shared CI config"
+        keywords = extract_entry_keywords(entry)
+        assert "shared" in keywords
+        assert "config" in keywords
+        assert "routed" not in keywords
+        assert "global" not in keywords
+        assert "cartwheel" not in keywords
+
+    def test_strips_multi_scope_with_date(self):
+        entry = "- (2026-02-23) [global|cartwheel/gotcha] Tailscale MTU"
+        keywords = extract_entry_keywords(entry)
+        assert "tailscale" in keywords
+        assert "2026" not in keywords
+        assert "global" not in keywords
 
 
 if __name__ == "__main__":

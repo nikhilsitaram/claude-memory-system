@@ -263,34 +263,34 @@ def _strip_profile_sections(content: str) -> str:
 
 
 def _build_synthesis_instructions(project_names_str: str) -> str:
-    """Build the shared synthesis instructions block (tagging, routing, dedup)."""
+    """Build the shared synthesis instructions block."""
     return '''**Daily summary format:**
 
 ```markdown
 # YYYY-MM-DD
 
 ## Actions
-<!-- What was done. Tag [scope/action]. -->
-- [scope/implement] What was accomplished
+<!-- What was done. Use [type] only — scope is injected automatically. -->
+- [implement] What was accomplished
 
 ## Decisions
-<!-- Important choices and rationale. Tag [scope/decision]. -->
-- [scope/design] Choice made and why
+<!-- Important choices and rationale. -->
+- [design] Choice made and why
 
 ## Learnings
-<!-- Patterns, gotchas, insights. Tag [scope/type]. -->
-- [scope/gotcha] Unexpected behavior discovered
-- [scope/pattern] Proven method or approach
+<!-- Patterns, gotchas, insights. -->
+- [gotcha] Unexpected behavior discovered
+- [pattern] Proven method or approach
 
 ## Lessons
-<!-- Actionable takeaways. Tag [scope/type]. -->
-- [scope/insight] Mental model or understanding
-- [scope/tip] Useful command or shortcut
+<!-- Actionable takeaways. -->
+- [insight] Mental model or understanding
+- [tip] Useful command or shortcut
 ```
 
-**Tag format:** `[scope/type]` where scope is `global` or one of these registered project names: ''' + project_names_str + '''
-**IMPORTANT:** Only use the project names listed above. Do NOT invent new project names from context.
-**Scope rule:** Use `global` ONLY for learnings that apply across ALL projects — general dev practices, SQL patterns, OS/tool behavior, Claude Code mechanics. If a learning arose while working on a specific project (debugging that project's code, that project's architecture, tools used primarily for that project), it belongs to that project even if the concept seems general. When in doubt, use the project name — project scope is almost always correct.
+**Entry format:** `- [type] Description` where type is one of: implement, improve, document, analyze, design, tradeoff, scope, gotcha, pitfall, pattern, insight, tip, workaround.
+**Scope injection:** Do NOT add scope/project names to tags. The system injects scope automatically from session metadata.
+**Global marker:** If a learning is genuinely useful across ALL projects (general dev practices, OS behavior, tool tips), prefix with `[GLOBAL]`: `- [GLOBAL][tip] Description`. Otherwise omit — the system defaults to project scope.
 **Compactness:** Final solutions only, one learning per concept, omit routine details.
 
 **Long-term routing (be HIGHLY selective):**
@@ -299,16 +299,13 @@ Route daily entries to corresponding LTM sections:
 - Daily `## Decisions` → LTM `## Key Decisions` (architecture choices, design tradeoffs, scope decisions with lasting impact)
 - Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
 - Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
-Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things, learnings that might not hold up over time.
-Destinations: `[global/*]` → global LTM, `[{project-name}/*]` → project LTM
-Only use registered project names for routing: ''' + project_names_str + '''
-Format: `(YYYY-MM-DD) [type] Description` (remove scope from tag, file is already scoped).
+Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things.
+The system handles dedup automatically — output all entries you think are worth routing.
+Format: `(YYYY-MM-DD) [type] Description` (no scope in routes — the system injects it).
 
-**DEDUP REQUIREMENT:** Before adding ANY routed entry, check the existing LTM content provided below. If an existing entry covers the same concept — even if worded differently — do NOT add a near-duplicate. Only add entries that represent genuinely new knowledge.
+**GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run.
 
-**GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run. If you have more, consolidate related items (e.g., multiple gotchas from one debugging session → one summary entry). Prefer fewer, denser entries over many granular ones.
-
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed or cancelled, a new tool adopted, a workflow changed — update or remove the relevant entry. Be conservative: only update when clearly stale, not speculatively.'''
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed, a new tool adopted — update or remove the relevant entry. Be conservative.'''
 
 
 def _build_preextracted_prompt(
@@ -372,9 +369,10 @@ def _build_preextracted_prompt(
     if merge_sections:
         merge_block = "\n\n".join(merge_sections)
         merge_instructions = f"""
-## Existing Daily Summaries (merge context)
+## Existing Daily Summaries (READ-ONLY context — do NOT repeat these entries)
 
-These daily files already exist from a previous synthesis run. When you see sessions marked '(continued — new messages only)', merge new insights into the existing summary. Do NOT duplicate entries already present. Add only genuinely new items.
+These daily files already exist. The system will merge your output automatically.
+Output ONLY entries from new/continued sessions — do not re-state anything below.
 
 {merge_block}
 
@@ -405,24 +403,21 @@ Your output must follow this exact structure. Here is a complete realistic examp
 ===DAILY:2026-02-20===
 # 2026-02-20
 ## Actions
-- [myproject/implement] Built REST API endpoints for user authentication
-- [global/implement] Configured pre-commit hooks for Python linting
+- [implement] Built REST API endpoints for user authentication
+- [implement] Configured pre-commit hooks for Python linting
 
 ## Decisions
-- [myproject/design] JWT tokens over session cookies — stateless scales better for microservices
+- [design] JWT tokens over session cookies — stateless scales better
 
 ## Learnings
-- [myproject/gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
-- [global/pattern] `pytest -x --tb=short` stops on first failure with compact output — faster debug cycles
+- [gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+- [GLOBAL][pattern] pytest -x --tb=short stops on first failure with compact output
 
 ## Lessons
-- [global/tip] `git stash -u` includes untracked files — plain `git stash` misses them
-
-===ROUTE:myproject:Key Learnings===
-- (2026-02-20) [gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
+- [GLOBAL][tip] git stash -u includes untracked files
 
 ===ROUTE:global:Key Lessons===
-- (2026-02-20) [tip] `git stash -u` includes untracked files — plain `git stash` misses them
+- (2026-02-20) [tip] git stash -u includes untracked files
 
 ===END===
 

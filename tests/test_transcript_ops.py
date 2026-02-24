@@ -394,7 +394,8 @@ class TestFormatTranscriptsIncremental:
 
         data = {"2026-02-22": [self._make_session("s1", "delta", ["New msg"])]}
         output = format_transcripts_incremental(data)
-        assert "Session: s1 (continued" in output
+        assert "Session: s1" in output
+        assert "(continued" in output
 
     def test_budget_applied(self):
         """Line budget still works with incremental format."""
@@ -433,6 +434,43 @@ class TestFormatTranscriptsIncremental:
         assert "DAY: 2026-02-22" in output
         assert "1 sessions" in output
         assert "2 messages" in output
+
+
+# =============================================================================
+# format_transcripts_incremental Project Header Tests
+# =============================================================================
+
+
+class TestFormatTranscriptsIncrementalProjectHeader:
+    def test_session_header_includes_project_name(self):
+        from transcript_ops import format_transcripts_incremental
+
+        daily_data = {
+            "2026-02-23": [{
+                "session_id": "abc123",
+                "message_count": 1,
+                "messages": [{"role": "assistant", "content": "hello"}],
+                "mode": "full",
+                "project_name": "cartwheel",
+            }]
+        }
+        result = format_transcripts_incremental(daily_data)
+        assert "[project: cartwheel]" in result
+
+    def test_session_header_global_when_no_project(self):
+        from transcript_ops import format_transcripts_incremental
+
+        daily_data = {
+            "2026-02-23": [{
+                "session_id": "abc123",
+                "message_count": 1,
+                "messages": [{"role": "assistant", "content": "hello"}],
+                "mode": "full",
+                "project_name": None,
+            }]
+        }
+        result = format_transcripts_incremental(daily_data)
+        assert "[project: global]" in result
 
 
 if __name__ == "__main__":

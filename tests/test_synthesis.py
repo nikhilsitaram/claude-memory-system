@@ -5,15 +5,77 @@ Unit tests for synthesis.py
 Run with: python -m pytest tests/test_synthesis.py -v
 """
 
-from synthesis import (  # noqa: I001
-    DailyFile,  # noqa: F401
+from pathlib import Path  # noqa: F401, I001
+
+from synthesis import (
+    DailyFile,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
+    inject_scopes,
     mark_routed_entries,
+    merge_daily_sections,
+    parse_daily_sections,
     parse_synthesis_output,
     write_daily_files,
 )
+
+
+# =============================================================================
+# parse_daily_sections Tests
+# =============================================================================
+
+
+class TestParseDailySections:
+    def test_all_four_sections(self):
+        content = (
+            "# 2026-02-23\n"
+            "## Actions\n"
+            "- [impl] Did A\n"
+            "- [impl] Did B\n"
+            "## Decisions\n"
+            "- [design] Chose X\n"
+            "## Learnings\n"
+            "- [gotcha] Found bug\n"
+            "## Lessons\n"
+            "- [tip] Use Y\n"
+        )
+        result = parse_daily_sections(content)
+        assert result["date"] == "2026-02-23"
+        assert result["Actions"] == ["- [impl] Did A", "- [impl] Did B"]
+        assert result["Decisions"] == ["- [design] Chose X"]
+        assert result["Learnings"] == ["- [gotcha] Found bug"]
+        assert result["Lessons"] == ["- [tip] Use Y"]
+
+    def test_missing_sections_are_empty_lists(self):
+        content = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert result["Actions"] == ["- [impl] Did A"]
+        assert result["Decisions"] == []
+        assert result["Learnings"] == []
+        assert result["Lessons"] == []
+
+    def test_preserves_routed_prefix(self):
+        content = "# 2026-02-23\n## Actions\n- [routed][proj/impl] Old entry\n- [proj/impl] New entry\n"
+        result = parse_daily_sections(content)
+        assert len(result["Actions"]) == 2
+        assert "[routed]" in result["Actions"][0]
+
+    def test_skips_html_comments(self):
+        content = "# 2026-02-23\n## Actions\n<!-- template hint -->\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert len(result["Actions"]) == 1
+
+    def test_empty_content(self):
+        result = parse_daily_sections("")
+        assert result["date"] == ""
+        assert all(result[s] == [] for s in ["Actions", "Decisions", "Learnings", "Lessons"])
+
+    def test_no_date_header(self):
+        content = "## Actions\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert result["date"] == ""
+        assert result["Actions"] == ["- [impl] Did A"]
 
 
 # =============================================================================
@@ -205,13 +267,15 @@ class TestWriteDailyFiles:
         assert "# 2026-02-22" in written
         assert "- something" in written
 
-    def test_overwrites_existing_daily(self, tmp_path):
+    def test_merges_with_existing_daily(self, tmp_path):
         daily_dir = tmp_path / "daily"
         daily_dir.mkdir()
-        (daily_dir / "2026-02-22.md").write_text("old content")
-        dailies = [DailyFile(date="2026-02-22", content="new content")]
+        (daily_dir / "2026-02-22.md").write_text("# 2026-02-22\n## Actions\n- [impl] Old action\n")
+        dailies = [DailyFile(date="2026-02-22", content="# 2026-02-22\n## Actions\n- [impl] New action")]
         write_daily_files(dailies, daily_dir)
-        assert (daily_dir / "2026-02-22.md").read_text().strip() == "new content"
+        content = (daily_dir / "2026-02-22.md").read_text()
+        assert "- [impl] Old action" in content
+        assert "- [impl] New action" in content
 
     def test_creates_daily_dir_if_missing(self, tmp_path):
         daily_dir = tmp_path / "daily"
@@ -243,6 +307,43 @@ class TestWriteDailyFiles:
         write_daily_files(dailies, daily_dir)
         tmp_files = list(daily_dir.glob("*.tmp"))
         assert tmp_files == []
+
+
+# =============================================================================
+# write_daily_files Merge Tests
+# =============================================================================
+
+
+class TestWriteDailyFilesMerge:
+    def test_first_write_creates_file(self, tmp_path):
+        dailies = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        written = write_daily_files(dailies, daily_dir=tmp_path)
+        assert len(written) == 1
+        assert "- [impl] Did A" in Path(written[0]).read_text()
+
+    def test_second_write_merges_not_overwrites(self, tmp_path):
+        # First write
+        first = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(first, daily_dir=tmp_path)
+
+        # Second write with different entries
+        second = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did B")]
+        write_daily_files(second, daily_dir=tmp_path)
+
+        content = (tmp_path / "2026-02-23.md").read_text()
+        assert "- [impl] Did A" in content
+        assert "- [impl] Did B" in content
+
+    def test_second_write_deduplicates(self, tmp_path):
+        first = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(first, daily_dir=tmp_path)
+
+        # Same entry again
+        second = [DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [impl] Did A")]
+        write_daily_files(second, daily_dir=tmp_path)
+
+        content = (tmp_path / "2026-02-23.md").read_text()
+        assert content.count("- [impl] Did A") == 1
 
 
 # =============================================================================
@@ -367,6 +468,66 @@ class TestAppendToLtm:
             template_dir=tmp_path / "no-templates",
         )
         assert len(warnings) > 0
+
+
+class TestAppendToLtmKeywordDedup:
+    def test_rejects_near_duplicate_by_keyword_overlap(self, tmp_path):
+        """Near-duplicate with different wording is rejected."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n"
+            "<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole drops packets silently\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [gotcha] Tailscale MTU black hole silently drops packets"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert content.count("Tailscale MTU") == 1  # Not added
+
+    def test_allows_genuinely_different_entry(self, tmp_path):
+        """Different entry passes dedup check."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n"
+            "<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [pattern] pytest conftest.py shared fixtures"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "pytest conftest" in content
+
+    def test_route_cap_enforced(self, tmp_path):
+        """Max 5 entries per file per synthesis run."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Lessons\n<!-- tips -->\n")
+        # Use genuinely different entries so keyword dedup doesn't reject them
+        topics = [
+            "pytest fixtures isolation",
+            "docker compose networking",
+            "git rebase workflow strategy",
+            "tailscale subnet routing",
+            "redis caching invalidation",
+            "nginx reverse proxy headers",
+            "kubernetes pod scheduling",
+            "terraform state locking",
+        ]
+        entries = [f"- (2026-02-23) [tip] {t}" for t in topics]
+        routes = [RouteEntry(scope="global", section="Key Lessons", entries=entries)]
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # Only 5 should be added (route cap)
+        added = sum(1 for t in topics if t in content)
+        assert added == 5
+        assert any("cap" in w.lower() or "limit" in w.lower() for w in warnings)
 
 
 # =============================================================================
@@ -838,3 +999,236 @@ class TestEndToEnd:
         proj_content = proj_file.read_text()
         assert "Watch out for edge case Z" in proj_content
         assert "Built feature X" in proj_content
+
+
+# =============================================================================
+# merge_daily_sections Tests
+# =============================================================================
+
+
+# =============================================================================
+# inject_scopes Tests
+# =============================================================================
+
+
+class TestInjectScopes:
+    def test_type_only_gets_project_scope(self):
+        """[type] becomes [project/type] when session has project."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Actions\n- [implement] Built OAuth\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [cartwheel/implement] Built OAuth" in result[0].content
+
+    def test_global_marker_creates_dual_scope(self):
+        """[GLOBAL][type] becomes [global|project/type]."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Learnings\n- [GLOBAL][gotcha] MTU issue\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global|cartwheel/gotcha] MTU issue" in result[0].content
+
+    def test_no_project_defaults_to_global(self):
+        """[type] becomes [global/type] when no project match."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Lessons\n- [tip] Use stash\n"
+        )
+        session_projects = {"2026-02-23": None}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global/tip] Use stash" in result[0].content
+
+    def test_global_marker_no_project_stays_global(self):
+        """[GLOBAL][type] with no project becomes [global/type] (not [global|global/type])."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Lessons\n- [GLOBAL][tip] Use stash\n"
+        )
+        session_projects = {"2026-02-23": None}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global/tip] Use stash" in result[0].content
+
+    def test_already_scoped_entries_unchanged(self):
+        """Entries with existing [scope/type] format pass through unchanged."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Actions\n- [cartwheel/implement] Built OAuth\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [cartwheel/implement] Built OAuth" in result[0].content
+
+    def test_multiple_sessions_different_projects(self):
+        """Different dates can have different projects."""
+        dailies = [
+            DailyFile(date="2026-02-22", content="# 2026-02-22\n## Actions\n- [implement] Did A\n"),
+            DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [implement] Did B\n"),
+        ]
+        session_projects = {"2026-02-22": "cartwheel", "2026-02-23": "investing"}
+        result = inject_scopes(dailies, session_projects)
+        assert "- [cartwheel/implement] Did A" in result[0].content
+        assert "- [investing/implement] Did B" in result[1].content
+
+
+class TestMergeDailySections:
+    def test_no_existing_returns_new(self):
+        new = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = merge_daily_sections("", new)
+        assert "- [impl] Did A" in result
+
+    def test_appends_new_entries_to_existing(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] Did B\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [impl] Did B" in result
+
+    def test_dedup_rejects_near_duplicate(self):
+        existing = "# 2026-02-23\n## Learnings\n- [gotcha] Tailscale MTU black hole drops packets\n"
+        new = "# 2026-02-23\n## Learnings\n- [gotcha] Tailscale MTU black hole silently drops packets\n"
+        result = merge_daily_sections(existing, new)
+        # Should only have one entry (near-duplicate rejected)
+        assert result.count("Tailscale MTU") == 1
+
+    def test_preserves_existing_when_new_is_empty(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n## Lessons\n- [tip] Use X\n"
+        new = "# 2026-02-23\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [tip] Use X" in result
+
+    def test_new_section_not_in_existing(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "# 2026-02-23\n## Lessons\n- [tip] Use Y\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [tip] Use Y" in result
+
+    def test_preserves_section_order(self):
+        existing = "# 2026-02-23\n## Lessons\n- [tip] Use X\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = merge_daily_sections(existing, new)
+        actions_pos = result.index("## Actions")
+        lessons_pos = result.index("## Lessons")
+        assert actions_pos < lessons_pos
+
+    def test_preserves_routed_entries(self):
+        existing = "# 2026-02-23\n## Actions\n- [routed][proj/impl] Old entry\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] New entry\n"
+        result = merge_daily_sections(existing, new)
+        assert "[routed]" in result
+        assert "New entry" in result
+
+    def test_uses_existing_date_header(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "## Actions\n- [impl] Did B\n"
+        result = merge_daily_sections(existing, new)
+        assert result.startswith("# 2026-02-23")
+
+
+# =============================================================================
+# Full Pipeline Integration Tests
+# =============================================================================
+
+
+class TestFullPipelineIntegration:
+    def test_end_to_end_with_scope_injection_and_merge(self, tmp_path):
+        """Full pipeline: parse -> inject scopes -> mark routed -> merge -> write -> LTM."""
+        # Setup: existing daily file from earlier synthesis
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        existing_daily = daily_dir / "2026-02-23.md"
+        existing_daily.write_text(
+            "# 2026-02-23\n## Actions\n- [cartwheel/implement] Built OAuth\n"
+        )
+
+        # Setup: existing LTM
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Pinned\n\n## Key Learnings\n<!-- gotchas -->\n\n"
+            "## Key Lessons\n<!-- tips -->\n"
+        )
+
+        # LLM output (simplified format -- no scopes, just types)
+        llm_output = """===DAILY:2026-02-23===
+# 2026-02-23
+## Actions
+- [implement] Added rate limiting
+
+## Learnings
+- [GLOBAL][gotcha] Tailscale MTU black hole on WSL2
+
+===ROUTE:global:Key Learnings===
+- (2026-02-23) [gotcha] Tailscale MTU black hole on WSL2
+
+===END==="""
+
+        # Parse
+        result = parse_synthesis_output(llm_output)
+        assert len(result.dailies) == 1
+
+        # Inject scopes
+        session_projects = {"2026-02-23": "cartwheel"}
+        scoped = inject_scopes(result.dailies, session_projects)
+        assert "- [cartwheel/implement] Added rate limiting" in scoped[0].content
+        assert "- [global|cartwheel/gotcha] Tailscale MTU" in scoped[0].content
+
+        # Mark routed
+        marked = mark_routed_entries(scoped, result.routes)
+
+        # Write (merges with existing)
+        write_daily_files(marked, daily_dir=daily_dir)
+        daily_content = existing_daily.read_text()
+        assert "- [cartwheel/implement] Built OAuth" in daily_content  # preserved
+        assert "- [cartwheel/implement] Added rate limiting" in daily_content  # merged
+        assert "Tailscale MTU" in daily_content  # merged
+
+        # Append to LTM
+        append_to_ltm(result.routes, global_file=ltm_file)
+        ltm_content = ltm_file.read_text()
+        assert "Tailscale MTU" in ltm_content
+
+    def test_dedup_across_merge_and_ltm(self, tmp_path):
+        """Dedup prevents duplicates in both daily merge and LTM append."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        existing = daily_dir / "2026-02-23.md"
+        existing.write_text(
+            "# 2026-02-23\n## Learnings\n- [global/gotcha] Tailscale MTU drops packets\n"
+        )
+
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole drops packets\n"
+        )
+
+        # LLM outputs near-duplicate
+        llm_output = """===DAILY:2026-02-23===
+# 2026-02-23
+## Learnings
+- [gotcha] Tailscale MTU black hole silently drops packets
+
+===ROUTE:global:Key Learnings===
+- (2026-02-23) [gotcha] Tailscale MTU black hole silently drops packets
+
+===END==="""
+
+        result = parse_synthesis_output(llm_output)
+        session_projects = {"2026-02-23": None}
+        scoped = inject_scopes(result.dailies, session_projects)
+        marked = mark_routed_entries(scoped, result.routes)
+        write_daily_files(marked, daily_dir=daily_dir)
+        append_to_ltm(result.routes, global_file=ltm_file)
+
+        # Daily: should have only 1 Tailscale entry (dedup rejected near-dupe)
+        daily_content = existing.read_text()
+        assert daily_content.count("Tailscale MTU") == 1
+
+        # LTM: should have only 1 Tailscale entry (keyword dedup rejected)
+        ltm_content = ltm_file.read_text()
+        assert ltm_content.count("Tailscale MTU") == 1
