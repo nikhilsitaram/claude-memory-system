@@ -17,8 +17,10 @@ claude-memory-system/
 │   ├── decay.py                # Age-based decay for long-term memory
 │   ├── synthesis.py            # Synthesis output parser, applier, state updater
 │   ├── project_manager.py      # Project lifecycle management library
-│   └── devtools.py             # Dev diagnostics + mark-routed dedup migration
+│   ├── devtools.py             # Dev diagnostics + mark-routed dedup migration
+│   └── synthesis_cron.py       # Deferred synthesis runner (systemd timer entry point)
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
+├── systemd/                    # Systemd user units for deferred synthesis
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
 ```
@@ -113,6 +115,7 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 ### Hooks (defined in `install.py` `merge_hooks()`)
 - `SessionStart` - loads memory context
 - `PreToolUse` - auto-approves memory operations (workaround for subagent permission bug)
+- `SessionEnd` - triggers deferred synthesis via systemd
 
 Note: Transcripts are read directly from Claude Code's storage (`~/.claude/projects/`), not copied via hooks.
 
@@ -145,6 +148,7 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
 | `synthesis.model` | sonnet | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
+| `synthesis.deferred` | false | Enable deferred synthesis (systemd timer instead of in-session) |
 | `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
 | `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
 
@@ -166,3 +170,4 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
 | Worktree-aware detection | `resolve_worktree_to_main_repo()` resolves git worktree paths to main repo via `git rev-parse`; falls back to `/.worktrees/` path pattern for deleted worktrees |
 | Deterministic synthesis | Scope injection from session CWD metadata (`inject_scopes`), programmatic daily merge (`merge_daily_sections`), keyword-overlap dedup in LTM (`is_routed_match` 0.6), route cap (5/file); LLM outputs `[type]` + optional `[GLOBAL]`, code handles structure |
+| Deferred synthesis | `synthesis.deferred` setting gates in-session synthesis; `synthesis_cron.py` + systemd timer runs synthesis out-of-session via `claude -p`; SessionEnd hook triggers on session exit |
