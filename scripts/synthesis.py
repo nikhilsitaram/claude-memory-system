@@ -33,6 +33,7 @@ from memory_utils import (  # noqa: E402
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
+    get_projects_dir,
     is_routed_match,
     prune_stale_state_entries,
     update_synthesis_state,
@@ -53,6 +54,7 @@ __all__ = [
     "write_daily_files",
     "append_to_ltm",
     "apply_results",
+    "compute_offsets_from_extracts",
     "run_mark_routed",
     "run_validate_ltm",
     "run_decay",
@@ -663,6 +665,67 @@ def run_post_processing(
     ts_file.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
 
 
+_SESSION_HEADER_RE = re.compile(r"^Session:\s+(\S+)")
+
+
+def _count_nonblank_lines(filepath: Path) -> int:
+    """Count non-blank lines in a file."""
+    count = 0
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                count += 1
+    return count
+
+
+def compute_offsets_from_extracts(extract_paths: list[str]) -> dict[str, dict]:
+    """Compute session offsets from extract files and JSONL sources on disk.
+
+    Parses session IDs from extract file headers, locates the corresponding
+    JSONL transcript files in ~/.claude/projects/, and computes current file
+    size and line count.
+
+    This eliminates the dependency on --offsets-json being passed via CLI,
+    which required the LLM to faithfully reproduce the argument.
+
+    Returns:
+        Dict mapping session_id -> {"offset": file_size, "lines": line_count}
+    """
+    # Parse session IDs from extract files
+    session_ids: set[str] = set()
+    for path in extract_paths:
+        try:
+            for line in Path(path).open(encoding="utf-8"):
+                match = _SESSION_HEADER_RE.match(line)
+                if match:
+                    session_ids.add(match.group(1))
+        except IOError:
+            continue
+
+    if not session_ids:
+        return {}
+
+    # Find JSONL files and compute offsets
+    projects_dir = get_projects_dir()
+    if not projects_dir.exists():
+        return {}
+
+    offsets: dict[str, dict] = {}
+    for sid in session_ids:
+        for proj_dir in projects_dir.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            session_file = proj_dir / f"{sid}.jsonl"
+            if session_file.exists():
+                offsets[sid] = {
+                    "offset": session_file.stat().st_size,
+                    "lines": _count_nonblank_lines(session_file),
+                }
+                break
+
+    return offsets
+
+
 def apply_results(
     output_file: str,
     extract_paths: list[str],
@@ -700,11 +763,17 @@ def apply_results(
 
     # Update synthesis state with new high water marks
     if offsets_json:
+        # Legacy path: offsets passed via --offsets-json CLI arg
         try:
             offsets = json.loads(Path(offsets_json).read_text(encoding="utf-8"))
             update_synthesis_state(offsets)
         except (IOError, json.JSONDecodeError) as e:
             print(f"Warning: Could not update synthesis state: {e}", file=sys.stderr)
+    else:
+        # Primary path: compute offsets directly from extract files and JSONL sources
+        offsets = compute_offsets_from_extracts(extract_paths)
+        if offsets:
+            update_synthesis_state(offsets)
 
     # Post-processing
     run_post_processing(extract_paths, offsets_json=offsets_json)

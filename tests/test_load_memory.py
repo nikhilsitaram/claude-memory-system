@@ -1105,21 +1105,8 @@ class TestPromptMergeContext:
 class TestIncrementalWiring:
     """Verify incremental extraction is wired into the prompt."""
 
-    def test_offsets_arg_in_prompt_when_offsets_present(self):
-        """When offsets_path is in embedded_files, apply command includes --offsets-json."""
-        prompt = _build_preextracted_prompt(
-            pending_dates=["2026-02-22"],
-            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
-            synthesis_instructions="INSTRUCTIONS",
-            embedded_files={
-                "transcripts": {"2026-02-22": "data"},
-                "offsets_path": "/tmp/synthesis-offsets-123.json",
-            },
-        )
-        assert "--offsets-json /tmp/synthesis-offsets-123.json" in prompt
-
-    def test_no_offsets_arg_when_no_offsets(self):
-        """Without offsets_path, apply command has no --offsets-json."""
+    def test_no_offsets_arg_in_prompt(self):
+        """Prompt command never includes --offsets-json (offsets computed at apply time)."""
         prompt = _build_preextracted_prompt(
             pending_dates=["2026-02-22"],
             extracted_files={"2026-02-22": "/tmp/dummy.txt"},
@@ -1129,6 +1116,7 @@ class TestIncrementalWiring:
             },
         )
         assert "--offsets-json" not in prompt
+        assert "synthesis.py apply" in prompt
 
 
 # =============================================================================
@@ -1206,8 +1194,8 @@ class TestSynthesisPromptFileOutput:
 
         assert "No pending transcripts with content." in captured.getvalue()
 
-    def test_offsets_file_written_when_session_offsets(self, tmp_path, monkeypatch):
-        """Session offsets are written to a temp JSON file and embedded in the prompt args."""
+    def test_no_offsets_file_written(self, tmp_path, monkeypatch):
+        """Offsets are no longer written to temp files (computed at apply time instead)."""
         monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
         monkeypatch.setattr(
             "load_memory.pre_extract_transcripts_incremental",
@@ -1217,15 +1205,13 @@ class TestSynthesisPromptFileOutput:
                 {"2026-02-23": [{"session_id": "sid1", "project_path": "/test", "messages": ["hi"]}]},
             ),
         )
-        # Capture what's passed to _build_embedded_files
+        # Capture what's passed to _build_synthesis_prompt
         captured_embedded = {}
 
         def mock_build_embedded(*a, **kw):
-            result = {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}}
-            return result
+            return {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}}
 
         def mock_build_prompt(*a, **kw):
-            # Capture the embedded arg passed to _build_synthesis_prompt
             if len(a) >= 3:
                 captured_embedded.update(a[2] or {})
             elif "embedded_files" in kw:
@@ -1243,12 +1229,8 @@ class TestSynthesisPromptFileOutput:
 
         write_synthesis_prompt(exclude_session_id=None)
 
-        # Verify offsets_path was added to embedded files
-        assert "offsets_path" in captured_embedded
-        offsets_file = Path(captured_embedded["offsets_path"])
-        assert offsets_file.exists()
-        offsets_data = json.loads(offsets_file.read_text())
-        assert offsets_data["sid1"]["offset"] == 200
+        # offsets_path should NOT be in embedded files (computed at apply time now)
+        assert "offsets_path" not in captured_embedded
 
 
 # =============================================================================
