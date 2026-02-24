@@ -8,6 +8,8 @@ Run with: python -m pytest tests/test_synthesis.py -v
 from pathlib import Path  # noqa: F401, I001
 
 from synthesis import (
+    MIN_ROUTE_KEYWORDS,  # noqa: F401
+    ROUTE_CAP,  # noqa: F401
     DailyFile,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
@@ -359,19 +361,19 @@ class TestAppendToLtm:
             "## Key Learnings\n"
             "<!-- Subject to 30-day decay -->\n"
             "\n"
-            "- (2026-02-01) [pattern] Existing entry\n"
+            "- (2026-02-01) [pattern] Existing entry about filesystem operations\n"
         )
         routes = [
             RouteEntry(
                 scope="global",
                 section="Key Learnings",
-                entries=["- (2026-02-22) [gotcha] New entry"],
+                entries=["- (2026-02-22) [gotcha] Tailscale MTU black hole drops packets silently"],
             ),
         ]
         append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
         content = ltm_file.read_text()
-        assert "- (2026-02-01) [pattern] Existing entry" in content
-        assert "- (2026-02-22) [gotcha] New entry" in content
+        assert "- (2026-02-01) [pattern] Existing entry about filesystem operations" in content
+        assert "Tailscale MTU" in content
 
     def test_creates_project_file_from_template(self, tmp_path):
         template = tmp_path / "templates" / "project-long-term-memory.md"
@@ -384,7 +386,7 @@ class TestAppendToLtm:
             RouteEntry(
                 scope="my-project",
                 section="Key Learnings",
-                entries=["- (2026-02-22) [pattern] First entry"],
+                entries=["- (2026-02-22) [pattern] pytest conftest shared fixtures improve isolation"],
             ),
         ]
         append_to_ltm(
@@ -395,7 +397,7 @@ class TestAppendToLtm:
         )
         proj_file = proj_dir / "my-project-long-term-memory.md"
         assert proj_file.exists()
-        assert "First entry" in proj_file.read_text()
+        assert "pytest conftest" in proj_file.read_text()
 
     def test_section_not_found_skips(self, tmp_path):
         ltm_file = tmp_path / "global.md"
@@ -440,18 +442,18 @@ class TestAppendToLtm:
             RouteEntry(
                 scope="global",
                 section="Key Learnings",
-                entries=["- (2026-02-22) [pattern] A pattern"],
+                entries=["- (2026-02-22) [pattern] pytest conftest shared fixtures improve isolation"],
             ),
             RouteEntry(
                 scope="global",
                 section="Key Actions",
-                entries=["- (2026-02-22) [implement] An action"],
+                entries=["- (2026-02-22) [implement] docker compose networking bridge configuration setup"],
             ),
         ]
         append_to_ltm(routes, ltm_dir=tmp_path, global_file=ltm_file)
         content = ltm_file.read_text()
-        assert "A pattern" in content
-        assert "An action" in content
+        assert "pytest conftest" in content
+        assert "docker compose" in content
 
     def test_no_template_no_file_warns(self, tmp_path):
         routes = [
@@ -509,16 +511,16 @@ class TestAppendToLtmKeywordDedup:
         """Max 5 entries per file per synthesis run."""
         ltm_file = tmp_path / "global-long-term-memory.md"
         ltm_file.write_text("# Global LTM\n## Key Lessons\n<!-- tips -->\n")
-        # Use genuinely different entries so keyword dedup doesn't reject them
+        # Use genuinely different entries with enough keywords to pass quality floor
         topics = [
-            "pytest fixtures isolation",
-            "docker compose networking",
-            "git rebase workflow strategy",
-            "tailscale subnet routing",
-            "redis caching invalidation",
-            "nginx reverse proxy headers",
-            "kubernetes pod scheduling",
-            "terraform state locking",
+            "pytest fixtures isolation improves test reliability",
+            "docker compose networking requires bridge configuration",
+            "git rebase workflow strategy preserves commit history",
+            "tailscale subnet routing enables private network access",
+            "redis caching invalidation prevents stale data serving",
+            "nginx reverse proxy headers forwarding configuration",
+            "kubernetes pod scheduling affinity node selection",
+            "terraform state locking prevents concurrent modifications",
         ]
         entries = [f"- (2026-02-23) [tip] {t}" for t in topics]
         routes = [RouteEntry(scope="global", section="Key Lessons", entries=entries)]
@@ -526,8 +528,231 @@ class TestAppendToLtmKeywordDedup:
         content = ltm_file.read_text()
         # Only 5 should be added (route cap)
         added = sum(1 for t in topics if t in content)
-        assert added == 5
+        assert added == ROUTE_CAP
         assert any("cap" in w.lower() or "limit" in w.lower() for w in warnings)
+
+
+# =============================================================================
+# Cross-Section Dedup Tests
+# =============================================================================
+
+
+class TestAppendToLtmCrossSectionDedup:
+    def test_learning_blocks_same_lesson(self, tmp_path):
+        """Near-dup in Key Learnings prevents routing to Key Lessons."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n"
+            "- (2026-02-20) [pattern] pytest conftest shared fixtures improve test isolation\n\n"
+            "## Key Lessons\n"
+            "<!-- decay -->\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Lessons",
+            entries=["- (2026-02-23) [tip] pytest conftest shared fixtures for test isolation"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # The near-dup should NOT appear in Key Lessons
+        assert "Key Lessons" in content
+        assert content.count("conftest") == 1  # only the existing one in Key Learnings
+
+    def test_pinned_blocks_route(self, tmp_path):
+        """Entry in Pinned section prevents routing to Key Learnings."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n\n"
+            "## Pinned\n"
+            "- (2026-02-01) [design] Two-tier memory architecture with project and global tiers\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [pattern] Two-tier memory architecture project and global tiers"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # Should not be added to Key Learnings (pinned already covers it)
+        assert content.count("Two-tier memory") == 1
+
+    def test_different_sections_different_content_both_routed(self, tmp_path):
+        """Genuinely different entries in different sections both pass."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n\n"
+            "## Key Lessons\n"
+            "<!-- decay -->\n"
+        )
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-23) [gotcha] Tailscale MTU black hole drops packets silently"],
+            ),
+            RouteEntry(
+                scope="global",
+                section="Key Lessons",
+                entries=["- (2026-02-23) [tip] pytest conftest shared fixtures improve test isolation"],
+            ),
+        ]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "Tailscale MTU" in content
+        assert "pytest conftest" in content
+
+    def test_intra_batch_cross_section_dedup(self, tmp_path):
+        """Same concept routed to two sections in same batch — second rejected."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n\n"
+            "## Key Lessons\n"
+            "<!-- decay -->\n"
+        )
+        routes = [
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-23) [pattern] Tailscale MTU black hole drops packets silently"],
+            ),
+            RouteEntry(
+                scope="global",
+                section="Key Lessons",
+                entries=["- (2026-02-23) [tip] Tailscale MTU black hole silently drops packets"],
+            ),
+        ]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # Only the first one should be added
+        assert content.count("Tailscale MTU") == 1
+
+
+# =============================================================================
+# Quality Floor Tests
+# =============================================================================
+
+
+class TestAppendToLtmQualityFloor:
+    def test_thin_entry_rejected(self, tmp_path):
+        """Entry with too few keywords is rejected with warning."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Lessons\n<!-- decay -->\n")
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Lessons",
+            entries=["- (2026-02-23) [tip] Use git stash"],
+        )]
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "git stash" not in content
+        assert any("quality floor" in w for w in warnings)
+
+    def test_substantive_entry_passes(self, tmp_path):
+        """Entry with enough keywords is accepted."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Learnings\n<!-- decay -->\n")
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [gotcha] Tailscale MTU black hole drops packets silently on WSL2"],
+        )]
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "Tailscale MTU" in content
+        assert not any("quality floor" in w for w in warnings)
+
+    def test_quality_floor_does_not_count_toward_route_cap(self, tmp_path):
+        """Rejected entries don't consume route cap slots."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Lessons\n<!-- decay -->\n")
+        # First 4 entries are thin (below quality floor), then 5 substantive
+        thin_entries = [f"- (2026-02-23) [tip] Do {chr(65 + i)}" for i in range(4)]
+        topics = [
+            "pytest fixtures provide test isolation automatically",
+            "docker compose networking requires bridge configuration",
+            "git rebase workflow strategy preserves commit history",
+            "tailscale subnet routing enables private network access",
+            "redis caching invalidation prevents stale data serving",
+        ]
+        good_entries = [f"- (2026-02-23) [tip] {t}" for t in topics]
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Lessons",
+            entries=thin_entries + good_entries,
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # All 5 good entries should be added (thin ones don't count toward cap)
+        added = sum(1 for t in topics if t in content)
+        assert added == ROUTE_CAP
+
+    def test_boundary_exactly_min_keywords_passes(self, tmp_path):
+        """Entry with exactly MIN_ROUTE_KEYWORDS keywords passes."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Learnings\n<!-- decay -->\n")
+        # Construct entry with exactly MIN_ROUTE_KEYWORDS meaningful keywords
+        # Keywords: "pytest", "fixtures", "shared", "isolation" (4 keywords)
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [pattern] pytest fixtures shared isolation"],
+        )]
+        from memory_utils import extract_entry_keywords
+        kw = extract_entry_keywords(routes[0].entries[0])
+        assert len(kw) >= MIN_ROUTE_KEYWORDS, f"Test setup: expected >= {MIN_ROUTE_KEYWORDS} keywords, got {len(kw)}: {kw}"
+
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "pytest fixtures" in content
+        assert not any("quality floor" in w for w in warnings)
+
+    def test_combined_quality_floor_and_cross_section_dedup(self, tmp_path):
+        """Both quality floor and cross-section dedup work together."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n\n"
+            "## Pinned\n"
+            "- (2026-02-01) [design] Two-tier memory architecture with project and global tiers\n\n"
+            "## Key Learnings\n"
+            "<!-- decay -->\n\n"
+            "## Key Lessons\n"
+            "<!-- decay -->\n"
+        )
+        routes = [
+            # Thin entry — rejected by quality floor
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-23) [tip] Use git stash"],
+            ),
+            # Near-dup of Pinned — rejected by cross-section dedup
+            RouteEntry(
+                scope="global",
+                section="Key Lessons",
+                entries=["- (2026-02-23) [insight] Two-tier memory architecture project and global tiers"],
+            ),
+            # Genuinely new and substantive — accepted
+            RouteEntry(
+                scope="global",
+                section="Key Learnings",
+                entries=["- (2026-02-23) [gotcha] Tailscale MTU black hole drops packets silently on WSL2"],
+            ),
+        ]
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # Only the genuinely new entry should be added
+        assert "Tailscale MTU" in content
+        assert "git stash" not in content
+        assert content.count("Two-tier memory") == 1  # only the pinned one
+        assert any("quality floor" in w for w in warnings)
 
 
 # =============================================================================
@@ -592,10 +817,10 @@ class TestApplyResults:
         output_text = """===DAILY:2026-02-22===
 # 2026-02-22
 ## Learnings
-- [global/pattern] Important pattern
+- [global/pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===ROUTE:global:Key Learnings===
-- (2026-02-22) [pattern] Important pattern
+- (2026-02-22) [pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===END==="""
 
@@ -618,7 +843,7 @@ class TestApplyResults:
 
         # LTM updated
         ltm_content = global_ltm.read_text()
-        assert "Important pattern" in ltm_content
+        assert "Tailscale MTU" in ltm_content
 
     def test_no_dailies_skips_everything(self, tmp_path):
         """If output has no ===DAILY: blocks, nothing happens."""
@@ -888,12 +1113,12 @@ class TestEndToEnd:
         output_file.write_text("""===DAILY:2026-02-22===
 # 2026-02-22
 ## Actions
-- [global/implement] Built something cool
+- [global/implement] Refactored authentication module with OAuth integration
 ## Learnings
-- [global/pattern] Pattern is useful
+- [global/pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===ROUTE:global:Key Learnings===
-- (2026-02-22) [pattern] Pattern is useful
+- (2026-02-22) [pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===END===
 """)
@@ -917,7 +1142,7 @@ class TestEndToEnd:
             template_dir=template_dir,
         )
         assert len(warnings) == 0
-        assert "Pattern is useful" in global_ltm.read_text()
+        assert "Tailscale MTU" in global_ltm.read_text()
 
     def test_multi_day_multi_scope(self, tmp_path):
         """Test pipeline with multiple days and both global + project routes."""
@@ -939,28 +1164,28 @@ class TestEndToEnd:
         output_text = """===DAILY:2026-02-21===
 # 2026-02-21
 ## Actions
-- [myproj/implement] Built feature X
+- [myproj/implement] Built OAuth integration with refresh token rotation
 ## Learnings
-- [global/pattern] Global insight A
+- [global/pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===DAILY:2026-02-22===
 # 2026-02-22
 ## Actions
-- [global/implement] Refactored module Y
+- [global/implement] Refactored authentication module with session management
 ## Learnings
-- [myproj/gotcha] Watch out for edge case Z
+- [myproj/gotcha] SQLAlchemy connection pool exhaustion under concurrent requests
 
 ===ROUTE:global:Key Learnings===
-- (2026-02-21) [pattern] Global insight A
+- (2026-02-21) [pattern] Tailscale MTU black hole drops packets silently on WSL2
 
 ===ROUTE:global:Key Actions===
-- (2026-02-22) [implement] Refactored module Y
+- (2026-02-22) [implement] Refactored authentication module with session management
 
 ===ROUTE:myproj:Key Learnings===
-- (2026-02-22) [gotcha] Watch out for edge case Z
+- (2026-02-22) [gotcha] SQLAlchemy connection pool exhaustion under concurrent requests
 
 ===ROUTE:myproj:Key Actions===
-- (2026-02-21) [implement] Built feature X
+- (2026-02-21) [implement] Built OAuth integration with refresh token rotation
 
 ===END===
 """
@@ -990,15 +1215,15 @@ class TestEndToEnd:
 
         # Global LTM has both entries
         global_content = global_ltm.read_text()
-        assert "Global insight A" in global_content
-        assert "Refactored module Y" in global_content
+        assert "Tailscale MTU" in global_content
+        assert "Refactored authentication" in global_content
 
         # Project LTM was created from template and has both entries
         proj_file = proj_dir / "myproj-long-term-memory.md"
         assert proj_file.exists()
         proj_content = proj_file.read_text()
-        assert "Watch out for edge case Z" in proj_content
-        assert "Built feature X" in proj_content
+        assert "SQLAlchemy connection pool" in proj_content
+        assert "OAuth integration" in proj_content
 
 
 # =============================================================================

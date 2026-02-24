@@ -528,6 +528,16 @@ class TestBuildSynthesisInstructions:
         assert "Scope injection" in instructions
         assert "Do NOT add scope" in instructions
 
+    def test_exclusion_criteria_has_categories(self):
+        """Routing exclusions are categorized, not a single vague line."""
+        instructions = _build_synthesis_instructions("`proj`")
+        assert "Common dev knowledge" in instructions
+        assert "Generic software patterns" in instructions
+        assert "One-time fixes" in instructions
+        assert "Version-specific notes" in instructions
+        assert "Easily re-discoverable" in instructions
+        assert "save significant time" in instructions
+
 
 # =============================================================================
 # _build_preextracted_prompt Tests
@@ -1312,6 +1322,32 @@ class TestSynthesisPromptSimplified:
         )
         assert "read-only" in result.lower() or "READ-ONLY" in result
         assert "do NOT repeat" in result or "do not repeat" in result.lower()
+
+
+# =============================================================================
+# Skip Memory Env Var Tests
+# =============================================================================
+
+
+class TestSkipMemory:
+    def test_skip_memory_env_var_suppresses_output(self, capsys, monkeypatch):
+        """CLAUDE_SKIP_MEMORY=1 causes main() to exit with no output."""
+        from load_memory import main
+
+        monkeypatch.setenv("CLAUDE_SKIP_MEMORY", "1")
+        main()
+        assert capsys.readouterr().out == ""
+
+    def test_no_skip_without_env_var(self, monkeypatch):
+        """Without CLAUDE_SKIP_MEMORY, main() proceeds past the env check."""
+        from load_memory import main
+
+        monkeypatch.delenv("CLAUDE_SKIP_MEMORY", raising=False)
+        # main() should proceed past the env var check and hit load_settings.
+        # We mock load_settings to raise so we can confirm it got past the check.
+        with mock.patch("load_memory.load_settings", side_effect=RuntimeError("reached")):
+            with pytest.raises(RuntimeError, match="reached"):
+                main()
 
 
 if __name__ == "__main__":

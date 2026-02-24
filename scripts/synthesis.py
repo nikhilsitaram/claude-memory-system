@@ -28,6 +28,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (  # noqa: E402
+    extract_entry_keywords,
     get_daily_dir,
     get_global_memory_file,
     get_memory_dir,
@@ -39,6 +40,8 @@ from memory_utils import (  # noqa: E402
 
 __all__ = [
     "DailyFile",
+    "MIN_ROUTE_KEYWORDS",
+    "ROUTE_CAP",
     "RouteEntry",
     "SECTION_ORDER",
     "SynthesisResult",
@@ -60,6 +63,10 @@ __all__ = [
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")
 ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")
 END_MARKER = "===END==="
+
+# Routing quality gates
+MIN_ROUTE_KEYWORDS = 4  # Minimum meaningful keywords for an entry to be routed
+ROUTE_CAP = 5  # Maximum entries routed per LTM file per synthesis run
 
 
 @dataclass
@@ -511,9 +518,15 @@ def append_to_ltm(
         content = target_file.read_text(encoding="utf-8")
         lines = content.split("\n")
 
+        # Collect ALL entries across all sections (including Pinned) for cross-section dedup
+        all_file_entries = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("- ") and not stripped.startswith("<!--"):
+                all_file_entries.append(line)
+
         # Track entries added per file for route cap
         entries_added_to_file = 0
-        ROUTE_CAP = 5
 
         for route in file_route_list:
             section_header = f"## {route.section}"
@@ -535,17 +548,18 @@ def append_to_ltm(
             ):
                 insert_idx += 1
 
-            # Collect existing entries in this section for keyword dedup
-            existing_entries = []
-            for idx in range(insert_idx, len(lines)):
-                if lines[idx].startswith("## "):
-                    break
-                if lines[idx].strip().startswith("-"):
-                    existing_entries.append(lines[idx])
-
-            # Filter: keyword-overlap dedup + route cap
+            # Filter: quality floor + cross-section keyword dedup + route cap
             new_entries = []
             for entry in route.entries:
+                # Quality floor: reject entries with too few meaningful keywords
+                entry_keywords = extract_entry_keywords(entry)
+                if len(entry_keywords) < MIN_ROUTE_KEYWORDS:
+                    warnings.append(
+                        f"Entry below quality floor ({len(entry_keywords)} keywords), "
+                        f"skipping: {entry[:80]}"
+                    )
+                    continue
+
                 if entries_added_to_file >= ROUTE_CAP:
                     warnings.append(
                         f"Route cap ({ROUTE_CAP}) reached for {target_file.name}, "
@@ -554,10 +568,10 @@ def append_to_ltm(
                     break
                 if not any(
                     is_routed_match(entry, existing, threshold=0.6)
-                    for existing in existing_entries
+                    for existing in all_file_entries
                 ):
                     new_entries.append(entry)
-                    existing_entries.append(entry)  # Prevent intra-batch dupes
+                    all_file_entries.append(entry)  # Prevent intra-batch cross-section dupes
                     entries_added_to_file += 1
 
             if new_entries:
