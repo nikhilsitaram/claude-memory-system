@@ -299,7 +299,13 @@ Route daily entries to corresponding LTM sections:
 - Daily `## Decisions` → LTM `## Key Decisions` (architecture choices, design tradeoffs, scope decisions with lasting impact)
 - Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
 - Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
-Do NOT route: routine implementation, version-specific fixes, one-time configs, easily re-discoverable things.
+Do NOT route:
+- Common dev knowledge (git basics, standard SQL patterns, well-known language features)
+- Generic software patterns (DRY, separation of concerns, use environment variables)
+- One-time fixes unlikely to recur (cleaned up stale files, resolved merge conflict, fixed typo)
+- Version-specific notes (upgraded X to Y, pinned dependency)
+- Easily re-discoverable things (CLI flag syntax, API URLs, config file locations)
+Only route entries that would save significant time if forgotten.
 The system handles dedup automatically — output all entries you think are worth routing.
 Format: `(YYYY-MM-DD) [type] Description` (no scope in routes — the system injects it).
 
@@ -657,6 +663,10 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
+
+    # Skip memory injection if explicitly disabled (e.g., ccblocks ping sessions)
+    if os.environ.get("CLAUDE_SKIP_MEMORY"):
+        return
 
     # Parse session_id from SessionStart hook stdin JSON
     current_session_id = None
