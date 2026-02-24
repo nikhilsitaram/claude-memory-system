@@ -41,6 +41,7 @@ __all__ = [
     "RouteEntry",
     "SECTION_ORDER",
     "SynthesisResult",
+    "merge_daily_sections",
     "parse_daily_sections",
     "parse_synthesis_output",
     "mark_routed_entries",
@@ -225,6 +226,53 @@ def parse_daily_sections(content: str) -> dict:
             result[current_section].append(line)
 
     return result
+
+
+def merge_daily_sections(existing_content: str, new_content: str) -> str:
+    """Merge new daily entries into existing daily file, section by section.
+
+    New entries that are near-duplicates of existing entries (by keyword overlap)
+    are rejected. Sections are output in standard order.
+
+    Args:
+        existing_content: Current daily file content (empty string if none)
+        new_content: New LLM output for same date
+
+    Returns:
+        Merged markdown content with date header and all sections.
+    """
+    from memory_utils import is_routed_match
+
+    if not existing_content.strip():
+        return new_content
+
+    existing = parse_daily_sections(existing_content)
+    new = parse_daily_sections(new_content)
+
+    date = existing["date"] or new["date"]
+    merged: dict[str, list[str]] = {}
+
+    for section in SECTION_ORDER:
+        existing_entries = existing.get(section, [])
+        new_entries = new.get(section, [])
+
+        merged[section] = list(existing_entries)
+        for entry in new_entries:
+            # Reject near-duplicates
+            if any(is_routed_match(entry, ex, threshold=0.6) for ex in existing_entries):
+                continue
+            merged[section].append(entry)
+
+    # Reassemble
+    lines: list[str] = []
+    if date:
+        lines.append(f"# {date}")
+    for section in SECTION_ORDER:
+        entries = merged[section]
+        if entries:
+            lines.append(f"## {section}")
+            lines.extend(entries)
+    return "\n".join(lines) + "\n"
 
 
 def mark_routed_entries(

@@ -11,6 +11,7 @@ from synthesis import (  # noqa: I001
     SynthesisResult,  # noqa: F401
     append_to_ltm,
     mark_routed_entries,
+    merge_daily_sections,
     parse_daily_sections,
     parse_synthesis_output,
     write_daily_files,
@@ -896,3 +897,64 @@ class TestEndToEnd:
         proj_content = proj_file.read_text()
         assert "Watch out for edge case Z" in proj_content
         assert "Built feature X" in proj_content
+
+
+# =============================================================================
+# merge_daily_sections Tests
+# =============================================================================
+
+
+class TestMergeDailySections:
+    def test_no_existing_returns_new(self):
+        new = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = merge_daily_sections("", new)
+        assert "- [impl] Did A" in result
+
+    def test_appends_new_entries_to_existing(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] Did B\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [impl] Did B" in result
+
+    def test_dedup_rejects_near_duplicate(self):
+        existing = "# 2026-02-23\n## Learnings\n- [gotcha] Tailscale MTU black hole drops packets\n"
+        new = "# 2026-02-23\n## Learnings\n- [gotcha] Tailscale MTU black hole silently drops packets\n"
+        result = merge_daily_sections(existing, new)
+        # Should only have one entry (near-duplicate rejected)
+        assert result.count("Tailscale MTU") == 1
+
+    def test_preserves_existing_when_new_is_empty(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n## Lessons\n- [tip] Use X\n"
+        new = "# 2026-02-23\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [tip] Use X" in result
+
+    def test_new_section_not_in_existing(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "# 2026-02-23\n## Lessons\n- [tip] Use Y\n"
+        result = merge_daily_sections(existing, new)
+        assert "- [impl] Did A" in result
+        assert "- [tip] Use Y" in result
+
+    def test_preserves_section_order(self):
+        existing = "# 2026-02-23\n## Lessons\n- [tip] Use X\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = merge_daily_sections(existing, new)
+        actions_pos = result.index("## Actions")
+        lessons_pos = result.index("## Lessons")
+        assert actions_pos < lessons_pos
+
+    def test_preserves_routed_entries(self):
+        existing = "# 2026-02-23\n## Actions\n- [routed][proj/impl] Old entry\n"
+        new = "# 2026-02-23\n## Actions\n- [impl] New entry\n"
+        result = merge_daily_sections(existing, new)
+        assert "[routed]" in result
+        assert "New entry" in result
+
+    def test_uses_existing_date_header(self):
+        existing = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        new = "## Actions\n- [impl] Did B\n"
+        result = merge_daily_sections(existing, new)
+        assert result.startswith("# 2026-02-23")
