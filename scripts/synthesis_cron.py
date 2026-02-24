@@ -43,15 +43,17 @@ def should_run_deferred_synthesis() -> bool:
     return should_synthesize(settings)
 
 
-def build_claude_command(model: str, prompt_file: str) -> list[str]:
-    """Build the claude -p command with explicit tool permissions.
+def build_claude_command(model: str) -> list[str]:
+    """Build the claude -p command for headless synthesis.
+
+    The prompt is piped via stdin (not as a positional arg) because
+    --allowedTools is variadic and would consume a trailing prompt string.
 
     Args:
         model: Model name (e.g. "sonnet", "haiku")
-        prompt_file: Path to the prompt file to read
 
     Returns:
-        Command list suitable for subprocess.run().
+        Command list suitable for subprocess.run(cmd, stdin=...).
     """
     return [
         "claude",
@@ -60,10 +62,6 @@ def build_claude_command(model: str, prompt_file: str) -> list[str]:
         "--model", model,
         "--permission-mode", "bypassPermissions",
         "--allowedTools", "Write,Bash,Read",
-        (
-            f"Read {prompt_file} and follow the instructions in it exactly. "
-            "Use only Write and Bash tools."
-        ),
     ]
 
 
@@ -113,20 +111,22 @@ def run_synthesis(force: bool = False) -> int:
         encoding="utf-8",
     )
 
-    # Build and run claude -p
-    cmd = build_claude_command(model, prompt_file)
+    # Build and run claude -p (prompt piped via stdin)
+    cmd = build_claude_command(model)
     env = os.environ.copy()
     env["CLAUDECODE"] = ""  # Unset nesting guard
 
     print(f"Running synthesis with model={model}")
     try:
-        result = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-        )
+        with open(prompt_file, encoding="utf-8") as f:
+            result = subprocess.run(
+                cmd,
+                stdin=f,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+            )
     except subprocess.TimeoutExpired:
         print("Error: Synthesis timed out after 300s", file=sys.stderr)
         return 1

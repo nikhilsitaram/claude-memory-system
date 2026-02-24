@@ -65,9 +65,8 @@ class TestBuildClaudeCommand:
     """Tests for building the claude -p command."""
 
     def test_includes_allowed_tools(self):
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="sonnet")
         assert "--allowedTools" in cmd
-        # Check the tool list string contains expected tools
         tools_idx = cmd.index("--allowedTools") + 1
         tools_str = cmd[tools_idx]
         assert "Write" in tools_str
@@ -75,36 +74,35 @@ class TestBuildClaudeCommand:
         assert "Read" in tools_str
 
     def test_includes_model(self):
-        cmd = build_claude_command(model="haiku", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="haiku")
         assert "--model" in cmd
         model_idx = cmd.index("--model") + 1
         assert cmd[model_idx] == "haiku"
 
     def test_includes_print_flag(self):
         """Should use -p for non-interactive (print) mode."""
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="sonnet")
         assert "-p" in cmd
 
     def test_includes_no_session_persistence(self):
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="sonnet")
         assert "--no-session-persistence" in cmd
 
     def test_uses_bypass_permissions_mode(self):
         """Headless synthesis needs permission bypass to avoid interactive prompts."""
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="sonnet")
         assert "--permission-mode" in cmd
         assert "bypassPermissions" in cmd
         assert "--dangerously-skip-permissions" not in cmd
 
-    def test_prompt_references_prompt_file(self):
-        """The inline prompt should instruct claude to read the prompt file."""
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/my-prompt.txt")
-        # Last positional arg is the prompt string
-        prompt_str = cmd[-1]
-        assert "/tmp/my-prompt.txt" in prompt_str
+    def test_no_positional_prompt(self):
+        """Prompt is piped via stdin, not as a positional arg."""
+        cmd = build_claude_command(model="sonnet")
+        # Last element should be a flag value, not a prompt string
+        assert cmd[-1] == "Write,Bash,Read"
 
     def test_returns_list(self):
-        cmd = build_claude_command(model="sonnet", prompt_file="/tmp/test.txt")
+        cmd = build_claude_command(model="sonnet")
         assert isinstance(cmd, list)
         assert cmd[0] == "claude"
 
