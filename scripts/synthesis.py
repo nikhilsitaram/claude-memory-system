@@ -41,6 +41,7 @@ __all__ = [
     "RouteEntry",
     "SECTION_ORDER",
     "SynthesisResult",
+    "inject_scopes",
     "merge_daily_sections",
     "parse_daily_sections",
     "parse_synthesis_output",
@@ -277,6 +278,118 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
             lines.append(f"## {section}")
             lines.extend(entries)
     return "\n".join(lines) + "\n"
+
+
+# Pattern to detect LLM's simplified output: - [type] or - [GLOBAL][type]
+_UNSCOPED_ENTRY = re.compile(
+    r"^(\s*-\s*)"           # prefix: "- "
+    r"(?:\[GLOBAL\])?"      # optional [GLOBAL] marker
+    r"\[([a-z]+)\]"         # [type] (lowercase type name)
+    r"(\s+.*)$"             # rest of entry
+)
+_GLOBAL_MARKER = re.compile(r"^\s*-\s*\[GLOBAL\]")
+# Pattern to detect already-scoped entries: - [scope/type] or - [scope|scope/type]
+_SCOPED_ENTRY = re.compile(r"^\s*-\s*(?:\[routed\])?\s*\[[^\]]+/[^\]]+\]")
+
+
+def inject_scopes(
+    dailies: list[DailyFile],
+    session_projects: dict[str, str | None],
+) -> list[DailyFile]:
+    """Inject project scope tags into daily entries based on session metadata.
+
+    Transforms LLM's simplified output:
+    - [type] Description       -> [project/type] Description
+    - [GLOBAL][type] Desc      -> [global|project/type] Desc (or [global/type] if no project)
+
+    Args:
+        dailies: Parsed daily files from LLM output
+        session_projects: Dict mapping date -> project name (None = global)
+
+    Returns:
+        New list of DailyFile objects with scope-injected content.
+    """
+    result = []
+    for daily in dailies:
+        project = session_projects.get(daily.date)
+        new_lines = []
+        for line in daily.content.split("\n"):
+            # Skip non-entry lines (headers, blanks)
+            if not line.strip().startswith("-"):
+                new_lines.append(line)
+                continue
+
+            # Already scoped — pass through
+            if _SCOPED_ENTRY.match(line):
+                new_lines.append(line)
+                continue
+
+            match = _UNSCOPED_ENTRY.match(line)
+            if match:
+                prefix = match.group(1)
+                entry_type = match.group(2)
+                rest = match.group(3)
+                has_global = bool(_GLOBAL_MARKER.match(line))
+
+                if project:
+                    if has_global:
+                        tag = f"[global|{project}/{entry_type}]"
+                    else:
+                        tag = f"[{project}/{entry_type}]"
+                else:
+                    tag = f"[global/{entry_type}]"
+
+                new_lines.append(f"{prefix}{tag}{rest}")
+            else:
+                new_lines.append(line)
+
+        result.append(DailyFile(date=daily.date, content="\n".join(new_lines)))
+    return result
+
+
+_PROJECT_HEADER = re.compile(r"Session:\s+\S+\s+\[project:\s+([^\]]+)\]")
+
+
+def _extract_session_projects(extract_paths: list[str]) -> dict[str, str | None]:
+    """Extract date -> project mapping from transcript extract files."""
+    from collections import Counter
+
+    date_projects: dict[str, Counter] = {}
+    for path in extract_paths:
+        try:
+            content = Path(path).read_text(encoding="utf-8")
+        except IOError:
+            continue
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", Path(path).name)
+        if not date_match:
+            continue
+        date = date_match.group(1)
+        if date not in date_projects:
+            date_projects[date] = Counter()
+
+        for match in _PROJECT_HEADER.finditer(content):
+            name = match.group(1).strip()
+            date_projects[date][name] += 1
+
+    result: dict[str, str | None] = {}
+    for date, counter in date_projects.items():
+        if not counter:
+            result[date] = None
+        else:
+            real = {k: v for k, v in counter.items() if k != "global"}
+            if real:
+                result[date] = max(real, key=lambda k: real[k])
+            else:
+                result[date] = None
+    return result
+
+
+def _inject_route_scopes(
+    routes: list[RouteEntry],
+    session_projects: dict[str, str | None],
+) -> list[RouteEntry]:
+    """Pass-through for now -- route scopes come from daily entry tags."""
+    return routes
 
 
 def mark_routed_entries(
@@ -534,8 +647,12 @@ def apply_results(
     # Mark routed entries in daily files
     marked_dailies = mark_routed_entries(result.dailies, result.routes)
 
+    # Inject scope tags from session metadata
+    session_projects = _extract_session_projects(extract_paths)
+    scoped_dailies = inject_scopes(marked_dailies, session_projects)
+
     # Write daily files
-    written = write_daily_files(marked_dailies)
+    written = write_daily_files(scoped_dailies)
     print(f"Wrote {len(written)} daily file(s)")
 
     # Append to LTM

@@ -945,6 +945,77 @@ class TestEndToEnd:
 # =============================================================================
 
 
+# =============================================================================
+# inject_scopes Tests
+# =============================================================================
+
+
+from synthesis import inject_scopes  # noqa: E402
+
+
+class TestInjectScopes:
+    def test_type_only_gets_project_scope(self):
+        """[type] becomes [project/type] when session has project."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Actions\n- [implement] Built OAuth\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [cartwheel/implement] Built OAuth" in result[0].content
+
+    def test_global_marker_creates_dual_scope(self):
+        """[GLOBAL][type] becomes [global|project/type]."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Learnings\n- [GLOBAL][gotcha] MTU issue\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global|cartwheel/gotcha] MTU issue" in result[0].content
+
+    def test_no_project_defaults_to_global(self):
+        """[type] becomes [global/type] when no project match."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Lessons\n- [tip] Use stash\n"
+        )
+        session_projects = {"2026-02-23": None}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global/tip] Use stash" in result[0].content
+
+    def test_global_marker_no_project_stays_global(self):
+        """[GLOBAL][type] with no project becomes [global/type] (not [global|global/type])."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Lessons\n- [GLOBAL][tip] Use stash\n"
+        )
+        session_projects = {"2026-02-23": None}
+        result = inject_scopes([daily], session_projects)
+        assert "- [global/tip] Use stash" in result[0].content
+
+    def test_already_scoped_entries_unchanged(self):
+        """Entries with existing [scope/type] format pass through unchanged."""
+        daily = DailyFile(
+            date="2026-02-23",
+            content="# 2026-02-23\n## Actions\n- [cartwheel/implement] Built OAuth\n"
+        )
+        session_projects = {"2026-02-23": "cartwheel"}
+        result = inject_scopes([daily], session_projects)
+        assert "- [cartwheel/implement] Built OAuth" in result[0].content
+
+    def test_multiple_sessions_different_projects(self):
+        """Different dates can have different projects."""
+        dailies = [
+            DailyFile(date="2026-02-22", content="# 2026-02-22\n## Actions\n- [implement] Did A\n"),
+            DailyFile(date="2026-02-23", content="# 2026-02-23\n## Actions\n- [implement] Did B\n"),
+        ]
+        session_projects = {"2026-02-22": "cartwheel", "2026-02-23": "investing"}
+        result = inject_scopes(dailies, session_projects)
+        assert "- [cartwheel/implement] Did A" in result[0].content
+        assert "- [investing/implement] Did B" in result[1].content
+
+
 class TestMergeDailySections:
     def test_no_existing_returns_new(self):
         new = "# 2026-02-23\n## Actions\n- [impl] Did A\n"

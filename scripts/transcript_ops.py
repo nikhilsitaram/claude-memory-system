@@ -25,6 +25,22 @@ if str(script_dir) not in sys.path:
 
 from indexing import get_session_date, list_recent_sessions
 
+
+def _resolve_project_name(project_path: str | None) -> str | None:
+    """Resolve a session's project_path to a project name via projects-index."""
+    if not project_path:
+        return None
+    try:
+        from memory_utils import get_projects_index_file, load_json_file
+        index = load_json_file(get_projects_index_file(), {})
+        projects = index.get("projects", {})
+        data = projects.get(project_path)
+        if data and data.get("name"):
+            return data["name"]
+    except Exception:
+        pass
+    return None
+
 __all__ = [
     # Parsing
     "extract_text_content",
@@ -229,6 +245,7 @@ def extract_transcripts_incremental(
                 "session_id": sid,
                 "filepath": str(session.transcript_path),
                 "project_path": session.project_path,
+                "project_name": _resolve_project_name(session.project_path),
                 "message_count": len(messages),
                 "messages": messages,
                 "mode": mode,
@@ -325,13 +342,11 @@ def format_transcripts_incremental(
         for session in sessions:
             output.append(f"\n{'─'*70}")
             mode = session.get("mode", "full")
+            project_name = session.get("project_name") or "global"
+            header = f"Session: {session['session_id']} [project: {project_name}]"
             if mode == "delta":
-                output.append(
-                    f"Session: {session['session_id']}"
-                    " (continued — new messages only)"
-                )
-            else:
-                output.append(f"Session: {session['session_id']}")
+                header += " (continued — new messages only)"
+            output.append(header)
             output.append(f"{'─'*70}")
 
             session_parts: list[str] = []
