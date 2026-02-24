@@ -250,8 +250,8 @@ class TestGetSessionDate:
 
     def test_falls_back_to_mtime(self):
         session = make_session_info(created=None)
-        # mtime is set to now in the helper
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # mtime is set to now in the helper; get_session_date converts to local tz
+        today = datetime.now().strftime("%Y-%m-%d")
         assert get_session_date(session) == today
 
 

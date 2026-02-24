@@ -16,7 +16,7 @@ Requirements: Python 3.9+
 import argparse
 import re
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -32,6 +32,7 @@ from memory_utils import (
     get_projects_index_file,
     load_json_file,
     load_settings,
+    local_today,
     project_name_to_filename,
 )
 
@@ -184,7 +185,7 @@ def decay_file(
 
     content = filepath.read_text(encoding="utf-8")
     sections = parse_sections(content)
-    today = datetime.now(timezone.utc).date()
+    today = local_today()
 
     archived_learnings = []
     modified_sections = []
@@ -250,7 +251,7 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
         return
 
     archive_file = get_memory_dir() / ".decay-archive.md"
-    today_header = f"## Archived {datetime.now(timezone.utc).date().isoformat()}"
+    today_header = f"## Archived {local_today().isoformat()}"
 
     if dry_run:
         return
@@ -298,7 +299,7 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
         return 0
 
     content = archive_file.read_text(encoding="utf-8")
-    today = datetime.now(timezone.utc).date()
+    today = local_today()
     cutoff_date = today - timedelta(days=retention_days)
 
     # Parse archive sections

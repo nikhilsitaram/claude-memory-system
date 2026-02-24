@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,8 @@ __all__ = [
     # Version check
     "check_python_version",
     # Datetime
+    "local_today",
+    "utc_to_local_datestr",
     "to_iso_z",
     "from_iso_z",
     # Path helpers
@@ -97,6 +99,16 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Sessions index:
 #   load_sessions_index(folder) -> dict    get_sessions_original_path(data) -> str
 # =============================================================================
+
+
+def local_today() -> date:
+    """Get today's date in local timezone."""
+    return datetime.now().date()
+
+
+def utc_to_local_datestr(dt: datetime) -> str:
+    """Convert a UTC-aware datetime to a local-timezone date string (YYYY-MM-DD)."""
+    return dt.astimezone().strftime("%Y-%m-%d")
 
 
 def to_iso_z(dt: datetime) -> str:

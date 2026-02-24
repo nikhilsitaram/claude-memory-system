@@ -17,7 +17,7 @@ import filecmp
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 REPO_DIR = Path(__file__).parent.parent.resolve()
@@ -172,7 +172,7 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
 def cmd_extract_debug(args: argparse.Namespace) -> int:
     """Debug transcript extraction for a specific day."""
     do_all = args.mode == "all"
-    day = args.day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day = args.day or datetime.now().strftime("%Y-%m-%d")
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
     from indexing import get_session_date, list_all_sessions

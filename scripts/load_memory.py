@@ -107,8 +107,8 @@ def should_synthesize(settings: dict) -> bool:
         now = datetime.now(timezone.utc)
         hours_since = (now - last_time).total_seconds() / 3600
 
-        # First session of day (UTC) OR >interval since last
-        return last_time.date() < now.date() or hours_since > interval_hours
+        # First session of day (local time) OR >interval since last
+        return last_time.astimezone().date() < datetime.now().date() or hours_since > interval_hours
 
     except (ValueError, OSError, IOError):
         return True  # Fallback: always synthesize if file missing/invalid
