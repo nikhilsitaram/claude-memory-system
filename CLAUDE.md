@@ -154,7 +154,7 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 
 | Feature | Implementation |
 |---------|----------------|
-| Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]` |
+| Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]`; pipe-delimited `[scope1\|scope2/type]` for multi-scope |
 | Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
 | Session exclusion | `--exclude-session` flag prevents active session from being synthesized |
 | Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.synthesis-state.json` tracks processing state |
@@ -165,3 +165,4 @@ Short-term token limits calculated as `workingDays × 750` (reduced due to scope
 | Incremental synthesis | `.synthesis-state.json` tracks per-session byte offset + line count; skips unchanged, delta-extracts grown sessions; merge context for existing dailies |
 | Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
 | Worktree-aware detection | `resolve_worktree_to_main_repo()` resolves git worktree paths to main repo via `git rev-parse`; falls back to `/.worktrees/` path pattern for deleted worktrees |
+| Deterministic synthesis | Scope injection from session CWD metadata (`inject_scopes`), programmatic daily merge (`merge_daily_sections`), keyword-overlap dedup in LTM (`is_routed_match` 0.6), route cap (5/file); LLM outputs `[type]` + optional `[GLOBAL]`, code handles structure |
