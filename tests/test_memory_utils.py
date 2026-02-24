@@ -1027,5 +1027,39 @@ class TestResolveWorktreeToMainRepo:
             assert result == "/home/user/project"
 
 
+class TestExtractEntryKeywordsMultiScope:
+    """Verify keyword extraction handles multi-scope tags like [global|cartwheel/gotcha]."""
+
+    def test_strips_multi_scope_tag(self):
+        entry = "- [global|cartwheel/gotcha] Tailscale MTU black hole"
+        keywords = extract_entry_keywords(entry)
+        assert "tailscale" in keywords
+        assert "global" not in keywords
+        assert "cartwheel" not in keywords
+        assert "gotcha" not in keywords
+
+    def test_strips_single_scope_unchanged(self):
+        entry = "- [cartwheel/implement] Built OAuth flow"
+        keywords = extract_entry_keywords(entry)
+        assert "oauth" in keywords
+        assert "cartwheel" not in keywords
+
+    def test_strips_multi_scope_with_routed_prefix(self):
+        entry = "- [routed][global|cartwheel/pattern] Shared CI config"
+        keywords = extract_entry_keywords(entry)
+        assert "shared" in keywords
+        assert "config" in keywords
+        assert "routed" not in keywords
+        assert "global" not in keywords
+        assert "cartwheel" not in keywords
+
+    def test_strips_multi_scope_with_date(self):
+        entry = "- (2026-02-23) [global|cartwheel/gotcha] Tailscale MTU"
+        keywords = extract_entry_keywords(entry)
+        assert "tailscale" in keywords
+        assert "2026" not in keywords
+        assert "global" not in keywords
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
