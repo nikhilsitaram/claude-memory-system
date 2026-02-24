@@ -32,6 +32,7 @@ from memory_utils import (  # noqa: E402
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
+    is_routed_match,
     prune_stale_state_entries,
     update_synthesis_state,
 )
@@ -242,8 +243,6 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
     Returns:
         Merged markdown content with date header and all sections.
     """
-    from memory_utils import is_routed_match
-
     if not existing_content.strip():
         return new_content
 
@@ -511,7 +510,10 @@ def append_to_ltm(
 
         content = target_file.read_text(encoding="utf-8")
         lines = content.split("\n")
-        existing_content = content.lower()
+
+        # Track entries added per file for route cap
+        entries_added_to_file = 0
+        ROUTE_CAP = 5
 
         for route in file_route_list:
             section_header = f"## {route.section}"
@@ -533,11 +535,30 @@ def append_to_ltm(
             ):
                 insert_idx += 1
 
-            # Filter out entries that already exist (case-insensitive dedup)
+            # Collect existing entries in this section for keyword dedup
+            existing_entries = []
+            for idx in range(insert_idx, len(lines)):
+                if lines[idx].startswith("## "):
+                    break
+                if lines[idx].strip().startswith("-"):
+                    existing_entries.append(lines[idx])
+
+            # Filter: keyword-overlap dedup + route cap
             new_entries = []
             for entry in route.entries:
-                if entry.strip().lower() not in existing_content:
+                if entries_added_to_file >= ROUTE_CAP:
+                    warnings.append(
+                        f"Route cap ({ROUTE_CAP}) reached for {target_file.name}, "
+                        f"skipping remaining entries"
+                    )
+                    break
+                if not any(
+                    is_routed_match(entry, existing, threshold=0.6)
+                    for existing in existing_entries
+                ):
                     new_entries.append(entry)
+                    existing_entries.append(entry)  # Prevent intra-batch dupes
+                    entries_added_to_file += 1
 
             if new_entries:
                 for entry in reversed(new_entries):

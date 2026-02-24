@@ -469,6 +469,66 @@ class TestAppendToLtm:
         assert len(warnings) > 0
 
 
+class TestAppendToLtmKeywordDedup:
+    def test_rejects_near_duplicate_by_keyword_overlap(self, tmp_path):
+        """Near-duplicate with different wording is rejected."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n"
+            "<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole drops packets silently\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [gotcha] Tailscale MTU black hole silently drops packets"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert content.count("Tailscale MTU") == 1  # Not added
+
+    def test_allows_genuinely_different_entry(self, tmp_path):
+        """Different entry passes dedup check."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n"
+            "<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole\n"
+        )
+        routes = [RouteEntry(
+            scope="global",
+            section="Key Learnings",
+            entries=["- (2026-02-23) [pattern] pytest conftest.py shared fixtures"],
+        )]
+        append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        assert "pytest conftest" in content
+
+    def test_route_cap_enforced(self, tmp_path):
+        """Max 5 entries per file per synthesis run."""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text("# Global LTM\n## Key Lessons\n<!-- tips -->\n")
+        # Use genuinely different entries so keyword dedup doesn't reject them
+        topics = [
+            "pytest fixtures isolation",
+            "docker compose networking",
+            "git rebase workflow strategy",
+            "tailscale subnet routing",
+            "redis caching invalidation",
+            "nginx reverse proxy headers",
+            "kubernetes pod scheduling",
+            "terraform state locking",
+        ]
+        entries = [f"- (2026-02-23) [tip] {t}" for t in topics]
+        routes = [RouteEntry(scope="global", section="Key Lessons", entries=entries)]
+        warnings = append_to_ltm(routes, global_file=ltm_file)
+        content = ltm_file.read_text()
+        # Only 5 should be added (route cap)
+        added = sum(1 for t in topics if t in content)
+        assert added == 5
+        assert any("cap" in w.lower() or "limit" in w.lower() for w in warnings)
+
+
 # =============================================================================
 # apply_results / run_post_processing Tests
 # =============================================================================
