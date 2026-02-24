@@ -12,6 +12,7 @@ from synthesis import (
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
+    inject_scopes,
     mark_routed_entries,
     merge_daily_sections,
     parse_daily_sections,
@@ -1010,9 +1011,6 @@ class TestEndToEnd:
 # =============================================================================
 
 
-from synthesis import inject_scopes  # noqa: E402
-
-
 class TestInjectScopes:
     def test_type_only_gets_project_scope(self):
         """[type] becomes [project/type] when session has project."""
@@ -1130,3 +1128,107 @@ class TestMergeDailySections:
         new = "## Actions\n- [impl] Did B\n"
         result = merge_daily_sections(existing, new)
         assert result.startswith("# 2026-02-23")
+
+
+# =============================================================================
+# Full Pipeline Integration Tests
+# =============================================================================
+
+
+class TestFullPipelineIntegration:
+    def test_end_to_end_with_scope_injection_and_merge(self, tmp_path):
+        """Full pipeline: parse -> inject scopes -> mark routed -> merge -> write -> LTM."""
+        # Setup: existing daily file from earlier synthesis
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        existing_daily = daily_dir / "2026-02-23.md"
+        existing_daily.write_text(
+            "# 2026-02-23\n## Actions\n- [cartwheel/implement] Built OAuth\n"
+        )
+
+        # Setup: existing LTM
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Pinned\n\n## Key Learnings\n<!-- gotchas -->\n\n"
+            "## Key Lessons\n<!-- tips -->\n"
+        )
+
+        # LLM output (simplified format -- no scopes, just types)
+        llm_output = """===DAILY:2026-02-23===
+# 2026-02-23
+## Actions
+- [implement] Added rate limiting
+
+## Learnings
+- [GLOBAL][gotcha] Tailscale MTU black hole on WSL2
+
+===ROUTE:global:Key Learnings===
+- (2026-02-23) [gotcha] Tailscale MTU black hole on WSL2
+
+===END==="""
+
+        # Parse
+        result = parse_synthesis_output(llm_output)
+        assert len(result.dailies) == 1
+
+        # Inject scopes
+        session_projects = {"2026-02-23": "cartwheel"}
+        scoped = inject_scopes(result.dailies, session_projects)
+        assert "- [cartwheel/implement] Added rate limiting" in scoped[0].content
+        assert "- [global|cartwheel/gotcha] Tailscale MTU" in scoped[0].content
+
+        # Mark routed
+        marked = mark_routed_entries(scoped, result.routes)
+
+        # Write (merges with existing)
+        write_daily_files(marked, daily_dir=daily_dir)
+        daily_content = existing_daily.read_text()
+        assert "- [cartwheel/implement] Built OAuth" in daily_content  # preserved
+        assert "- [cartwheel/implement] Added rate limiting" in daily_content  # merged
+        assert "Tailscale MTU" in daily_content  # merged
+
+        # Append to LTM
+        append_to_ltm(result.routes, global_file=ltm_file)
+        ltm_content = ltm_file.read_text()
+        assert "Tailscale MTU" in ltm_content
+
+    def test_dedup_across_merge_and_ltm(self, tmp_path):
+        """Dedup prevents duplicates in both daily merge and LTM append."""
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        existing = daily_dir / "2026-02-23.md"
+        existing.write_text(
+            "# 2026-02-23\n## Learnings\n- [global/gotcha] Tailscale MTU drops packets\n"
+        )
+
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(
+            "# Global LTM\n## Key Learnings\n<!-- gotchas -->\n"
+            "- (2026-02-20) [gotcha] Tailscale MTU black hole drops packets\n"
+        )
+
+        # LLM outputs near-duplicate
+        llm_output = """===DAILY:2026-02-23===
+# 2026-02-23
+## Learnings
+- [gotcha] Tailscale MTU black hole silently drops packets
+
+===ROUTE:global:Key Learnings===
+- (2026-02-23) [gotcha] Tailscale MTU black hole silently drops packets
+
+===END==="""
+
+        result = parse_synthesis_output(llm_output)
+        session_projects = {"2026-02-23": None}
+        scoped = inject_scopes(result.dailies, session_projects)
+        marked = mark_routed_entries(scoped, result.routes)
+        write_daily_files(marked, daily_dir=daily_dir)
+        append_to_ltm(result.routes, global_file=ltm_file)
+
+        # Daily: should have only 1 Tailscale entry (dedup rejected near-dupe)
+        daily_content = existing.read_text()
+        assert daily_content.count("Tailscale MTU") == 1
+
+        # LTM: should have only 1 Tailscale entry (keyword dedup rejected)
+        ltm_content = ltm_file.read_text()
+        assert ltm_content.count("Tailscale MTU") == 1
