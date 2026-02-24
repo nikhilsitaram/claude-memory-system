@@ -39,7 +39,9 @@ from memory_utils import (  # noqa: E402
 __all__ = [
     "DailyFile",
     "RouteEntry",
+    "SECTION_ORDER",
     "SynthesisResult",
+    "parse_daily_sections",
     "parse_synthesis_output",
     "mark_routed_entries",
     "write_daily_files",
@@ -171,6 +173,58 @@ def _extract_description(entry: str) -> str:
     if idx >= 0:
         return entry[idx + 1 :].strip()
     return entry.strip("- ").strip()
+
+
+SECTION_ORDER = ["Actions", "Decisions", "Learnings", "Lessons"]
+
+
+def parse_daily_sections(content: str) -> dict:
+    """Parse a daily markdown file into structured sections.
+
+    Returns dict with "date" (str) and section names mapping to entry lists.
+    Skips HTML comments and blank lines. Preserves [routed] prefixes.
+    """
+    result: dict = {"date": ""}
+    for s in SECTION_ORDER:
+        result[s] = []
+
+    if not content.strip():
+        return result
+
+    current_section = None
+    for line in content.split("\n"):
+        # Date header
+        if line.startswith("# ") and not line.startswith("## "):
+            date_match = re.match(r"^# (\d{4}-\d{2}-\d{2})", line)
+            if date_match:
+                result["date"] = date_match.group(1)
+            continue
+
+        # Section header
+        if line.startswith("## "):
+            section_name = line[3:].strip()
+            if section_name in SECTION_ORDER:
+                current_section = section_name
+            else:
+                current_section = None
+            continue
+
+        if current_section is None:
+            continue
+
+        # Skip HTML comments
+        if re.match(r"^\s*<!--.*-->\s*$", line):
+            continue
+
+        # Skip blank lines
+        if not line.strip():
+            continue
+
+        # Entry line (starts with -)
+        if line.strip().startswith("-"):
+            result[current_section].append(line)
+
+    return result
 
 
 def mark_routed_entries(

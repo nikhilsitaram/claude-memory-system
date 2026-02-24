@@ -11,9 +11,67 @@ from synthesis import (  # noqa: I001
     SynthesisResult,  # noqa: F401
     append_to_ltm,
     mark_routed_entries,
+    parse_daily_sections,
     parse_synthesis_output,
     write_daily_files,
 )
+
+
+# =============================================================================
+# parse_daily_sections Tests
+# =============================================================================
+
+
+class TestParseDailySections:
+    def test_all_four_sections(self):
+        content = (
+            "# 2026-02-23\n"
+            "## Actions\n"
+            "- [impl] Did A\n"
+            "- [impl] Did B\n"
+            "## Decisions\n"
+            "- [design] Chose X\n"
+            "## Learnings\n"
+            "- [gotcha] Found bug\n"
+            "## Lessons\n"
+            "- [tip] Use Y\n"
+        )
+        result = parse_daily_sections(content)
+        assert result["date"] == "2026-02-23"
+        assert result["Actions"] == ["- [impl] Did A", "- [impl] Did B"]
+        assert result["Decisions"] == ["- [design] Chose X"]
+        assert result["Learnings"] == ["- [gotcha] Found bug"]
+        assert result["Lessons"] == ["- [tip] Use Y"]
+
+    def test_missing_sections_are_empty_lists(self):
+        content = "# 2026-02-23\n## Actions\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert result["Actions"] == ["- [impl] Did A"]
+        assert result["Decisions"] == []
+        assert result["Learnings"] == []
+        assert result["Lessons"] == []
+
+    def test_preserves_routed_prefix(self):
+        content = "# 2026-02-23\n## Actions\n- [routed][proj/impl] Old entry\n- [proj/impl] New entry\n"
+        result = parse_daily_sections(content)
+        assert len(result["Actions"]) == 2
+        assert "[routed]" in result["Actions"][0]
+
+    def test_skips_html_comments(self):
+        content = "# 2026-02-23\n## Actions\n<!-- template hint -->\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert len(result["Actions"]) == 1
+
+    def test_empty_content(self):
+        result = parse_daily_sections("")
+        assert result["date"] == ""
+        assert all(result[s] == [] for s in ["Actions", "Decisions", "Learnings", "Lessons"])
+
+    def test_no_date_header(self):
+        content = "## Actions\n- [impl] Did A\n"
+        result = parse_daily_sections(content)
+        assert result["date"] == ""
+        assert result["Actions"] == ["- [impl] Did A"]
 
 
 # =============================================================================
