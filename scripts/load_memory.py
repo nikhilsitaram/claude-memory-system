@@ -395,7 +395,7 @@ Your output must follow this exact structure. Here is a complete realistic examp
 - [LTM][GLOBAL][tip] git stash -u includes untracked files
 
 ===PROJECT:global===
-- [GLOBAL][pattern] pytest -x --tb=short stops on first failure with compact output
+- [pattern] pytest -x --tb=short stops on first failure with compact output
 
 ===END===
 
