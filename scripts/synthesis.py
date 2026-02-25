@@ -42,10 +42,14 @@ from memory_utils import (  # noqa: E402
 __all__ = [
     "DailyFile",
     "MIN_ROUTE_KEYWORDS",
+    "ProjectBlock",
     "ROUTE_CAP",
     "RouteEntry",
     "SECTION_ORDER",
     "SynthesisResult",
+    "TYPE_TO_SECTION",
+    "build_dailies_from_project_blocks",
+    "extract_routes_from_project_blocks",
     "inject_scopes",
     "merge_daily_sections",
     "parse_daily_sections",
@@ -62,13 +66,31 @@ __all__ = [
 ]
 
 # Delimiter patterns
-DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")
-ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")
+DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")  # Legacy format
+ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")  # Legacy format
+PROJECT_HEADER = re.compile(r"^===PROJECT:([^=]+)===$")
 END_MARKER = "===END==="
 
 # Routing quality gates
 MIN_ROUTE_KEYWORDS = 4  # Minimum meaningful keywords for an entry to be routed
 ROUTE_CAP = 5  # Maximum entries routed per LTM file per synthesis run
+
+# Type -> Section mapping (deterministic)
+TYPE_TO_SECTION = {
+    "implement": "Actions",
+    "improve": "Actions",
+    "document": "Actions",
+    "analyze": "Actions",
+    "design": "Decisions",
+    "tradeoff": "Decisions",
+    "scope": "Decisions",
+    "gotcha": "Learnings",
+    "pitfall": "Learnings",
+    "pattern": "Learnings",
+    "insight": "Lessons",
+    "tip": "Lessons",
+    "workaround": "Lessons",
+}
 
 
 @dataclass
@@ -89,40 +111,77 @@ class RouteEntry:
 
 
 @dataclass
+class ProjectBlock:
+    """A parsed project block from ===PROJECT:X=== output."""
+
+    project: str
+    entries: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SynthesisResult:
     """Complete parsed synthesis output containing dailies, routes, and warnings."""
 
     dailies: list[DailyFile] = field(default_factory=list)
     routes: list[RouteEntry] = field(default_factory=list)
+    project_blocks: list[ProjectBlock] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
+def _is_delimiter(line: str) -> bool:
+    """Check if a line is any known delimiter (daily, route, project, or end)."""
+    return bool(
+        DAILY_HEADER.match(line)
+        or ROUTE_HEADER.match(line)
+        or PROJECT_HEADER.match(line)
+        or line == END_MARKER
+    )
+
+
 def parse_synthesis_output(text: str) -> SynthesisResult:
-    """Parse structured synthesis output into daily files and route entries.
+    """Parse structured synthesis output into daily files, route entries, and project blocks.
 
-    Format:
-        ===DAILY:YYYY-MM-DD===
-        [markdown content]
-
-        ===ROUTE:scope:section===
-        - (YYYY-MM-DD) [type] Description
-
-        ===END===
+    Supported formats:
+        ===DAILY:YYYY-MM-DD===        (legacy daily summary)
+        ===ROUTE:scope:section===     (legacy LTM routing)
+        ===PROJECT:name===            (new per-project block)
+        ===END===                     (end marker)
 
     Text before the first delimiter is ignored. Missing ===END=== produces
-    a warning but content is still parsed.
+    a warning but content is still parsed. Both formats can coexist in the
+    same output (downstream decides how to handle).
     """
     result = SynthesisResult()
     lines = text.split("\n")
     has_end = END_MARKER in text
 
     has_daily = any(DAILY_HEADER.match(line.strip()) for line in lines)
-    if not has_end and has_daily:
+    has_project = any(PROJECT_HEADER.match(line.strip()) for line in lines)
+    if not has_end and (has_daily or has_project):
         result.warnings.append("Missing ===END=== marker; processing available content")
 
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # Check for project header
+        project_match = PROJECT_HEADER.match(line)
+        if project_match:
+            project_name = project_match.group(1).strip()
+            entries = []
+            i += 1
+            while i < len(lines):
+                stripped = lines[i].strip()
+                if _is_delimiter(stripped):
+                    break
+                if stripped.startswith("- "):
+                    entries.append(stripped)
+                i += 1
+            if entries:
+                result.project_blocks.append(
+                    ProjectBlock(project=project_name, entries=entries)
+                )
+            continue
 
         # Check for daily header
         daily_match = DAILY_HEADER.match(line)
@@ -132,11 +191,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
             i += 1
             while i < len(lines):
                 stripped = lines[i].strip()
-                if (
-                    DAILY_HEADER.match(stripped)
-                    or ROUTE_HEADER.match(stripped)
-                    or stripped == END_MARKER
-                ):
+                if _is_delimiter(stripped):
                     break
                 content_lines.append(lines[i])
                 i += 1
@@ -154,11 +209,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
             i += 1
             while i < len(lines):
                 stripped = lines[i].strip()
-                if (
-                    DAILY_HEADER.match(stripped)
-                    or ROUTE_HEADER.match(stripped)
-                    or stripped == END_MARKER
-                ):
+                if _is_delimiter(stripped):
                     break
                 if stripped.startswith("- "):
                     entries.append(stripped)
@@ -288,6 +339,110 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Regex to parse entry flags: optional [LTM] and/or [GLOBAL] in any order, required [type]
+_ENTRY_FLAGS = re.compile(
+    r"^(\s*-\s*)"                     # prefix
+    r"(?:\[(?:LTM|GLOBAL)\]){0,2}"    # optional [LTM] and/or [GLOBAL] in any order
+    r"\[(?!LTM\]|GLOBAL\])([a-zA-Z]+)\]"  # [type] (not LTM or GLOBAL)
+    r"(\s+.*)$"                       # rest
+)
+_LTM_FLAG = re.compile(r"\[LTM\]")
+_GLOBAL_FLAG = re.compile(r"\[GLOBAL\]")
+
+
+def build_dailies_from_project_blocks(
+    blocks: list[ProjectBlock], date: str
+) -> list[DailyFile]:
+    """Convert project blocks to a single DailyFile with scoped, sectioned entries.
+
+    For each entry:
+    1. Parse flags: [LTM] (stripped), [GLOBAL] (affects scope), [type] (maps to section)
+    2. Apply scope: project + type -> [project/type], GLOBAL -> [global|project/type]
+    3. Assign to section via TYPE_TO_SECTION
+
+    All projects merge into one DailyFile for the date.
+    """
+    sections: dict[str, list[str]] = {s: [] for s in SECTION_ORDER}
+
+    for block in blocks:
+        project = block.project
+        for entry in block.entries:
+            match = _ENTRY_FLAGS.match(entry)
+            if not match:
+                continue
+
+            prefix = match.group(1)
+            entry_type = match.group(2).lower()
+            rest = match.group(3)
+
+            has_global = bool(_GLOBAL_FLAG.search(entry))
+
+            # Build scope tag
+            if project == "global" or (not project):
+                scope_tag = f"[global/{entry_type}]"
+            elif has_global:
+                scope_tag = f"[global|{project}/{entry_type}]"
+            else:
+                scope_tag = f"[{project}/{entry_type}]"
+
+            section = TYPE_TO_SECTION.get(entry_type, "Actions")
+            sections[section].append(f"{prefix}{scope_tag}{rest}")
+
+    # Assemble
+    lines = [f"# {date}"]
+    for section in SECTION_ORDER:
+        if sections[section]:
+            lines.append(f"## {section}")
+            lines.extend(sections[section])
+    return [DailyFile(date=date, content="\n".join(lines))]
+
+
+def extract_routes_from_project_blocks(
+    blocks: list[ProjectBlock], date: str
+) -> list[RouteEntry]:
+    """Extract [LTM]-flagged entries from project blocks as RouteEntry objects.
+
+    - Strips [LTM] and [GLOBAL] flags, adds (date) prefix
+    - Maps type to "Key {Section}" for LTM section targeting
+    - [GLOBAL] entries produce routes to both project and global LTM
+    - Groups entries by (scope, section)
+    """
+    grouped: dict[tuple[str, str], list[str]] = {}
+
+    for block in blocks:
+        for entry in block.entries:
+            if not _LTM_FLAG.search(entry):
+                continue
+            match = _ENTRY_FLAGS.match(entry)
+            if not match:
+                continue
+
+            entry_type = match.group(2).lower()
+            rest = match.group(3)
+            has_global = bool(_GLOBAL_FLAG.search(entry))
+
+            section = f"Key {TYPE_TO_SECTION.get(entry_type, 'Actions')}"
+            formatted = f"- ({date}) [{entry_type}]{rest}"
+
+            # Route to project (or global if project is global)
+            scope = block.project if block.project else "global"
+            grouped.setdefault((scope, section), []).append(formatted)
+
+            # GLOBAL flag: also route to global LTM (if not already global)
+            if has_global and scope != "global":
+                grouped.setdefault(("global", section), []).append(formatted)
+
+    return [
+        RouteEntry(scope=scope, section=section, entries=entries)
+        for (scope, section), entries in grouped.items()
+    ]
+
+
+# --- Legacy: old ===DAILY=== format support ---
+# The following regexes and functions support the ===DAILY:date=== format.
+# They are used by the backwards-compatible path in apply_results().
+# Once all synthesis output uses ===PROJECT:X=== format, these can be removed.
+
 # Pattern to detect LLM's simplified output: - [type] or - [GLOBAL][type]
 _UNSCOPED_ENTRY = re.compile(
     r"^(\s*-\s*)"           # prefix: "- "
@@ -306,6 +461,8 @@ def inject_scopes(
     session_projects: dict[str, str | None],
 ) -> list[DailyFile]:
     """Inject project scope tags into daily entries based on session metadata.
+
+    Legacy: used by the ===DAILY:date=== backwards-compatible path in apply_results().
 
     Transforms LLM's simplified output:
     - [type] Description       -> [project/type] Description
@@ -367,7 +524,10 @@ _PROJECT_HEADER = re.compile(r"Session:\s+\S+\s+\[project:\s+([^\]]+)\]")
 
 
 def _extract_session_projects(extract_paths: list[str]) -> dict[str, str | None]:
-    """Extract date -> project mapping from transcript extract files."""
+    """Extract date -> project mapping from transcript extract files.
+
+    Legacy: used by the ===DAILY:date=== backwards-compatible path in apply_results().
+    """
     from collections import Counter
 
     date_projects: dict[str, Counter] = {}
@@ -404,7 +564,10 @@ def _inject_route_scopes(
     routes: list[RouteEntry],
     session_projects: dict[str, str | None],
 ) -> list[RouteEntry]:
-    """Pass-through for now -- route scopes come from daily entry tags."""
+    """Pass-through for now -- route scopes come from daily entry tags.
+
+    Legacy: intended for the ===DAILY:date=== format path. Currently unused.
+    """
     return routes
 
 
@@ -734,39 +897,67 @@ def compute_offsets_from_extracts(extract_paths: list[str]) -> dict[str, dict]:
     return offsets
 
 
+def _extract_date_from_extracts(extract_paths: list[str]) -> str:
+    """Extract date from extract file names (format: *YYYY-MM-DD*).
+
+    Scans file names for a YYYY-MM-DD pattern and returns the first match.
+    Falls back to today's date if no date is found.
+    """
+    for path in extract_paths:
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", Path(path).name)
+        if date_match:
+            return date_match.group(1)
+    # Fallback: today
+    from datetime import date
+
+    return date.today().isoformat()
+
+
 def apply_results(
     output_file: str,
     extract_paths: list[str],
     offsets_json: str | None = None,
 ) -> None:
-    """Full pipeline: parse output -> mark routed -> write files -> post-process."""
+    """Full pipeline: parse output -> scope/section -> write files -> post-process."""
     text = Path(output_file).read_text(encoding="utf-8")
     result = parse_synthesis_output(text)
 
-    if not result.dailies:
-        print("No daily blocks found in output. Synthesis may have failed.", file=sys.stderr)
+    if result.project_blocks:
+        # New format: ===PROJECT:X=== blocks
+        date = _extract_date_from_extracts(extract_paths)
+
+        dailies = build_dailies_from_project_blocks(result.project_blocks, date)
+        routes = extract_routes_from_project_blocks(result.project_blocks, date)
+
+        # Mark routed entries in dailies
+        marked_dailies = mark_routed_entries(dailies, routes)
+        written = write_daily_files(marked_dailies)
+
+    elif result.dailies:
+        # Legacy format: ===DAILY:date=== blocks (backwards compat)
+        marked_dailies = mark_routed_entries(result.dailies, result.routes)
+        session_projects = _extract_session_projects(extract_paths)
+        scoped_dailies = inject_scopes(marked_dailies, session_projects)
+        written = write_daily_files(scoped_dailies)
+        routes = result.routes
+    else:
+        print(
+            "No daily or project blocks found. Synthesis may have failed.",
+            file=sys.stderr,
+        )
         return
 
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    # Mark routed entries in daily files
-    marked_dailies = mark_routed_entries(result.dailies, result.routes)
-
-    # Inject scope tags from session metadata
-    session_projects = _extract_session_projects(extract_paths)
-    scoped_dailies = inject_scopes(marked_dailies, session_projects)
-
-    # Write daily files
-    written = write_daily_files(scoped_dailies)
     print(f"Wrote {len(written)} daily file(s)")
 
     # Append to LTM
-    ltm_warnings = append_to_ltm(result.routes)
+    ltm_warnings = append_to_ltm(routes)
     for w in ltm_warnings:
         print(f"LTM warning: {w}", file=sys.stderr)
-    if result.routes:
-        total_entries = sum(len(r.entries) for r in result.routes)
+    if routes:
+        total_entries = sum(len(r.entries) for r in routes)
         print(f"Routed {total_entries} entries to LTM")
 
     # Update synthesis state with new high water marks

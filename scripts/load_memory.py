@@ -264,54 +264,42 @@ def _strip_profile_sections(content: str) -> str:
 
 def _build_synthesis_instructions(project_names_str: str) -> str:
     """Build the shared synthesis instructions block."""
-    return '''**Daily summary format:**
+    return f'''**Output format:**
 
-```markdown
-# YYYY-MM-DD
+Group entries by project. The system handles section placement and scope injection automatically.
 
-## Actions
-<!-- What was done. Use [type] only — scope is injected automatically. -->
-- [implement] What was accomplished
-
-## Decisions
-<!-- Important choices and rationale. -->
-- [design] Choice made and why
-
-## Learnings
-<!-- Patterns, gotchas, insights. -->
-- [gotcha] Unexpected behavior discovered
-- [pattern] Proven method or approach
-
-## Lessons
-<!-- Actionable takeaways. -->
-- [insight] Mental model or understanding
-- [tip] Useful command or shortcut
+```
+===PROJECT:projectname===
+- [type] Description of what happened or was learned
+- [LTM][type] Important entry to route to long-term memory
+- [GLOBAL][type] Cross-project entry (useful across all projects)
+- [LTM][GLOBAL][type] Cross-project entry that also routes to LTM
+===PROJECT:global===
+- [type] Entries not tied to any specific project
+===END===
 ```
 
-**Entry format:** `- [type] Description` where type is one of: implement, improve, document, analyze, design, tradeoff, scope, gotcha, pitfall, pattern, insight, tip, workaround.
-**Scope injection:** Do NOT add scope/project names to tags. The system injects scope automatically from session metadata.
-**Global marker:** If a learning is genuinely useful across ALL projects (general dev practices, OS behavior, tool tips), prefix with `[GLOBAL]`: `- [GLOBAL][tip] Description`. Otherwise omit — the system defaults to project scope.
-**Compactness:** Final solutions only, one learning per concept, omit routine details.
+**Entry types:** implement, improve, document, analyze, design, tradeoff, scope, gotcha, pitfall, pattern, insight, tip, workaround.
 
-**Long-term routing (be HIGHLY selective):**
-Route daily entries to corresponding LTM sections:
-- Daily `## Actions` → LTM `## Key Actions` (multi-day implementations, novel integrations, reusable setups)
-- Daily `## Decisions` → LTM `## Key Decisions` (architecture choices, design tradeoffs, scope decisions with lasting impact)
-- Daily `## Learnings` → LTM `## Key Learnings` (non-obvious gotchas, proven patterns, hard-won lessons)
-- Daily `## Lessons` → LTM `## Key Lessons` (mental models, useful commands, workarounds)
+**Project names:** Use the project names from the session headers: {project_names_str}. Use `global` for entries not tied to a specific project.
+
+**[LTM] flag (be HIGHLY selective):** Prefix entries worth preserving long-term. Route to LTM:
+- Multi-day implementations, novel integrations, reusable setups
+- Architecture choices, design tradeoffs, scope decisions with lasting impact
+- Non-obvious gotchas, proven patterns, hard-won lessons
+- Mental models, useful commands, workarounds
 Do NOT route:
-- Common dev knowledge (git basics, standard SQL patterns, well-known language features)
-- Generic software patterns (DRY, separation of concerns, use environment variables)
-- One-time fixes unlikely to recur (cleaned up stale files, resolved merge conflict, fixed typo)
-- Version-specific notes (upgraded X to Y, pinned dependency)
-- Easily re-discoverable things (CLI flag syntax, API URLs, config file locations)
-Only route entries that would save significant time if forgotten.
-The system handles dedup automatically — output all entries you think are worth routing.
-Format: `(YYYY-MM-DD) [type] Description` (no scope in routes — the system injects it).
+- Common dev knowledge (git basics, standard SQL, well-known language features)
+- Generic software patterns (DRY, separation of concerns, use env vars)
+- One-time fixes unlikely to recur
+- Version-specific notes, easily re-discoverable things
+Maximum 5 [LTM] entries per project per synthesis run.
 
-**GRANULARITY CAP:** Maximum 5 routed entries per target LTM file per synthesis run.
+**[GLOBAL] flag:** Only for genuinely cross-project learnings (OS behavior, tool tips, general dev practices). Most entries should stay project-scoped.
 
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences) containing factual profile info. When transcripts show clear evidence of change — a project completed, a new tool adopted — update or remove the relevant entry. Be conservative.'''
+**Compactness:** Final solutions only, one entry per concept, omit routine details.
+
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.'''
 
 
 def _build_preextracted_prompt(
@@ -394,36 +382,24 @@ Output ONLY entries from new/continued sessions — do not re-state anything bel
     # (using $$ would expand in Bash but stay literal in Write, causing a mismatch)
     output_filename = f"/tmp/synthesis-output-{os.getpid()}.txt"
 
-    first_date = sorted(pending_dates)[0]
-
     return f'''You are a structured data extractor. Your job is to read session transcripts and produce ONLY delimited structured output — no prose, no commentary, no summary.
 
 ## Output Format
 
 Your output must follow this exact structure. Here is a complete realistic example:
 
-===DAILY:2026-02-20===
-# 2026-02-20
-## Actions
+===PROJECT:myproject===
 - [implement] Built REST API endpoints for user authentication
-- [implement] Configured pre-commit hooks for Python linting
-
-## Decisions
 - [design] JWT tokens over session cookies — stateless scales better
+- [LTM][gotcha] SQLAlchemy async sessions need explicit await session.close() or connections leak
+- [LTM][GLOBAL][tip] git stash -u includes untracked files
 
-## Learnings
-- [gotcha] SQLAlchemy async sessions need explicit `await session.close()` or connections leak
-- [GLOBAL][pattern] pytest -x --tb=short stops on first failure with compact output
-
-## Lessons
-- [GLOBAL][tip] git stash -u includes untracked files
-
-===ROUTE:global:Key Lessons===
-- (2026-02-20) [tip] git stash -u includes untracked files
+===PROJECT:global===
+- [pattern] pytest -x --tb=short stops on first failure with compact output
 
 ===END===
 
-Every output starts with ===DAILY:YYYY-MM-DD=== and ends with ===END===. Nothing else.
+Every output uses ===PROJECT:name=== blocks and ends with ===END===. Nothing else.
 
 ## Delivery
 
@@ -448,7 +424,7 @@ Only use the Write and Bash tools — no other tools.
 
 ## Reminder
 
-Output only the structured format shown above. Start with ===DAILY:{first_date}=== and end with ===END===.'''
+Output only the structured format shown above. Start with ===PROJECT:...=== and end with ===END===.'''
 
 
 def _build_synthesis_prompt(

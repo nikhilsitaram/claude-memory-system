@@ -10,10 +10,15 @@ from pathlib import Path  # noqa: F401, I001
 from synthesis import (
     MIN_ROUTE_KEYWORDS,  # noqa: F401
     ROUTE_CAP,  # noqa: F401
+    SECTION_ORDER,  # noqa: F401
+    TYPE_TO_SECTION,  # noqa: F401
     DailyFile,
+    ProjectBlock,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
+    build_dailies_from_project_blocks,
+    extract_routes_from_project_blocks,  # noqa: F401
     inject_scopes,
     mark_routed_entries,
     merge_daily_sections,
@@ -1682,3 +1687,628 @@ class TestFullPipelineIntegration:
         # LTM: should have only 1 Tailscale entry (keyword dedup rejected)
         ltm_content = ltm_file.read_text()
         assert ltm_content.count("Tailscale MTU") == 1
+
+
+# =============================================================================
+# TYPE_TO_SECTION Tests
+# =============================================================================
+
+
+class TestTypeToSection:
+    def test_action_types(self):
+        assert TYPE_TO_SECTION["implement"] == "Actions"
+        assert TYPE_TO_SECTION["improve"] == "Actions"
+        assert TYPE_TO_SECTION["document"] == "Actions"
+        assert TYPE_TO_SECTION["analyze"] == "Actions"
+
+    def test_decision_types(self):
+        assert TYPE_TO_SECTION["design"] == "Decisions"
+        assert TYPE_TO_SECTION["tradeoff"] == "Decisions"
+        assert TYPE_TO_SECTION["scope"] == "Decisions"
+
+    def test_learning_types(self):
+        assert TYPE_TO_SECTION["gotcha"] == "Learnings"
+        assert TYPE_TO_SECTION["pitfall"] == "Learnings"
+        assert TYPE_TO_SECTION["pattern"] == "Learnings"
+
+    def test_lesson_types(self):
+        assert TYPE_TO_SECTION["insight"] == "Lessons"
+        assert TYPE_TO_SECTION["tip"] == "Lessons"
+        assert TYPE_TO_SECTION["workaround"] == "Lessons"
+
+    def test_all_types_covered(self):
+        assert set(TYPE_TO_SECTION.values()) == set(SECTION_ORDER)
+
+
+# =============================================================================
+# ProjectBlock Tests
+# =============================================================================
+
+
+class TestProjectBlock:
+    """Test the new ProjectBlock dataclass."""
+
+    def test_basic_creation(self):
+        block = ProjectBlock(project="swyfft", entries=[
+            "- [implement] Did something",
+            "- [LTM][gotcha] Found a bug",
+        ])
+        assert block.project == "swyfft"
+        assert len(block.entries) == 2
+
+    def test_empty_entries_default(self):
+        block = ProjectBlock(project="global")
+        assert block.project == "global"
+        assert block.entries == []
+
+
+# =============================================================================
+# Parse ===PROJECT:X=== Format Tests
+# =============================================================================
+
+
+class TestParseProjectFormat:
+    """Test parsing the new ===PROJECT:X=== format."""
+
+    def test_single_project(self):
+        text = """===PROJECT:swyfft===
+- [implement] Rewrote SQL
+- [gotcha] Tableau mislabeled
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "swyfft"
+        assert len(result.project_blocks[0].entries) == 2
+
+    def test_multiple_projects(self):
+        text = """===PROJECT:swyfft===
+- [implement] Rewrote SQL
+
+===PROJECT:investing===
+- [implement] Started Phase 4
+
+===PROJECT:global===
+- [analyze] Benchmarked Python vs TS
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 3
+        projects = [b.project for b in result.project_blocks]
+        assert projects == ["swyfft", "investing", "global"]
+
+    def test_ltm_and_global_flags_preserved(self):
+        text = """===PROJECT:swyfft===
+- [LTM][gotcha] Important bug
+- [GLOBAL][pattern] Cross-project pattern
+- [LTM][GLOBAL][tip] Global LTM tip
+
+===END==="""
+        result = parse_synthesis_output(text)
+        entries = result.project_blocks[0].entries
+        assert entries[0] == "- [LTM][gotcha] Important bug"
+        assert entries[1] == "- [GLOBAL][pattern] Cross-project pattern"
+        assert entries[2] == "- [LTM][GLOBAL][tip] Global LTM tip"
+
+    def test_skips_non_entry_lines(self):
+        text = """===PROJECT:swyfft===
+Some preamble text
+- [implement] Real entry
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks[0].entries) == 1
+
+    def test_empty_project_block_skipped(self):
+        text = """===PROJECT:swyfft===
+
+===PROJECT:investing===
+- [implement] Real entry
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "investing"
+
+    def test_missing_end_marker_warns(self):
+        text = """===PROJECT:swyfft===
+- [implement] Did something"""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert any("END" in w for w in result.warnings)
+
+    def test_old_daily_format_still_works(self):
+        """Backwards compatibility: ===DAILY=== format still parses."""
+        text = """===DAILY:2026-02-25===
+## Actions
+- [implement] Did something
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.dailies) == 1
+        assert result.dailies[0].date == "2026-02-25"
+
+    def test_mixed_project_and_daily_rejected(self):
+        """If both formats present, both are parsed (downstream decides)."""
+        text = """===DAILY:2026-02-25===
+## Actions
+- [implement] Did something
+
+===PROJECT:swyfft===
+- [implement] Rewrote SQL
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.dailies) == 1
+        assert len(result.project_blocks) == 1
+
+
+# =============================================================================
+# build_dailies_from_project_blocks Tests
+# =============================================================================
+
+
+class TestBuildDailiesFromProjectBlocks:
+    def test_single_project_sections(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Rewrote SQL",
+            "- [gotcha] Tableau mislabeled",
+            "- [design] Use bind date",
+            "- [tip] Rename GWP column",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert len(dailies) == 1
+        content = dailies[0].content
+        assert dailies[0].date == "2026-02-24"
+        assert "## Actions\n- [swyfft/implement] Rewrote SQL" in content
+        assert "## Learnings\n- [swyfft/gotcha] Tableau mislabeled" in content
+        assert "## Decisions\n- [swyfft/design] Use bind date" in content
+        assert "## Lessons\n- [swyfft/tip] Rename GWP column" in content
+
+    def test_global_project_scope(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [analyze] Benchmarked Python vs TS",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global/analyze] Benchmarked Python vs TS" in dailies[0].content
+
+    def test_global_flag_produces_pipe_scope(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][pattern] Cross-project pattern",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global|swyfft/pattern] Cross-project pattern" in dailies[0].content
+
+    def test_global_flag_on_global_project_stays_global(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [GLOBAL][tip] Some tip",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global/tip] Some tip" in dailies[0].content
+
+    def test_ltm_flag_stripped_from_daily(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Important bug",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "[LTM]" not in dailies[0].content
+        assert "- [swyfft/gotcha] Important bug" in dailies[0].content
+
+    def test_multiple_projects_merge_into_one_daily(self):
+        blocks = [
+            ProjectBlock(project="swyfft", entries=["- [implement] Swyfft work"]),
+            ProjectBlock(project="investing", entries=["- [implement] Investing work"]),
+        ]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert len(dailies) == 1
+        content = dailies[0].content
+        assert "- [swyfft/implement] Swyfft work" in content
+        assert "- [investing/implement] Investing work" in content
+
+    def test_unknown_type_goes_to_actions(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [investigate] Something new",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "## Actions" in content
+        assert "- [swyfft/investigate] Something new" in content
+
+    def test_section_order_is_standard(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [tip] A lesson",
+            "- [implement] An action",
+            "- [gotcha] A learning",
+            "- [design] A decision",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        for section in SECTION_ORDER:
+            assert f"## {section}" in content
+        # Verify order: Actions before Decisions before Learnings before Lessons
+        assert content.index("## Actions") < content.index("## Decisions")
+        assert content.index("## Decisions") < content.index("## Learnings")
+        assert content.index("## Learnings") < content.index("## Lessons")
+
+    def test_empty_blocks_returns_empty(self):
+        dailies = build_dailies_from_project_blocks([], "2026-02-24")
+        assert len(dailies) == 1
+        # Should just have the date header, no sections
+        assert dailies[0].date == "2026-02-24"
+        assert "## Actions" not in dailies[0].content
+
+    def test_entries_without_type_tag_skipped(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- No tag here",
+            "- [implement] Valid entry",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "No tag here" not in dailies[0].content
+        assert "- [swyfft/implement] Valid entry" in dailies[0].content
+
+    def test_ltm_and_global_combined(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][GLOBAL][pattern] Important cross-project pattern",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "[LTM]" not in content
+        assert "- [global|swyfft/pattern] Important cross-project pattern" in content
+
+    def test_reversed_flag_order(self):
+        """[GLOBAL][LTM][type] should work the same as [LTM][GLOBAL][type]."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][LTM][tip] Reversed flag order tip",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "[LTM]" not in content
+        assert "[GLOBAL]" not in content
+        assert "- [global|swyfft/tip] Reversed flag order tip" in content
+
+    def test_bare_ltm_flag_skipped(self):
+        """- [LTM] bare entry with no type tag should be skipped."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM] Only LTM flag no type",
+            "- [implement] Valid entry",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "Only LTM flag no type" not in content
+        assert "- [swyfft/implement] Valid entry" in content
+
+
+# =============================================================================
+# extract_routes_from_project_blocks Tests
+# =============================================================================
+
+
+class TestExtractRoutesFromProjectBlocks:
+    def test_ltm_entries_become_routes(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Normal entry",
+            "- [LTM][gotcha] Important bug",
+            "- [LTM][tip] Useful command",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert len(routes) == 2
+        # gotcha -> Key Learnings, tip -> Key Lessons
+        scopes = {(r.scope, r.section) for r in routes}
+        assert ("swyfft", "Key Learnings") in scopes
+        assert ("swyfft", "Key Lessons") in scopes
+
+    def test_date_prefix_added(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Important bug",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].entries[0] == "- (2026-02-24) [gotcha] Important bug"
+
+    def test_global_project_routes_to_global(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [LTM][tip] Global tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].scope == "global"
+
+    def test_global_flag_routes_to_both(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][GLOBAL][pattern] Cross-project pattern",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "global" in scopes
+
+    def test_no_ltm_entries_no_routes(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Normal entry",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes == []
+
+    def test_routes_grouped_by_scope_and_section(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Bug one",
+            "- [LTM][gotcha] Bug two",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        # Both gotchas grouped into one RouteEntry for swyfft:Key Learnings
+        assert len(routes) == 1
+        assert len(routes[0].entries) == 2
+
+    def test_multiple_projects(self):
+        """Entries from different projects produce separate routes."""
+        blocks = [
+            ProjectBlock(project="swyfft", entries=[
+                "- [LTM][gotcha] Swyfft bug",
+            ]),
+            ProjectBlock(project="memory", entries=[
+                "- [LTM][gotcha] Memory bug",
+            ]),
+        ]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "memory" in scopes
+
+    def test_empty_project_defaults_to_global(self):
+        """Empty project name should route to global."""
+        blocks = [ProjectBlock(project="", entries=[
+            "- [LTM][tip] Some tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].scope == "global"
+
+    def test_reversed_flag_order(self):
+        """[GLOBAL][LTM][type] should work the same as [LTM][GLOBAL][type]."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][LTM][tip] Reversed flag tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "global" in scopes
+        # Check the formatted entry has no flags
+        for r in routes:
+            for e in r.entries:
+                assert "[LTM]" not in e
+                assert "[GLOBAL]" not in e
+
+    def test_all_type_sections_mapped(self):
+        """Verify all TYPE_TO_SECTION types map to correct Key sections."""
+        for entry_type, section in TYPE_TO_SECTION.items():
+            blocks = [ProjectBlock(project="test", entries=[
+                f"- [LTM][{entry_type}] Test entry for {entry_type}",
+            ])]
+            routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+            assert len(routes) == 1, f"No route for type {entry_type}"
+            assert routes[0].section == f"Key {section}", (
+                f"Type {entry_type} mapped to {routes[0].section}, "
+                f"expected Key {section}"
+            )
+
+
+# =============================================================================
+# _extract_date_from_extracts Tests
+# =============================================================================
+
+from synthesis import _extract_date_from_extracts  # noqa: E402
+
+
+class TestExtractDateFromExtracts:
+    """Test date extraction from extract file paths."""
+
+    def test_extracts_date_from_filename(self, tmp_path):
+        """Extract date from standard extract filename."""
+        f = tmp_path / "extract-2026-02-24.txt"
+        f.write_text("content")
+        assert _extract_date_from_extracts([str(f)]) == "2026-02-24"
+
+    def test_uses_first_match(self, tmp_path):
+        """Returns date from first matching file."""
+        f1 = tmp_path / "extract-2026-02-20.txt"
+        f2 = tmp_path / "extract-2026-02-21.txt"
+        f1.write_text("c1")
+        f2.write_text("c2")
+        assert _extract_date_from_extracts([str(f1), str(f2)]) == "2026-02-20"
+
+    def test_no_date_in_filename_falls_back_to_today(self):
+        """Falls back to today's date if no date found in filenames."""
+        result = _extract_date_from_extracts(["/tmp/nodatehere.txt"])
+        # Should be a valid ISO date
+        import re
+        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
+
+    def test_empty_paths_falls_back_to_today(self):
+        """Empty path list falls back to today's date."""
+        import re
+        result = _extract_date_from_extracts([])
+        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
+
+
+# =============================================================================
+# apply_results with project blocks Tests
+# =============================================================================
+
+
+class TestApplyResultsProjectBlocks:
+    """Integration test: apply_results with new ===PROJECT=== format."""
+
+    def test_project_blocks_produce_scoped_daily(self, tmp_path):
+        """Project blocks produce a daily file with scoped entries."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [implement] Rewrote SQL query for performance
+- [LTM][gotcha] Tableau dashboard mislabeled metric column
+- [design] Use bind date for policy lookup
+
+===PROJECT:global===
+- [analyze] Benchmarked Python vs TypeScript serialization
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        daily_file = daily_dir / "2026-02-24.md"
+        assert daily_file.exists()
+        content = daily_file.read_text()
+        assert "[swyfft/implement]" in content
+        assert "[swyfft/gotcha]" in content
+        assert "[swyfft/design]" in content
+        assert "[global/analyze]" in content
+
+    def test_project_blocks_ltm_routing(self, tmp_path):
+        """LTM entries from project blocks get routed correctly."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [LTM][gotcha] Important bug found in the data processing pipeline
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        # Create existing LTM file
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        ltm_content = ltm_file.read_text()
+        assert "(2026-02-24) [gotcha] Important bug found" in ltm_content
+
+    def test_old_format_still_works(self, tmp_path):
+        """Backwards compatibility: ===DAILY=== format still processes."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===DAILY:2026-02-24===
+# 2026-02-24
+## Actions
+- [swyfft/implement] Did something
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        content = (daily_dir / "2026-02-24.md").read_text()
+        assert "[swyfft/implement] Did something" in content
+
+    def test_no_blocks_no_dailies_prints_error(self, tmp_path, capsys):
+        """When neither project blocks nor dailies found, print error."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("just garbage text with no blocks")
+
+        with patch("synthesis.run_post_processing") as mock_post:
+            apply_results(str(output_file), [])
+            mock_post.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "No daily or project blocks found" in captured.err
+
+    def test_project_blocks_with_global_flag_dual_routes(self, tmp_path):
+        """[GLOBAL] flag routes to both project and global LTM."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [LTM][GLOBAL][gotcha] Cross-project bug found in shared data pipeline
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+        global_ltm = tmp_path / "global-ltm.md"
+        global_ltm.write_text("## Key Learnings\n<!-- decay -->\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=global_ltm), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        # Routed to project LTM
+        proj_content = ltm_file.read_text()
+        assert "(2026-02-24) [gotcha] Cross-project bug found" in proj_content
+        # Routed to global LTM
+        global_content = global_ltm.read_text()
+        assert "(2026-02-24) [gotcha] Cross-project bug found" in global_content
+
+    def test_project_blocks_mark_routed_in_daily(self, tmp_path):
+        """LTM entries get [routed] marker in daily file."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [implement] Normal entry that should not be routed
+- [LTM][gotcha] Routed entry should get marker in daily output
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        content = (daily_dir / "2026-02-24.md").read_text()
+        # The LTM entry should be marked as routed
+        assert "[routed]" in content
+        # The normal entry should NOT be marked as routed
+        for line in content.split("\n"):
+            if "Normal entry" in line:
+                assert "[routed]" not in line
