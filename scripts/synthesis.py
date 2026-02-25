@@ -46,6 +46,7 @@ __all__ = [
     "RouteEntry",
     "SECTION_ORDER",
     "SynthesisResult",
+    "TYPE_TO_SECTION",
     "inject_scopes",
     "merge_daily_sections",
     "parse_daily_sections",
@@ -69,6 +70,23 @@ END_MARKER = "===END==="
 # Routing quality gates
 MIN_ROUTE_KEYWORDS = 4  # Minimum meaningful keywords for an entry to be routed
 ROUTE_CAP = 5  # Maximum entries routed per LTM file per synthesis run
+
+# Type -> Section mapping (deterministic)
+TYPE_TO_SECTION = {
+    "implement": "Actions",
+    "improve": "Actions",
+    "document": "Actions",
+    "analyze": "Actions",
+    "design": "Decisions",
+    "tradeoff": "Decisions",
+    "scope": "Decisions",
+    "gotcha": "Learnings",
+    "pitfall": "Learnings",
+    "pattern": "Learnings",
+    "insight": "Lessons",
+    "tip": "Lessons",
+    "workaround": "Lessons",
+}
 
 
 @dataclass

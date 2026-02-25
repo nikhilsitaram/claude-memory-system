@@ -10,6 +10,8 @@ from pathlib import Path  # noqa: F401, I001
 from synthesis import (
     MIN_ROUTE_KEYWORDS,  # noqa: F401
     ROUTE_CAP,  # noqa: F401
+    SECTION_ORDER,  # noqa: F401
+    TYPE_TO_SECTION,  # noqa: F401
     DailyFile,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
@@ -1682,3 +1684,34 @@ class TestFullPipelineIntegration:
         # LTM: should have only 1 Tailscale entry (keyword dedup rejected)
         ltm_content = ltm_file.read_text()
         assert ltm_content.count("Tailscale MTU") == 1
+
+
+# =============================================================================
+# TYPE_TO_SECTION Tests
+# =============================================================================
+
+
+class TestTypeToSection:
+    def test_action_types(self):
+        assert TYPE_TO_SECTION["implement"] == "Actions"
+        assert TYPE_TO_SECTION["improve"] == "Actions"
+        assert TYPE_TO_SECTION["document"] == "Actions"
+        assert TYPE_TO_SECTION["analyze"] == "Actions"
+
+    def test_decision_types(self):
+        assert TYPE_TO_SECTION["design"] == "Decisions"
+        assert TYPE_TO_SECTION["tradeoff"] == "Decisions"
+        assert TYPE_TO_SECTION["scope"] == "Decisions"
+
+    def test_learning_types(self):
+        assert TYPE_TO_SECTION["gotcha"] == "Learnings"
+        assert TYPE_TO_SECTION["pitfall"] == "Learnings"
+        assert TYPE_TO_SECTION["pattern"] == "Learnings"
+
+    def test_lesson_types(self):
+        assert TYPE_TO_SECTION["insight"] == "Lessons"
+        assert TYPE_TO_SECTION["tip"] == "Lessons"
+        assert TYPE_TO_SECTION["workaround"] == "Lessons"
+
+    def test_all_types_covered(self):
+        assert set(TYPE_TO_SECTION.values()) == set(SECTION_ORDER)
