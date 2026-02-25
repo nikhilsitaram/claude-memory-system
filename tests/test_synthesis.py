@@ -17,6 +17,7 @@ from synthesis import (
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
+    build_dailies_from_project_blocks,
     inject_scopes,
     mark_routed_entries,
     merge_daily_sections,
@@ -1839,3 +1840,116 @@ Some preamble text
         result = parse_synthesis_output(text)
         assert len(result.dailies) == 1
         assert len(result.project_blocks) == 1
+
+
+# =============================================================================
+# build_dailies_from_project_blocks Tests
+# =============================================================================
+
+
+class TestBuildDailiesFromProjectBlocks:
+    def test_single_project_sections(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Rewrote SQL",
+            "- [gotcha] Tableau mislabeled",
+            "- [design] Use bind date",
+            "- [tip] Rename GWP column",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert len(dailies) == 1
+        content = dailies[0].content
+        assert dailies[0].date == "2026-02-24"
+        assert "## Actions\n- [swyfft/implement] Rewrote SQL" in content
+        assert "## Learnings\n- [swyfft/gotcha] Tableau mislabeled" in content
+        assert "## Decisions\n- [swyfft/design] Use bind date" in content
+        assert "## Lessons\n- [swyfft/tip] Rename GWP column" in content
+
+    def test_global_project_scope(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [analyze] Benchmarked Python vs TS",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global/analyze] Benchmarked Python vs TS" in dailies[0].content
+
+    def test_global_flag_produces_pipe_scope(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][pattern] Cross-project pattern",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global|swyfft/pattern] Cross-project pattern" in dailies[0].content
+
+    def test_global_flag_on_global_project_stays_global(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [GLOBAL][tip] Some tip",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "- [global/tip] Some tip" in dailies[0].content
+
+    def test_ltm_flag_stripped_from_daily(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Important bug",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "[LTM]" not in dailies[0].content
+        assert "- [swyfft/gotcha] Important bug" in dailies[0].content
+
+    def test_multiple_projects_merge_into_one_daily(self):
+        blocks = [
+            ProjectBlock(project="swyfft", entries=["- [implement] Swyfft work"]),
+            ProjectBlock(project="investing", entries=["- [implement] Investing work"]),
+        ]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert len(dailies) == 1
+        content = dailies[0].content
+        assert "- [swyfft/implement] Swyfft work" in content
+        assert "- [investing/implement] Investing work" in content
+
+    def test_unknown_type_goes_to_actions(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [investigate] Something new",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "## Actions" in content
+        assert "- [swyfft/investigate] Something new" in content
+
+    def test_section_order_is_standard(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [tip] A lesson",
+            "- [implement] An action",
+            "- [gotcha] A learning",
+            "- [design] A decision",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        for section in SECTION_ORDER:
+            assert f"## {section}" in content
+        # Verify order: Actions before Decisions before Learnings before Lessons
+        assert content.index("## Actions") < content.index("## Decisions")
+        assert content.index("## Decisions") < content.index("## Learnings")
+        assert content.index("## Learnings") < content.index("## Lessons")
+
+    def test_empty_blocks_returns_empty(self):
+        dailies = build_dailies_from_project_blocks([], "2026-02-24")
+        assert len(dailies) == 1
+        # Should just have the date header, no sections
+        assert dailies[0].date == "2026-02-24"
+        assert "## Actions" not in dailies[0].content
+
+    def test_entries_without_type_tag_skipped(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- No tag here",
+            "- [implement] Valid entry",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        assert "No tag here" not in dailies[0].content
+        assert "- [swyfft/implement] Valid entry" in dailies[0].content
+
+    def test_ltm_and_global_combined(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][GLOBAL][pattern] Important cross-project pattern",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "[LTM]" not in content
+        assert "- [global|swyfft/pattern] Important cross-project pattern" in content

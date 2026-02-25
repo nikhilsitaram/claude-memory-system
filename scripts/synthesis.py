@@ -48,6 +48,7 @@ __all__ = [
     "SECTION_ORDER",
     "SynthesisResult",
     "TYPE_TO_SECTION",
+    "build_dailies_from_project_blocks",
     "inject_scopes",
     "merge_daily_sections",
     "parse_daily_sections",
@@ -335,6 +336,65 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
             lines.append(f"## {section}")
             lines.extend(entries)
     return "\n".join(lines) + "\n"
+
+
+# Regex to parse entry flags: optional [LTM], optional [GLOBAL], required [type]
+_ENTRY_FLAGS = re.compile(
+    r"^(\s*-\s*)"                # prefix
+    r"(?:\[LTM\])?"              # optional [LTM]
+    r"(?:\[GLOBAL\])?"           # optional [GLOBAL]
+    r"\[([a-zA-Z]+)\]"          # [type]
+    r"(\s+.*)$"                  # rest
+)
+_LTM_FLAG = re.compile(r"\[LTM\]")
+_GLOBAL_FLAG = re.compile(r"\[GLOBAL\]")
+
+
+def build_dailies_from_project_blocks(
+    blocks: list[ProjectBlock], date: str
+) -> list[DailyFile]:
+    """Convert project blocks to a single DailyFile with scoped, sectioned entries.
+
+    For each entry:
+    1. Parse flags: [LTM] (stripped), [GLOBAL] (affects scope), [type] (maps to section)
+    2. Apply scope: project + type -> [project/type], GLOBAL -> [global|project/type]
+    3. Assign to section via TYPE_TO_SECTION
+
+    All projects merge into one DailyFile for the date.
+    """
+    sections: dict[str, list[str]] = {s: [] for s in SECTION_ORDER}
+
+    for block in blocks:
+        project = block.project
+        for entry in block.entries:
+            match = _ENTRY_FLAGS.match(entry)
+            if not match:
+                continue
+
+            prefix = match.group(1)
+            entry_type = match.group(2).lower()
+            rest = match.group(3)
+
+            has_global = bool(_GLOBAL_FLAG.search(entry))
+
+            # Build scope tag
+            if project == "global" or (not project):
+                scope_tag = f"[global/{entry_type}]"
+            elif has_global:
+                scope_tag = f"[global|{project}/{entry_type}]"
+            else:
+                scope_tag = f"[{project}/{entry_type}]"
+
+            section = TYPE_TO_SECTION.get(entry_type, "Actions")
+            sections[section].append(f"{prefix}{scope_tag}{rest}")
+
+    # Assemble
+    lines = [f"# {date}"]
+    for section in SECTION_ORDER:
+        if sections[section]:
+            lines.append(f"## {section}")
+            lines.extend(sections[section])
+    return [DailyFile(date=date, content="\n".join(lines))]
 
 
 # Pattern to detect LLM's simplified output: - [type] or - [GLOBAL][type]
