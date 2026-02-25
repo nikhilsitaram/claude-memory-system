@@ -338,13 +338,12 @@ def merge_daily_sections(existing_content: str, new_content: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Regex to parse entry flags: optional [LTM], optional [GLOBAL], required [type]
+# Regex to parse entry flags: optional [LTM] and/or [GLOBAL] in any order, required [type]
 _ENTRY_FLAGS = re.compile(
-    r"^(\s*-\s*)"                # prefix
-    r"(?:\[LTM\])?"              # optional [LTM]
-    r"(?:\[GLOBAL\])?"           # optional [GLOBAL]
-    r"\[([a-zA-Z]+)\]"          # [type]
-    r"(\s+.*)$"                  # rest
+    r"^(\s*-\s*)"                     # prefix
+    r"(?:\[(?:LTM|GLOBAL)\]){0,2}"    # optional [LTM] and/or [GLOBAL] in any order
+    r"\[(?!LTM\]|GLOBAL\])([a-zA-Z]+)\]"  # [type] (not LTM or GLOBAL)
+    r"(\s+.*)$"                       # rest
 )
 _LTM_FLAG = re.compile(r"\[LTM\]")
 _GLOBAL_FLAG = re.compile(r"\[GLOBAL\]")

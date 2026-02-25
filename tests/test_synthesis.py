@@ -1953,3 +1953,25 @@ class TestBuildDailiesFromProjectBlocks:
         content = dailies[0].content
         assert "[LTM]" not in content
         assert "- [global|swyfft/pattern] Important cross-project pattern" in content
+
+    def test_reversed_flag_order(self):
+        """[GLOBAL][LTM][type] should work the same as [LTM][GLOBAL][type]."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][LTM][tip] Reversed flag order tip",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "[LTM]" not in content
+        assert "[GLOBAL]" not in content
+        assert "- [global|swyfft/tip] Reversed flag order tip" in content
+
+    def test_bare_ltm_flag_skipped(self):
+        """- [LTM] bare entry with no type tag should be skipped."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM] Only LTM flag no type",
+            "- [implement] Valid entry",
+        ])]
+        dailies = build_dailies_from_project_blocks(blocks, "2026-02-24")
+        content = dailies[0].content
+        assert "Only LTM flag no type" not in content
+        assert "- [swyfft/implement] Valid entry" in content
