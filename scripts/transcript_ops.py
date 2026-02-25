@@ -129,7 +129,7 @@ def should_skip_message(content: str) -> bool:
     if content.strip() == "[Request interrupted by user]":
         return True
     # Synthesis artifacts from previous runs
-    if "===DAILY:" in content or "===ROUTE:" in content:
+    if "===DAILY:" in content or "===ROUTE:" in content or "===PROJECT:" in content:
         return True
     if "synthesis.py apply" in content:
         return True

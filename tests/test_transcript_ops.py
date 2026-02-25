@@ -192,6 +192,31 @@ class TestParseJsonlFileFromLine:
 
 
 # =============================================================================
+# should_skip_message Tests
+# =============================================================================
+
+
+class TestShouldSkipMessage:
+    """Test synthesis artifact filtering in should_skip_message."""
+
+    def test_skip_daily_format_artifacts(self):
+        from transcript_ops import should_skip_message
+        assert should_skip_message("===DAILY:2026-02-24===\n## Actions\n- stuff")
+
+    def test_skip_route_format_artifacts(self):
+        from transcript_ops import should_skip_message
+        assert should_skip_message("===ROUTE:global:Key Lessons===\n- stuff")
+
+    def test_skip_project_format_artifacts(self):
+        from transcript_ops import should_skip_message
+        assert should_skip_message("===PROJECT:swyfft===\n- [implement] stuff")
+
+    def test_normal_message_not_skipped(self):
+        from transcript_ops import should_skip_message
+        assert not should_skip_message("I fixed the bug in the login page")
+
+
+# =============================================================================
 # extract_transcripts_incremental Tests
 # =============================================================================
 
