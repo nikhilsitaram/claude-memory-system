@@ -26,17 +26,31 @@ if str(script_dir) not in sys.path:
 from indexing import get_session_date, list_recent_sessions
 
 
-def _resolve_project_name(project_path: str | None) -> str | None:
-    """Resolve a session's project_path to a project name via projects-index."""
-    if not project_path:
+def _resolve_project_name(
+    project_path: str | None,
+    project_hash: str | None = None,
+) -> str | None:
+    """Resolve a session's project_path to a project name via projects-index.
+
+    Falls back to matching project_hash against encodedPaths when
+    project_path is unavailable (sessions-index.json missing).
+    """
+    if not project_path and not project_hash:
         return None
     try:
         from memory_utils import get_projects_index_file, load_json_file
         index = load_json_file(get_projects_index_file(), {})
         projects = index.get("projects", {})
-        data = projects.get(project_path)
-        if data and data.get("name"):
-            return data["name"]
+        # Primary: direct path lookup
+        if project_path:
+            data = projects.get(project_path)
+            if data and data.get("name"):
+                return data["name"]
+        # Fallback: match encoded folder name against encodedPaths
+        if project_hash:
+            for _path, data in projects.items():
+                if project_hash in data.get("encodedPaths", []):
+                    return data.get("name")
     except Exception:
         pass
     return None
@@ -245,7 +259,9 @@ def extract_transcripts_incremental(
                 "session_id": sid,
                 "filepath": str(session.transcript_path),
                 "project_path": session.project_path,
-                "project_name": _resolve_project_name(session.project_path),
+                "project_name": _resolve_project_name(
+                    session.project_path, project_hash=session.project_hash,
+                ),
                 "message_count": len(messages),
                 "messages": messages,
                 "mode": mode,
