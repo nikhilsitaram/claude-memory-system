@@ -207,6 +207,7 @@ def parse_jsonl_file_from_line(
 def extract_transcripts_incremental(
     state: dict,
     exclude_session_id: str | None = None,
+    min_session_messages: int = 0,
 ) -> dict[str, list[dict]]:
     """Extract transcripts incrementally using synthesis state high water marks.
 
@@ -221,6 +222,7 @@ def extract_transcripts_incremental(
     Args:
         state: Synthesis state dict with "sessions" key
         exclude_session_id: Session ID to exclude from extraction
+        min_session_messages: Skip sessions with fewer messages than this (0 = no filter)
 
     Returns:
         Dict mapping date -> list of session dicts (only sessions with content).
@@ -253,7 +255,7 @@ def extract_transcripts_incremental(
             )
             mode = "full"
 
-        if messages:
+        if messages and len(messages) >= min_session_messages:
             day = get_session_date(session)
             daily_data[day].append({
                 "session_id": sid,

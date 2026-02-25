@@ -360,6 +360,105 @@ class TestExtractTranscriptsIncremental:
         assert call_kwargs[1].get("exclude_session_id") == "skip-me" or \
                (len(call_kwargs[0]) > 0 and call_kwargs[0][0] == "skip-me")
 
+    def test_min_messages_skips_short_session(self, tmp_path):
+        """Session with fewer messages than min_session_messages is excluded."""
+        from memory_utils import DEFAULT_SETTINGS
+        from transcript_ops import extract_transcripts_incremental
+
+        threshold = DEFAULT_SETTINGS["synthesis"]["minSessionMessages"]
+        transcript = tmp_path / "short.jsonl"
+        # Create a session well below the threshold
+        transcript.write_text(make_jsonl_content([
+            ("assistant", "Hello"),
+            ("assistant", "Bye"),
+        ]))
+        session = make_session_info(
+            session_id="short-sess",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state, min_session_messages=threshold)
+
+        assert result == {}
+
+    def test_min_messages_keeps_long_session(self, tmp_path):
+        """Session meeting min_session_messages threshold is included."""
+        from memory_utils import DEFAULT_SETTINGS
+        from transcript_ops import extract_transcripts_incremental
+
+        threshold = DEFAULT_SETTINGS["synthesis"]["minSessionMessages"]
+        messages = [("assistant", f"Message {i}") for i in range(threshold + 5)]
+        transcript = tmp_path / "long.jsonl"
+        transcript.write_text(make_jsonl_content(messages))
+        session = make_session_info(
+            session_id="long-sess",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state, min_session_messages=threshold)
+
+        assert "2026-02-22" in result
+        assert result["2026-02-22"][0]["session_id"] == "long-sess"
+
+    def test_min_messages_zero_disables_filter(self, tmp_path):
+        """min_session_messages=0 (default) includes all sessions."""
+        from transcript_ops import extract_transcripts_incremental
+
+        transcript = tmp_path / "tiny.jsonl"
+        transcript.write_text(make_jsonl_content([("assistant", "Hi")]))
+        session = make_session_info(
+            session_id="tiny-sess",
+            transcript_path=transcript,
+            file_size=transcript.stat().st_size,
+            created=datetime(2026, 2, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[session]), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state, min_session_messages=0)
+
+        assert "2026-02-22" in result
+
+    def test_min_messages_filters_mixed_sessions(self, tmp_path):
+        """Only sessions above threshold survive; short ones are dropped."""
+        from memory_utils import DEFAULT_SETTINGS
+        from transcript_ops import extract_transcripts_incremental
+
+        threshold = DEFAULT_SETTINGS["synthesis"]["minSessionMessages"]
+
+        # Short session (2 messages — below threshold)
+        t1 = tmp_path / "short.jsonl"
+        t1.write_text(make_jsonl_content([("assistant", "A"), ("assistant", "B")]))
+
+        # Long session (threshold + 2 messages — above threshold)
+        t2 = tmp_path / "long.jsonl"
+        t2.write_text(make_jsonl_content([("assistant", f"Msg {i}") for i in range(threshold + 2)]))
+
+        sessions = [
+            make_session_info("short", t1, t1.stat().st_size, created=datetime(2026, 2, 22, 10, 0, tzinfo=timezone.utc)),
+            make_session_info("long", t2, t2.stat().st_size, created=datetime(2026, 2, 22, 11, 0, tzinfo=timezone.utc)),
+        ]
+        state = {"sessions": {}}
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=sessions), \
+             mock.patch("transcript_ops.get_session_date", return_value="2026-02-22"):
+            result = extract_transcripts_incremental(state, min_session_messages=threshold)
+
+        day_sessions = result["2026-02-22"]
+        assert len(day_sessions) == 1
+        assert day_sessions[0]["session_id"] == "long"
+
 
 # =============================================================================
 # format_transcripts_incremental Tests

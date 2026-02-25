@@ -222,6 +222,7 @@ DEFAULT_SETTINGS = {
         "model": "sonnet",
         "background": True,
         "deferred": False,
+        "minSessionMessages": 10,
     },
     "decay": {
         "ageDays": 30,

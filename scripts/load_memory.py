@@ -577,6 +577,8 @@ def pre_extract_transcripts_incremental(
         - session_offsets: dict mapping session_id -> {"offset": int, "lines": int}
         - daily_data: dict mapping date -> list of session dicts (for project detection)
     """
+    settings = load_settings()
+    min_msgs = settings.get("synthesis", {}).get("minSessionMessages", 0)
     state = load_synthesis_state()
     pid = os.getpid()
     extracted_files: dict[str, str] = {}
@@ -584,7 +586,8 @@ def pre_extract_transcripts_incremental(
 
     try:
         daily_data = extract_transcripts_incremental(
-            state, exclude_session_id=exclude_session_id
+            state, exclude_session_id=exclude_session_id,
+            min_session_messages=min_msgs,
         )
     except Exception as e:
         print(f"Warning: Incremental extraction failed: {e}", file=sys.stderr)

@@ -995,6 +995,22 @@ class TestPreExtractTranscriptsIncremental:
         assert offsets["s1"]["offset"] == 100
         assert offsets["s2"]["offset"] == 300
 
+    def test_passes_min_session_messages_from_settings(self, tmp_path):
+        """pre_extract passes synthesis.minSessionMessages to extract_transcripts_incremental."""
+        from memory_utils import DEFAULT_SETTINGS
+
+        threshold = DEFAULT_SETTINGS["synthesis"]["minSessionMessages"]
+
+        with mock.patch("load_memory.extract_transcripts_incremental", return_value={}) as mock_extract, \
+             mock.patch("load_memory.load_synthesis_state", return_value={"sessions": {}}), \
+             mock.patch("load_memory.load_settings", return_value=DEFAULT_SETTINGS):
+            pre_extract_transcripts_incremental(
+                ["2026-02-22"], exclude_session_id=None, output_dir=str(tmp_path)
+            )
+
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args[1].get("min_session_messages") == threshold
+
 
 # =============================================================================
 # _build_embedded_files with dailies Tests

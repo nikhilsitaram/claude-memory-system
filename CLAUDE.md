@@ -149,6 +149,7 @@ Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings
 | `synthesis.model` | sonnet | Model for synthesis subagent |
 | `synthesis.background` | true | Run auto-synthesis in background |
 | `synthesis.deferred` | false | Enable deferred synthesis (systemd timer instead of in-session) |
+| `synthesis.minSessionMessages` | 10 | Skip sessions with fewer messages during synthesis |
 | `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
 | `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
 
