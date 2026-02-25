@@ -1354,14 +1354,14 @@ class TestSkipMemory:
 
 
 class TestSynthesisDeferredSetting:
-    def test_default_deferred_is_false(self, tmp_path):
-        """synthesis.deferred defaults to False."""
-        from memory_utils import load_settings
+    def test_default_deferred_matches_default_settings(self, tmp_path):
+        """synthesis.deferred defaults to DEFAULT_SETTINGS value."""
+        from memory_utils import DEFAULT_SETTINGS, load_settings
 
         settings_file = tmp_path / "settings.json"
         with mock.patch("memory_utils.get_settings_file", return_value=settings_file):
             settings = load_settings()
-        assert settings["synthesis"]["deferred"] is False
+        assert settings["synthesis"]["deferred"] is DEFAULT_SETTINGS["synthesis"]["deferred"]
 
     def _make_settings(self, deferred=False):
         """Build a settings dict with synthesis.deferred set."""
