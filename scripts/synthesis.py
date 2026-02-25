@@ -560,16 +560,6 @@ def _extract_session_projects(extract_paths: list[str]) -> dict[str, str | None]
     return result
 
 
-def _inject_route_scopes(
-    routes: list[RouteEntry],
-    session_projects: dict[str, str | None],
-) -> list[RouteEntry]:
-    """Pass-through for now -- route scopes come from daily entry tags.
-
-    Legacy: intended for the ===DAILY:date=== format path. Currently unused.
-    """
-    return routes
-
 
 def mark_routed_entries(
     dailies: list[DailyFile],

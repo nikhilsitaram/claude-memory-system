@@ -25,8 +25,9 @@
     "intervalHours": 2,
     "model": "sonnet",
     "background": true,
-    "deferred": false,
-    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day). Model: sonnet (default)|haiku|opus. Background: true runs synthesis without blocking user. Deferred: true moves synthesis to systemd timer instead of in-session."
+    "deferred": true,
+    "minSessionMessages": 10,
+    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day). Model: sonnet (default)|haiku|opus. Background: true runs synthesis without blocking user. Deferred: true moves synthesis to systemd timer instead of in-session. minSessionMessages: skip sessions with fewer messages during synthesis."
   },
   "decay": {
     "ageDays": 30,
@@ -56,6 +57,8 @@
     "synthesis.intervalHours": 2,
     "synthesis.model": "sonnet",
     "synthesis.background": true,
+    "synthesis.deferred": true,
+    "synthesis.minSessionMessages": 10,
     "decay.ageDays": 30,
     "decay.projectWorkingDays": 20,
     "decay.archiveRetentionDays": 365
