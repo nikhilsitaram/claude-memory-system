@@ -38,7 +38,7 @@ def should_run_deferred_synthesis() -> bool:
     Returns True if deferred mode is enabled and synthesis is due.
     """
     settings = load_settings()
-    if not settings.get("synthesis", {}).get("deferred", False):
+    if not settings.get("synthesis", {}).get("deferred", True):
         return False
     return should_synthesize(settings)
 

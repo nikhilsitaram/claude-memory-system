@@ -221,7 +221,7 @@ DEFAULT_SETTINGS = {
         "intervalHours": 2,
         "model": "sonnet",
         "background": True,
-        "deferred": False,
+        "deferred": True,
         "minSessionMessages": 10,
     },
     "decay": {

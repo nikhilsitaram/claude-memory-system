@@ -48,17 +48,24 @@ class TestShouldRunDeferredSynthesis:
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is True
 
-    def test_returns_false_when_deferred_missing_defaults_false(self):
-        """If synthesis.deferred key is missing, defaults to False."""
+    def test_returns_true_when_deferred_missing_defaults_to_setting(self):
+        """If synthesis.deferred key is missing, defaults to DEFAULT_SETTINGS value."""
+        from memory_utils import DEFAULT_SETTINGS
+
+        expected = DEFAULT_SETTINGS["synthesis"]["deferred"]
         with patch("synthesis_cron.load_settings", return_value={
             "synthesis": {"intervalHours": 2}
-        }):
-            assert should_run_deferred_synthesis() is False
+        }), patch("synthesis_cron.should_synthesize", return_value=True):
+            assert should_run_deferred_synthesis() is expected
 
-    def test_returns_false_when_synthesis_section_missing(self):
-        """If synthesis section is missing entirely, defaults to False."""
-        with patch("synthesis_cron.load_settings", return_value={}):
-            assert should_run_deferred_synthesis() is False
+    def test_returns_true_when_synthesis_section_missing(self):
+        """If synthesis section is missing entirely, defaults to DEFAULT_SETTINGS deferred."""
+        from memory_utils import DEFAULT_SETTINGS
+
+        expected = DEFAULT_SETTINGS["synthesis"]["deferred"]
+        with patch("synthesis_cron.load_settings", return_value={}), \
+             patch("synthesis_cron.should_synthesize", return_value=True):
+            assert should_run_deferred_synthesis() is expected
 
 
 class TestBuildClaudeCommand:
