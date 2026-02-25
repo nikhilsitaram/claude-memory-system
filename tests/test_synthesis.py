@@ -13,6 +13,7 @@ from synthesis import (
     SECTION_ORDER,  # noqa: F401
     TYPE_TO_SECTION,  # noqa: F401
     DailyFile,
+    ProjectBlock,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
     append_to_ltm,
@@ -1715,3 +1716,126 @@ class TestTypeToSection:
 
     def test_all_types_covered(self):
         assert set(TYPE_TO_SECTION.values()) == set(SECTION_ORDER)
+
+
+# =============================================================================
+# ProjectBlock Tests
+# =============================================================================
+
+
+class TestProjectBlock:
+    """Test the new ProjectBlock dataclass."""
+
+    def test_basic_creation(self):
+        block = ProjectBlock(project="swyfft", entries=[
+            "- [implement] Did something",
+            "- [LTM][gotcha] Found a bug",
+        ])
+        assert block.project == "swyfft"
+        assert len(block.entries) == 2
+
+    def test_empty_entries_default(self):
+        block = ProjectBlock(project="global")
+        assert block.project == "global"
+        assert block.entries == []
+
+
+# =============================================================================
+# Parse ===PROJECT:X=== Format Tests
+# =============================================================================
+
+
+class TestParseProjectFormat:
+    """Test parsing the new ===PROJECT:X=== format."""
+
+    def test_single_project(self):
+        text = """===PROJECT:swyfft===
+- [implement] Rewrote SQL
+- [gotcha] Tableau mislabeled
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "swyfft"
+        assert len(result.project_blocks[0].entries) == 2
+
+    def test_multiple_projects(self):
+        text = """===PROJECT:swyfft===
+- [implement] Rewrote SQL
+
+===PROJECT:investing===
+- [implement] Started Phase 4
+
+===PROJECT:global===
+- [analyze] Benchmarked Python vs TS
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 3
+        projects = [b.project for b in result.project_blocks]
+        assert projects == ["swyfft", "investing", "global"]
+
+    def test_ltm_and_global_flags_preserved(self):
+        text = """===PROJECT:swyfft===
+- [LTM][gotcha] Important bug
+- [GLOBAL][pattern] Cross-project pattern
+- [LTM][GLOBAL][tip] Global LTM tip
+
+===END==="""
+        result = parse_synthesis_output(text)
+        entries = result.project_blocks[0].entries
+        assert entries[0] == "- [LTM][gotcha] Important bug"
+        assert entries[1] == "- [GLOBAL][pattern] Cross-project pattern"
+        assert entries[2] == "- [LTM][GLOBAL][tip] Global LTM tip"
+
+    def test_skips_non_entry_lines(self):
+        text = """===PROJECT:swyfft===
+Some preamble text
+- [implement] Real entry
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks[0].entries) == 1
+
+    def test_empty_project_block_skipped(self):
+        text = """===PROJECT:swyfft===
+
+===PROJECT:investing===
+- [implement] Real entry
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "investing"
+
+    def test_missing_end_marker_warns(self):
+        text = """===PROJECT:swyfft===
+- [implement] Did something"""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert any("END" in w for w in result.warnings)
+
+    def test_old_daily_format_still_works(self):
+        """Backwards compatibility: ===DAILY=== format still parses."""
+        text = """===DAILY:2026-02-25===
+## Actions
+- [implement] Did something
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.dailies) == 1
+        assert result.dailies[0].date == "2026-02-25"
+
+    def test_mixed_project_and_daily_rejected(self):
+        """If both formats present, both are parsed (downstream decides)."""
+        text = """===DAILY:2026-02-25===
+## Actions
+- [implement] Did something
+
+===PROJECT:swyfft===
+- [implement] Rewrote SQL
+
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.dailies) == 1
+        assert len(result.project_blocks) == 1

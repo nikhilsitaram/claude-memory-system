@@ -42,6 +42,7 @@ from memory_utils import (  # noqa: E402
 __all__ = [
     "DailyFile",
     "MIN_ROUTE_KEYWORDS",
+    "ProjectBlock",
     "ROUTE_CAP",
     "RouteEntry",
     "SECTION_ORDER",
@@ -65,6 +66,7 @@ __all__ = [
 # Delimiter patterns
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")
 ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")
+PROJECT_HEADER = re.compile(r"^===PROJECT:([^=]+)===$")
 END_MARKER = "===END==="
 
 # Routing quality gates
@@ -107,40 +109,77 @@ class RouteEntry:
 
 
 @dataclass
+class ProjectBlock:
+    """A parsed project block from ===PROJECT:X=== output."""
+
+    project: str
+    entries: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SynthesisResult:
     """Complete parsed synthesis output containing dailies, routes, and warnings."""
 
     dailies: list[DailyFile] = field(default_factory=list)
     routes: list[RouteEntry] = field(default_factory=list)
+    project_blocks: list[ProjectBlock] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
+def _is_delimiter(line: str) -> bool:
+    """Check if a line is any known delimiter (daily, route, project, or end)."""
+    return bool(
+        DAILY_HEADER.match(line)
+        or ROUTE_HEADER.match(line)
+        or PROJECT_HEADER.match(line)
+        or line == END_MARKER
+    )
+
+
 def parse_synthesis_output(text: str) -> SynthesisResult:
-    """Parse structured synthesis output into daily files and route entries.
+    """Parse structured synthesis output into daily files, route entries, and project blocks.
 
-    Format:
-        ===DAILY:YYYY-MM-DD===
-        [markdown content]
-
-        ===ROUTE:scope:section===
-        - (YYYY-MM-DD) [type] Description
-
-        ===END===
+    Supported formats:
+        ===DAILY:YYYY-MM-DD===        (legacy daily summary)
+        ===ROUTE:scope:section===     (legacy LTM routing)
+        ===PROJECT:name===            (new per-project block)
+        ===END===                     (end marker)
 
     Text before the first delimiter is ignored. Missing ===END=== produces
-    a warning but content is still parsed.
+    a warning but content is still parsed. Both formats can coexist in the
+    same output (downstream decides how to handle).
     """
     result = SynthesisResult()
     lines = text.split("\n")
     has_end = END_MARKER in text
 
     has_daily = any(DAILY_HEADER.match(line.strip()) for line in lines)
-    if not has_end and has_daily:
+    has_project = any(PROJECT_HEADER.match(line.strip()) for line in lines)
+    if not has_end and (has_daily or has_project):
         result.warnings.append("Missing ===END=== marker; processing available content")
 
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # Check for project header
+        project_match = PROJECT_HEADER.match(line)
+        if project_match:
+            project_name = project_match.group(1).strip()
+            entries = []
+            i += 1
+            while i < len(lines):
+                stripped = lines[i].strip()
+                if _is_delimiter(stripped):
+                    break
+                if stripped.startswith("- "):
+                    entries.append(stripped)
+                i += 1
+            if entries:
+                result.project_blocks.append(
+                    ProjectBlock(project=project_name, entries=entries)
+                )
+            continue
 
         # Check for daily header
         daily_match = DAILY_HEADER.match(line)
@@ -150,11 +189,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
             i += 1
             while i < len(lines):
                 stripped = lines[i].strip()
-                if (
-                    DAILY_HEADER.match(stripped)
-                    or ROUTE_HEADER.match(stripped)
-                    or stripped == END_MARKER
-                ):
+                if _is_delimiter(stripped):
                     break
                 content_lines.append(lines[i])
                 i += 1
@@ -172,11 +207,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
             i += 1
             while i < len(lines):
                 stripped = lines[i].strip()
-                if (
-                    DAILY_HEADER.match(stripped)
-                    or ROUTE_HEADER.match(stripped)
-                    or stripped == END_MARKER
-                ):
+                if _is_delimiter(stripped):
                     break
                 if stripped.startswith("- "):
                     entries.append(stripped)
