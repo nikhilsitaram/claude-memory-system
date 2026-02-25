@@ -34,6 +34,11 @@ def _resolve_project_name(
 
     Falls back to matching project_hash against encodedPaths when
     project_path is unavailable (sessions-index.json missing).
+
+    If exact match fails and the hash contains ``--worktrees-``, a prefix
+    fallback extracts the base repo path (before ``--worktrees-``) and
+    compares it to the base of each known encodedPath. This resolves
+    unindexed worktrees to their parent project.
     """
     if not project_path and not project_hash:
         return None
@@ -46,11 +51,21 @@ def _resolve_project_name(
             data = projects.get(project_path)
             if data and data.get("name"):
                 return data["name"]
-        # Fallback: match encoded folder name against encodedPaths
+        # Fallback 1: match encoded folder name against encodedPaths
         if project_hash:
             for _path, data in projects.items():
                 if project_hash in data.get("encodedPaths", []):
                     return data.get("name")
+            # Fallback 2: prefix match for unindexed worktrees
+            # e.g., -home-user-project--worktrees-new-branch matches
+            #        -home-user-project or -home-user-project--worktrees-old-branch
+            base = project_hash.rsplit("--worktrees-", 1)[0]
+            if base != project_hash:  # only if hash contains --worktrees-
+                for _path, data in projects.items():
+                    for ep in data.get("encodedPaths", []):
+                        ep_base = ep.rsplit("--worktrees-", 1)[0]
+                        if base == ep_base:
+                            return data.get("name")
     except Exception:
         pass
     return None

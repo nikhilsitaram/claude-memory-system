@@ -683,5 +683,110 @@ class TestResolveProjectName:
         assert result == "alpha"
 
 
+# =============================================================================
+# _resolve_project_name Worktree Prefix Fallback Tests
+# =============================================================================
+
+
+class TestResolveProjectNameWorktreePrefix:
+    """Test that unindexed worktrees resolve via prefix match."""
+
+    def test_new_worktree_resolves_to_parent(self, tmp_path):
+        """ts-phase-4 should resolve to 'investing' when ts-phase-1..3 are indexed."""
+        from transcript_ops import _resolve_project_name
+        index = {
+            "projects": {
+                "/home/user/investing": {
+                    "name": "investing",
+                    "encodedPaths": [
+                        "-home-user-investing",
+                        "-home-user-investing--worktrees-ts-phase-1",
+                        "-home-user-investing--worktrees-ts-phase-3",
+                    ],
+                }
+            }
+        }
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(
+                None, project_hash="-home-user-investing--worktrees-ts-phase-4"
+            )
+        assert result == "investing"
+
+    def test_exact_match_takes_precedence_over_prefix(self, tmp_path):
+        """If exact match exists, don't fall through to prefix."""
+        from transcript_ops import _resolve_project_name
+        index = {
+            "projects": {
+                "/home/user/investing": {
+                    "name": "investing",
+                    "encodedPaths": [
+                        "-home-user-investing--worktrees-ts-phase-4",
+                    ],
+                }
+            }
+        }
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(
+                None, project_hash="-home-user-investing--worktrees-ts-phase-4"
+            )
+        assert result == "investing"
+
+    def test_no_prefix_match_returns_none(self, tmp_path):
+        """Completely unrelated hash returns None."""
+        from transcript_ops import _resolve_project_name
+        index = {
+            "projects": {
+                "/home/user/investing": {
+                    "name": "investing",
+                    "encodedPaths": ["-home-user-investing"],
+                }
+            }
+        }
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(
+                None, project_hash="-home-user-totally-different"
+            )
+        assert result is None
+
+    def test_worktree_prefix_matches_base_project(self, tmp_path):
+        """Worktree hash shares base encoded path prefix with project."""
+        from transcript_ops import _resolve_project_name
+        index = {
+            "projects": {
+                "/home/user/myproject": {
+                    "name": "myproject",
+                    "encodedPaths": ["-home-user-myproject"],
+                }
+            }
+        }
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(
+                None, project_hash="-home-user-myproject--worktrees-feature-x"
+            )
+        assert result == "myproject"
+
+    def test_non_worktree_hash_no_prefix_fallback(self, tmp_path):
+        """Hash without --worktrees- does not trigger prefix matching."""
+        from transcript_ops import _resolve_project_name
+        index = {
+            "projects": {
+                "/home/user/myproject": {
+                    "name": "myproject",
+                    "encodedPaths": ["-home-user-myproject"],
+                }
+            }
+        }
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(
+                None, project_hash="-home-user-myproject-subfolder"
+            )
+        assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
