@@ -179,10 +179,6 @@ def get_settings_file() -> Path:
     return get_memory_dir() / "settings.json"
 
 
-def get_claude_settings_file() -> Path:
-    """Get Claude Code's settings file path."""
-    return get_claude_dir() / "settings.json"
-
 
 def get_projects_index_file() -> Path:
     """Get the projects index file path."""

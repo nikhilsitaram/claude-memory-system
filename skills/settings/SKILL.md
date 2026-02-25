@@ -54,9 +54,12 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
 | `projectSettings.includeSubdirectories` | bool | — | false | Match subdirs to parent project |
 | `synthesis.intervalHours` | int | 1-24 | 2 | Hours between auto-synthesis |
-| `synthesis.model` | string | haiku/sonnet/opus | haiku | Model for synthesis subagent |
+| `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
 | `synthesis.background` | bool | — | true | Run auto-synthesis in background |
+| `synthesis.deferred` | bool | — | true | Use systemd timer instead of in-session synthesis |
+| `synthesis.minSessionMessages` | int | 0-100 | 10 | Skip sessions with fewer messages during synthesis |
 | `decay.ageDays` | int | 7-365 | 30 | Archive learnings older than this |
+| `decay.projectWorkingDays` | int | 5-100 | 20 | Archive project entries after N project work days |
 | `decay.archiveRetentionDays` | int | 30-730 | 365 | Purge archived items older than this |
 
 ## Token Budget
