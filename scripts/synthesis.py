@@ -66,8 +66,8 @@ __all__ = [
 ]
 
 # Delimiter patterns
-DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")
-ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")
+DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")  # Legacy format
+ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")  # Legacy format
 PROJECT_HEADER = re.compile(r"^===PROJECT:([^=]+)===$")
 END_MARKER = "===END==="
 
@@ -438,6 +438,11 @@ def extract_routes_from_project_blocks(
     ]
 
 
+# --- Legacy: old ===DAILY=== format support ---
+# The following regexes and functions support the ===DAILY:date=== format.
+# They are used by the backwards-compatible path in apply_results().
+# Once all synthesis output uses ===PROJECT:X=== format, these can be removed.
+
 # Pattern to detect LLM's simplified output: - [type] or - [GLOBAL][type]
 _UNSCOPED_ENTRY = re.compile(
     r"^(\s*-\s*)"           # prefix: "- "
@@ -456,6 +461,8 @@ def inject_scopes(
     session_projects: dict[str, str | None],
 ) -> list[DailyFile]:
     """Inject project scope tags into daily entries based on session metadata.
+
+    Legacy: used by the ===DAILY:date=== backwards-compatible path in apply_results().
 
     Transforms LLM's simplified output:
     - [type] Description       -> [project/type] Description
@@ -517,7 +524,10 @@ _PROJECT_HEADER = re.compile(r"Session:\s+\S+\s+\[project:\s+([^\]]+)\]")
 
 
 def _extract_session_projects(extract_paths: list[str]) -> dict[str, str | None]:
-    """Extract date -> project mapping from transcript extract files."""
+    """Extract date -> project mapping from transcript extract files.
+
+    Legacy: used by the ===DAILY:date=== backwards-compatible path in apply_results().
+    """
     from collections import Counter
 
     date_projects: dict[str, Counter] = {}
@@ -554,7 +564,10 @@ def _inject_route_scopes(
     routes: list[RouteEntry],
     session_projects: dict[str, str | None],
 ) -> list[RouteEntry]:
-    """Pass-through for now -- route scopes come from daily entry tags."""
+    """Pass-through for now -- route scopes come from daily entry tags.
+
+    Legacy: intended for the ===DAILY:date=== format path. Currently unused.
+    """
     return routes
 
 
