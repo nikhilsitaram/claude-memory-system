@@ -473,5 +473,116 @@ class TestFormatTranscriptsIncrementalProjectHeader:
         assert "[project: global]" in result
 
 
+# =============================================================================
+# _resolve_project_name Fallback Tests
+# =============================================================================
+
+
+class TestResolveProjectName:
+    """Test _resolve_project_name with project_hash fallback."""
+
+    def _make_index(self, projects):
+        return {"projects": projects, "version": 1}
+
+    def _patch_index(self, index, tmp_path):
+        """Return context manager that patches the projects-index lookup."""
+        return mock.patch.dict(
+            "memory_utils.__dict__",
+        ), mock.patch(
+            "memory_utils.load_json_file", return_value=index,
+        ), mock.patch(
+            "memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json",
+        )
+
+    def test_resolves_via_project_path(self, tmp_path):
+        """Direct project_path lookup (existing behavior)."""
+        from transcript_ops import _resolve_project_name
+
+        index = self._make_index({
+            "/home/user/myproject": {
+                "name": "myproject",
+                "encodedPaths": ["-home-user-myproject"],
+            }
+        })
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name("/home/user/myproject")
+        assert result == "myproject"
+
+    def test_falls_back_to_project_hash(self, tmp_path):
+        """When project_path is None, resolve via project_hash in encodedPaths."""
+        from transcript_ops import _resolve_project_name
+
+        index = self._make_index({
+            "/home/user/myproject": {
+                "name": "myproject",
+                "encodedPaths": ["-home-user-myproject"],
+            }
+        })
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(None, project_hash="-home-user-myproject")
+        assert result == "myproject"
+
+    def test_hash_fallback_matches_worktree_encoded_path(self, tmp_path):
+        """Worktree encoded paths are in the same project's encodedPaths list."""
+        from transcript_ops import _resolve_project_name
+
+        index = self._make_index({
+            "/home/user/myproject": {
+                "name": "myproject",
+                "encodedPaths": [
+                    "-home-user-myproject",
+                    "-home-user-myproject--worktrees-feature-x",
+                ],
+            }
+        })
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(None, project_hash="-home-user-myproject--worktrees-feature-x")
+        assert result == "myproject"
+
+    def test_returns_none_when_no_path_and_no_hash(self, tmp_path):
+        """Both None returns None."""
+        from transcript_ops import _resolve_project_name
+
+        result = _resolve_project_name(None, project_hash=None)
+        assert result is None
+
+    def test_returns_none_when_hash_not_in_index(self, tmp_path):
+        """Unknown project_hash returns None."""
+        from transcript_ops import _resolve_project_name
+
+        index = self._make_index({
+            "/home/user/myproject": {
+                "name": "myproject",
+                "encodedPaths": ["-home-user-myproject"],
+            }
+        })
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name(None, project_hash="-home-user-unknown")
+        assert result is None
+
+    def test_project_path_takes_precedence_over_hash(self, tmp_path):
+        """When both are available, project_path wins."""
+        from transcript_ops import _resolve_project_name
+
+        index = self._make_index({
+            "/home/user/alpha": {
+                "name": "alpha",
+                "encodedPaths": ["-home-user-alpha"],
+            },
+            "/home/user/beta": {
+                "name": "beta",
+                "encodedPaths": ["-home-user-beta"],
+            },
+        })
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = _resolve_project_name("/home/user/alpha", project_hash="-home-user-beta")
+        assert result == "alpha"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
