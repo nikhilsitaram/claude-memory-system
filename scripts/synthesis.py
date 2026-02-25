@@ -884,39 +884,67 @@ def compute_offsets_from_extracts(extract_paths: list[str]) -> dict[str, dict]:
     return offsets
 
 
+def _extract_date_from_extracts(extract_paths: list[str]) -> str:
+    """Extract date from extract file names (format: *YYYY-MM-DD*).
+
+    Scans file names for a YYYY-MM-DD pattern and returns the first match.
+    Falls back to today's date if no date is found.
+    """
+    for path in extract_paths:
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", Path(path).name)
+        if date_match:
+            return date_match.group(1)
+    # Fallback: today
+    from datetime import date
+
+    return date.today().isoformat()
+
+
 def apply_results(
     output_file: str,
     extract_paths: list[str],
     offsets_json: str | None = None,
 ) -> None:
-    """Full pipeline: parse output -> mark routed -> write files -> post-process."""
+    """Full pipeline: parse output -> scope/section -> write files -> post-process."""
     text = Path(output_file).read_text(encoding="utf-8")
     result = parse_synthesis_output(text)
 
-    if not result.dailies:
-        print("No daily blocks found in output. Synthesis may have failed.", file=sys.stderr)
+    if result.project_blocks:
+        # New format: ===PROJECT:X=== blocks
+        date = _extract_date_from_extracts(extract_paths)
+
+        dailies = build_dailies_from_project_blocks(result.project_blocks, date)
+        routes = extract_routes_from_project_blocks(result.project_blocks, date)
+
+        # Mark routed entries in dailies
+        marked_dailies = mark_routed_entries(dailies, routes)
+        written = write_daily_files(marked_dailies)
+
+    elif result.dailies:
+        # Legacy format: ===DAILY:date=== blocks (backwards compat)
+        marked_dailies = mark_routed_entries(result.dailies, result.routes)
+        session_projects = _extract_session_projects(extract_paths)
+        scoped_dailies = inject_scopes(marked_dailies, session_projects)
+        written = write_daily_files(scoped_dailies)
+        routes = result.routes
+    else:
+        print(
+            "No daily or project blocks found. Synthesis may have failed.",
+            file=sys.stderr,
+        )
         return
 
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    # Mark routed entries in daily files
-    marked_dailies = mark_routed_entries(result.dailies, result.routes)
-
-    # Inject scope tags from session metadata
-    session_projects = _extract_session_projects(extract_paths)
-    scoped_dailies = inject_scopes(marked_dailies, session_projects)
-
-    # Write daily files
-    written = write_daily_files(scoped_dailies)
     print(f"Wrote {len(written)} daily file(s)")
 
     # Append to LTM
-    ltm_warnings = append_to_ltm(result.routes)
+    ltm_warnings = append_to_ltm(routes)
     for w in ltm_warnings:
         print(f"LTM warning: {w}", file=sys.stderr)
-    if result.routes:
-        total_entries = sum(len(r.entries) for r in result.routes)
+    if routes:
+        total_entries = sum(len(r.entries) for r in routes)
         print(f"Routed {total_entries} entries to LTM")
 
     # Update synthesis state with new high water marks

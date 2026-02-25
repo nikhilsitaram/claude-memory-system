@@ -2087,3 +2087,228 @@ class TestExtractRoutesFromProjectBlocks:
                 f"Type {entry_type} mapped to {routes[0].section}, "
                 f"expected Key {section}"
             )
+
+
+# =============================================================================
+# _extract_date_from_extracts Tests
+# =============================================================================
+
+from synthesis import _extract_date_from_extracts  # noqa: E402
+
+
+class TestExtractDateFromExtracts:
+    """Test date extraction from extract file paths."""
+
+    def test_extracts_date_from_filename(self, tmp_path):
+        """Extract date from standard extract filename."""
+        f = tmp_path / "extract-2026-02-24.txt"
+        f.write_text("content")
+        assert _extract_date_from_extracts([str(f)]) == "2026-02-24"
+
+    def test_uses_first_match(self, tmp_path):
+        """Returns date from first matching file."""
+        f1 = tmp_path / "extract-2026-02-20.txt"
+        f2 = tmp_path / "extract-2026-02-21.txt"
+        f1.write_text("c1")
+        f2.write_text("c2")
+        assert _extract_date_from_extracts([str(f1), str(f2)]) == "2026-02-20"
+
+    def test_no_date_in_filename_falls_back_to_today(self):
+        """Falls back to today's date if no date found in filenames."""
+        result = _extract_date_from_extracts(["/tmp/nodatehere.txt"])
+        # Should be a valid ISO date
+        import re
+        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
+
+    def test_empty_paths_falls_back_to_today(self):
+        """Empty path list falls back to today's date."""
+        import re
+        result = _extract_date_from_extracts([])
+        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
+
+
+# =============================================================================
+# apply_results with project blocks Tests
+# =============================================================================
+
+
+class TestApplyResultsProjectBlocks:
+    """Integration test: apply_results with new ===PROJECT=== format."""
+
+    def test_project_blocks_produce_scoped_daily(self, tmp_path):
+        """Project blocks produce a daily file with scoped entries."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [implement] Rewrote SQL query for performance
+- [LTM][gotcha] Tableau dashboard mislabeled metric column
+- [design] Use bind date for policy lookup
+
+===PROJECT:global===
+- [analyze] Benchmarked Python vs TypeScript serialization
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        daily_file = daily_dir / "2026-02-24.md"
+        assert daily_file.exists()
+        content = daily_file.read_text()
+        assert "[swyfft/implement]" in content
+        assert "[swyfft/gotcha]" in content
+        assert "[swyfft/design]" in content
+        assert "[global/analyze]" in content
+
+    def test_project_blocks_ltm_routing(self, tmp_path):
+        """LTM entries from project blocks get routed correctly."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [LTM][gotcha] Important bug found in the data processing pipeline
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        # Create existing LTM file
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        ltm_content = ltm_file.read_text()
+        assert "(2026-02-24) [gotcha] Important bug found" in ltm_content
+
+    def test_old_format_still_works(self, tmp_path):
+        """Backwards compatibility: ===DAILY=== format still processes."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===DAILY:2026-02-24===
+# 2026-02-24
+## Actions
+- [swyfft/implement] Did something
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        content = (daily_dir / "2026-02-24.md").read_text()
+        assert "[swyfft/implement] Did something" in content
+
+    def test_no_blocks_no_dailies_prints_error(self, tmp_path, capsys):
+        """When neither project blocks nor dailies found, print error."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("just garbage text with no blocks")
+
+        with patch("synthesis.run_post_processing") as mock_post:
+            apply_results(str(output_file), [])
+            mock_post.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "No daily or project blocks found" in captured.err
+
+    def test_project_blocks_with_global_flag_dual_routes(self, tmp_path):
+        """[GLOBAL] flag routes to both project and global LTM."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [LTM][GLOBAL][gotcha] Cross-project bug found in shared data pipeline
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+        global_ltm = tmp_path / "global-ltm.md"
+        global_ltm.write_text("## Key Learnings\n<!-- decay -->\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=global_ltm), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        # Routed to project LTM
+        proj_content = ltm_file.read_text()
+        assert "(2026-02-24) [gotcha] Cross-project bug found" in proj_content
+        # Routed to global LTM
+        global_content = global_ltm.read_text()
+        assert "(2026-02-24) [gotcha] Cross-project bug found" in global_content
+
+    def test_project_blocks_mark_routed_in_daily(self, tmp_path):
+        """LTM entries get [routed] marker in daily file."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("""===PROJECT:swyfft===
+- [implement] Normal entry that should not be routed
+- [LTM][gotcha] Routed entry should get marker in daily output
+
+===END===
+""")
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        proj_memory_dir = tmp_path / "project-memory"
+        proj_memory_dir.mkdir()
+        ltm_file = proj_memory_dir / "swyfft-long-term-memory.md"
+        ltm_file.write_text("# swyfft\n\n## Pinned\n\n## Key Learnings\n")
+
+        extract_file = tmp_path / "extract-2026-02-24.txt"
+        extract_file.write_text("Session: abc123 [project: swyfft]\n")
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global-ltm.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=proj_memory_dir), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.compute_offsets_from_extracts", return_value={}), \
+             patch("synthesis.update_synthesis_state"), \
+             patch("synthesis.run_post_processing"):
+            apply_results(str(output_file), [str(extract_file)])
+
+        content = (daily_dir / "2026-02-24.md").read_text()
+        # The LTM entry should be marked as routed
+        assert "[routed]" in content
+        # The normal entry should NOT be marked as routed
+        for line in content.split("\n"):
+            if "Normal entry" in line:
+                assert "[routed]" not in line
