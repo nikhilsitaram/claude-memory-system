@@ -18,6 +18,7 @@ from synthesis import (
     SynthesisResult,  # noqa: F401
     append_to_ltm,
     build_dailies_from_project_blocks,
+    extract_routes_from_project_blocks,  # noqa: F401
     inject_scopes,
     mark_routed_entries,
     merge_daily_sections,
@@ -1975,3 +1976,114 @@ class TestBuildDailiesFromProjectBlocks:
         content = dailies[0].content
         assert "Only LTM flag no type" not in content
         assert "- [swyfft/implement] Valid entry" in content
+
+
+# =============================================================================
+# extract_routes_from_project_blocks Tests
+# =============================================================================
+
+
+class TestExtractRoutesFromProjectBlocks:
+    def test_ltm_entries_become_routes(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Normal entry",
+            "- [LTM][gotcha] Important bug",
+            "- [LTM][tip] Useful command",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert len(routes) == 2
+        # gotcha -> Key Learnings, tip -> Key Lessons
+        scopes = {(r.scope, r.section) for r in routes}
+        assert ("swyfft", "Key Learnings") in scopes
+        assert ("swyfft", "Key Lessons") in scopes
+
+    def test_date_prefix_added(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Important bug",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].entries[0] == "- (2026-02-24) [gotcha] Important bug"
+
+    def test_global_project_routes_to_global(self):
+        blocks = [ProjectBlock(project="global", entries=[
+            "- [LTM][tip] Global tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].scope == "global"
+
+    def test_global_flag_routes_to_both(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][GLOBAL][pattern] Cross-project pattern",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "global" in scopes
+
+    def test_no_ltm_entries_no_routes(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [implement] Normal entry",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes == []
+
+    def test_routes_grouped_by_scope_and_section(self):
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [LTM][gotcha] Bug one",
+            "- [LTM][gotcha] Bug two",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        # Both gotchas grouped into one RouteEntry for swyfft:Key Learnings
+        assert len(routes) == 1
+        assert len(routes[0].entries) == 2
+
+    def test_multiple_projects(self):
+        """Entries from different projects produce separate routes."""
+        blocks = [
+            ProjectBlock(project="swyfft", entries=[
+                "- [LTM][gotcha] Swyfft bug",
+            ]),
+            ProjectBlock(project="memory", entries=[
+                "- [LTM][gotcha] Memory bug",
+            ]),
+        ]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "memory" in scopes
+
+    def test_empty_project_defaults_to_global(self):
+        """Empty project name should route to global."""
+        blocks = [ProjectBlock(project="", entries=[
+            "- [LTM][tip] Some tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        assert routes[0].scope == "global"
+
+    def test_reversed_flag_order(self):
+        """[GLOBAL][LTM][type] should work the same as [LTM][GLOBAL][type]."""
+        blocks = [ProjectBlock(project="swyfft", entries=[
+            "- [GLOBAL][LTM][tip] Reversed flag tip",
+        ])]
+        routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+        scopes = {r.scope for r in routes}
+        assert "swyfft" in scopes
+        assert "global" in scopes
+        # Check the formatted entry has no flags
+        for r in routes:
+            for e in r.entries:
+                assert "[LTM]" not in e
+                assert "[GLOBAL]" not in e
+
+    def test_all_type_sections_mapped(self):
+        """Verify all TYPE_TO_SECTION types map to correct Key sections."""
+        for entry_type, section in TYPE_TO_SECTION.items():
+            blocks = [ProjectBlock(project="test", entries=[
+                f"- [LTM][{entry_type}] Test entry for {entry_type}",
+            ])]
+            routes = extract_routes_from_project_blocks(blocks, "2026-02-24")
+            assert len(routes) == 1, f"No route for type {entry_type}"
+            assert routes[0].section == f"Key {section}", (
+                f"Type {entry_type} mapped to {routes[0].section}, "
+                f"expected Key {section}"
+            )

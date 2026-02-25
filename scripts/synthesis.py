@@ -49,6 +49,7 @@ __all__ = [
     "SynthesisResult",
     "TYPE_TO_SECTION",
     "build_dailies_from_project_blocks",
+    "extract_routes_from_project_blocks",
     "inject_scopes",
     "merge_daily_sections",
     "parse_daily_sections",
@@ -394,6 +395,47 @@ def build_dailies_from_project_blocks(
             lines.append(f"## {section}")
             lines.extend(sections[section])
     return [DailyFile(date=date, content="\n".join(lines))]
+
+
+def extract_routes_from_project_blocks(
+    blocks: list[ProjectBlock], date: str
+) -> list[RouteEntry]:
+    """Extract [LTM]-flagged entries from project blocks as RouteEntry objects.
+
+    - Strips [LTM] and [GLOBAL] flags, adds (date) prefix
+    - Maps type to "Key {Section}" for LTM section targeting
+    - [GLOBAL] entries produce routes to both project and global LTM
+    - Groups entries by (scope, section)
+    """
+    grouped: dict[tuple[str, str], list[str]] = {}
+
+    for block in blocks:
+        for entry in block.entries:
+            if not _LTM_FLAG.search(entry):
+                continue
+            match = _ENTRY_FLAGS.match(entry)
+            if not match:
+                continue
+
+            entry_type = match.group(2).lower()
+            rest = match.group(3)
+            has_global = bool(_GLOBAL_FLAG.search(entry))
+
+            section = f"Key {TYPE_TO_SECTION.get(entry_type, 'Actions')}"
+            formatted = f"- ({date}) [{entry_type}]{rest}"
+
+            # Route to project (or global if project is global)
+            scope = block.project if block.project else "global"
+            grouped.setdefault((scope, section), []).append(formatted)
+
+            # GLOBAL flag: also route to global LTM (if not already global)
+            if has_global and scope != "global":
+                grouped.setdefault(("global", section), []).append(formatted)
+
+    return [
+        RouteEntry(scope=scope, section=section, entries=entries)
+        for (scope, section), entries in grouped.items()
+    ]
 
 
 # Pattern to detect LLM's simplified output: - [type] or - [GLOBAL][type]
