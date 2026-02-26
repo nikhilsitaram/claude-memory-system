@@ -35,6 +35,7 @@ from memory_utils import (  # noqa: E402
     get_project_memory_dir,
     get_projects_dir,
     is_routed_match,
+    parse_markdown_sections,
     prune_stale_state_entries,
     update_synthesis_state,
 )
@@ -244,6 +245,10 @@ SECTION_ORDER = ["Actions", "Decisions", "Learnings", "Lessons"]
 def parse_daily_sections(content: str) -> dict:
     """Parse a daily markdown file into structured sections.
 
+    Wraps ``memory_utils.parse_markdown_sections()`` with daily-file-specific
+    logic: extracts date from ``# YYYY-MM-DD`` header, filters to known
+    section names, skips HTML comments/blank lines, and collects entry lines.
+
     Returns dict with "date" (str) and section names mapping to entry lists.
     Skips HTML comments and blank lines. Preserves [routed] prefixes.
     """
@@ -254,38 +259,30 @@ def parse_daily_sections(content: str) -> dict:
     if not content.strip():
         return result
 
-    current_section = None
-    for line in content.split("\n"):
-        # Date header
-        if line.startswith("# ") and not line.startswith("## "):
-            date_match = re.match(r"^# (\d{4}-\d{2}-\d{2})", line)
-            if date_match:
-                result["date"] = date_match.group(1)
+    for header, lines in parse_markdown_sections(content):
+        if not header:
+            # Preamble — look for date header in the lines
+            for line in lines:
+                if line.startswith("# ") and not line.startswith("## "):
+                    date_match = re.match(r"^# (\d{4}-\d{2}-\d{2})", line)
+                    if date_match:
+                        result["date"] = date_match.group(1)
             continue
 
-        # Section header
-        if line.startswith("## "):
-            section_name = line[3:].strip()
-            if section_name in SECTION_ORDER:
-                current_section = section_name
-            else:
-                current_section = None
+        section_name = header[3:].strip()  # strip "## " prefix
+        if section_name not in SECTION_ORDER:
             continue
 
-        if current_section is None:
-            continue
-
-        # Skip HTML comments
-        if re.match(r"^\s*<!--.*-->\s*$", line):
-            continue
-
-        # Skip blank lines
-        if not line.strip():
-            continue
-
-        # Entry line (starts with -)
-        if line.strip().startswith("-"):
-            result[current_section].append(line)
+        for line in lines:
+            # Skip HTML comments
+            if re.match(r"^\s*<!--.*-->\s*$", line):
+                continue
+            # Skip blank lines
+            if not line.strip():
+                continue
+            # Entry line (starts with -)
+            if line.strip().startswith("-"):
+                result[section_name].append(line)
 
     return result
 

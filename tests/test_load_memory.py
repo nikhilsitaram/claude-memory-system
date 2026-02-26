@@ -837,11 +837,16 @@ class TestBuildEmbeddedFiles:
 class TestFindProjectsInExtracts:
     """Tests for _find_projects_in_extracts helper."""
 
+    def setup_method(self):
+        """Clear the projects index cache before each test."""
+        from memory_utils import _clear_projects_index_cache
+        _clear_projects_index_cache()
+
     def test_maps_project_path_to_name(self, tmp_path):
         index = {"projects": {
             "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
         }}
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
             result = _find_projects_in_extracts({
@@ -854,7 +859,7 @@ class TestFindProjectsInExtracts:
             "/proj/a": {"name": "alpha", "encodedPaths": []},
             "/proj/b": {"name": "beta", "encodedPaths": []},
         }}
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
             result = _find_projects_in_extracts({
@@ -866,14 +871,16 @@ class TestFindProjectsInExtracts:
         assert result == {"alpha", "beta"}
 
     def test_empty_data_returns_empty(self):
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+        from memory_utils import _clear_projects_index_cache
+        _clear_projects_index_cache()
+        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
             mock_idx.return_value = Path("/nonexistent/index.json")
             result = _find_projects_in_extracts({})
         assert result == set()
 
     def test_unknown_project_skipped(self, tmp_path):
         index = {"projects": {}}
-        with mock.patch("load_memory.get_projects_index_file") as mock_idx:
+        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
             mock_idx.return_value = tmp_path / "index.json"
             (tmp_path / "index.json").write_text(json.dumps(index))
             result = _find_projects_in_extracts({

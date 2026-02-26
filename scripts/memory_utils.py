@@ -61,6 +61,10 @@ __all__ = [
     "save_synthesis_state",
     "update_synthesis_state",
     "prune_stale_state_entries",
+    # Project resolution
+    "resolve_project_path_to_name",
+    # Markdown parsing
+    "parse_markdown_sections",
     # Utilities
     "estimate_tokens",
     "project_name_to_filename",
@@ -821,6 +825,107 @@ def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) 
     else:
         # Exact match only
         return projects.get(pwd_lower)
+
+
+# Cache for resolve_project_path_to_name to avoid repeated file reads
+_projects_index_cache: dict | None = None
+
+
+def resolve_project_path_to_name(
+    project_path: str | None,
+    project_hash: str | None = None,
+) -> str | None:
+    """Resolve a project path or encoded hash to a project name.
+
+    Loads projects-index.json (cached) and resolves using three strategies:
+    1. Direct path lookup via project_path
+    2. Encoded folder name match via project_hash against encodedPaths
+    3. Worktree prefix match when hash contains ``--worktrees-``
+
+    Args:
+        project_path: Original filesystem path (e.g., "/home/user/myproject")
+        project_hash: Encoded folder name (e.g., "-home-user-myproject")
+
+    Returns:
+        Project name string, or None if not found.
+    """
+    global _projects_index_cache
+
+    if not project_path and not project_hash:
+        return None
+
+    try:
+        if _projects_index_cache is None:
+            _projects_index_cache = load_json_file(get_projects_index_file(), {})
+        projects = _projects_index_cache.get("projects", {})
+
+        # Primary: direct path lookup
+        if project_path:
+            data = projects.get(project_path)
+            if data and data.get("name"):
+                return data["name"]
+
+        # Fallback 1: match encoded folder name against encodedPaths
+        if project_hash:
+            for _path, data in projects.items():
+                if project_hash in data.get("encodedPaths", []):
+                    return data.get("name")
+
+            # Fallback 2: prefix match for unindexed worktrees
+            base = project_hash.rsplit("--worktrees-", 1)[0]
+            if base != project_hash:  # only if hash contains --worktrees-
+                for _path, data in projects.items():
+                    for ep in data.get("encodedPaths", []):
+                        ep_base = ep.rsplit("--worktrees-", 1)[0]
+                        if base == ep_base:
+                            return data.get("name")
+    except Exception:
+        pass
+    return None
+
+
+def _clear_projects_index_cache() -> None:
+    """Clear the projects index cache (for testing)."""
+    global _projects_index_cache
+    _projects_index_cache = None
+
+
+# =============================================================================
+# Markdown Parsing
+# =============================================================================
+
+
+def parse_markdown_sections(content: str) -> list[tuple[str, list[str]]]:
+    """Parse markdown content into sections split by ``## `` headers.
+
+    Returns a list of ``(header, content_lines)`` tuples. Content before
+    the first ``## `` header is returned with an empty-string header.
+
+    Args:
+        content: Raw markdown text.
+
+    Returns:
+        List of (header, content_lines) where header is the full ``## ...``
+        line (stripped) or ``""`` for the preamble, and content_lines is a
+        list of individual lines (without trailing newline).
+    """
+    sections: list[tuple[str, list[str]]] = []
+    current_header = ""
+    current_lines: list[str] = []
+
+    for line in content.split("\n"):
+        if line.startswith("## "):
+            if current_header or current_lines:
+                sections.append((current_header, current_lines))
+            current_header = line.strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_header or current_lines:
+        sections.append((current_header, current_lines))
+
+    return sections
 
 
 if __name__ == "__main__":

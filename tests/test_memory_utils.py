@@ -15,6 +15,7 @@ from memory_utils import (
     SHORT_TERM_TOKENS_PER_DAY,
     FileLock,
     _calculate_token_limits,
+    _clear_projects_index_cache,
     _deep_merge,
     estimate_tokens,
     extract_entry_keywords,
@@ -30,8 +31,10 @@ from memory_utils import (
     load_settings,
     load_synthesis_state,
     local_today,
+    parse_markdown_sections,
     project_name_to_filename,
     prune_stale_state_entries,
+    resolve_project_path_to_name,
     resolve_worktree_to_main_repo,
     save_json_file,
     save_synthesis_state,
@@ -1097,6 +1100,145 @@ class TestExtractEntryKeywordsMultiScope:
         assert "tailscale" in keywords
         assert "2026" not in keywords
         assert "global" not in keywords
+
+
+# =============================================================================
+# resolve_project_path_to_name Tests
+# =============================================================================
+
+
+class TestResolveProjectPathToName:
+    """Tests for the shared project path-to-name resolution utility."""
+
+    def setup_method(self):
+        _clear_projects_index_cache()
+
+    def test_direct_path_lookup(self, tmp_path):
+        index = {"projects": {
+            "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            assert resolve_project_path_to_name("/home/user/myproject") == "myproject"
+
+    def test_encoded_path_fallback(self, tmp_path):
+        index = {"projects": {
+            "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            assert resolve_project_path_to_name(None, project_hash="-home-user-myproject") == "myproject"
+
+    def test_worktree_prefix_fallback(self, tmp_path):
+        index = {"projects": {
+            "/home/user/repo": {
+                "name": "repo",
+                "encodedPaths": ["-home-user-repo", "-home-user-repo--worktrees-branch-a"],
+            }
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name(None, project_hash="-home-user-repo--worktrees-branch-b")
+        assert result == "repo"
+
+    def test_none_when_both_args_none(self):
+        assert resolve_project_path_to_name(None) is None
+
+    def test_none_when_not_found(self, tmp_path):
+        index = {"projects": {}}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            assert resolve_project_path_to_name("/unknown/path") is None
+
+    def test_path_takes_precedence_over_hash(self, tmp_path):
+        index = {"projects": {
+            "/alpha": {"name": "alpha", "encodedPaths": ["-alpha"]},
+            "/beta": {"name": "beta", "encodedPaths": ["-beta"]},
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            assert resolve_project_path_to_name("/alpha", project_hash="-beta") == "alpha"
+
+    def test_caching_avoids_repeated_reads(self, tmp_path):
+        index = {"projects": {
+            "/proj": {"name": "proj", "encodedPaths": []}
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index) as mock_load, \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            resolve_project_path_to_name("/proj")
+            resolve_project_path_to_name("/proj")
+            # Should only load once thanks to caching
+            mock_load.assert_called_once()
+
+    def test_non_worktree_hash_no_prefix_fallback(self, tmp_path):
+        """Hash without --worktrees- does not trigger prefix matching."""
+        index = {"projects": {
+            "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name(None, project_hash="-home-user-myproject-subfolder")
+        assert result is None
+
+
+# =============================================================================
+# parse_markdown_sections Tests
+# =============================================================================
+
+
+class TestParseMarkdownSections:
+    """Tests for the shared markdown section parser."""
+
+    def test_basic_sections(self):
+        content = "## Section 1\nContent 1\n## Section 2\nContent 2"
+        sections = parse_markdown_sections(content)
+        assert len(sections) == 2
+        assert sections[0][0] == "## Section 1"
+        assert sections[0][1] == ["Content 1"]
+        assert sections[1][0] == "## Section 2"
+        assert sections[1][1] == ["Content 2"]
+
+    def test_preamble_before_sections(self):
+        content = "# Title\nPreamble\n## Section 1\nContent"
+        sections = parse_markdown_sections(content)
+        assert len(sections) == 2
+        assert sections[0][0] == ""
+        assert "# Title" in sections[0][1]
+        assert "Preamble" in sections[0][1]
+        assert sections[1][0] == "## Section 1"
+
+    def test_empty_content(self):
+        sections = parse_markdown_sections("")
+        assert len(sections) == 1
+        assert sections[0][0] == ""
+        assert sections[0][1] == [""]
+
+    def test_multiline_section(self):
+        content = "## Section\nLine 1\nLine 2\nLine 3"
+        sections = parse_markdown_sections(content)
+        assert len(sections) == 1
+        assert sections[0][1] == ["Line 1", "Line 2", "Line 3"]
+
+    def test_returns_lines_not_joined_string(self):
+        """Verify output is list of lines, not joined string."""
+        content = "## Sec\nA\nB"
+        sections = parse_markdown_sections(content)
+        assert isinstance(sections[0][1], list)
+
+    def test_decay_compat_join(self):
+        """Verify that joining lines matches decay.py's original output."""
+        content = "## Section 1\nContent 1\n## Section 2\nContent 2"
+        sections = parse_markdown_sections(content)
+        joined = [(h, "\n".join(lines)) for h, lines in sections]
+        assert joined[0] == ("## Section 1", "Content 1")
+        assert joined[1] == ("## Section 2", "Content 2")
+
+    def test_no_sections_only_content(self):
+        content = "Just plain text\nwith no headers"
+        sections = parse_markdown_sections(content)
+        assert len(sections) == 1
+        assert sections[0][0] == ""
+        assert sections[0][1] == ["Just plain text", "with no headers"]
 
 
 if __name__ == "__main__":
