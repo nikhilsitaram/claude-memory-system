@@ -33,6 +33,7 @@ from memory_utils import (
     load_json_file,
     load_settings,
     local_today,
+    parse_markdown_sections,
     project_name_to_filename,
 )
 
@@ -87,25 +88,12 @@ def is_decay_eligible(section_name: str) -> bool:
 
 
 def parse_sections(content: str) -> list[tuple[str, str]]:
-    """Parse markdown into sections (header, content) tuples."""
-    sections = []
-    current_header = ""
-    current_content = []
+    """Parse markdown into sections (header, content) tuples.
 
-    for line in content.split("\n"):
-        if line.startswith("## "):
-            if current_header or current_content:
-                sections.append((current_header, "\n".join(current_content)))
-            current_header = line.strip()
-            current_content = []
-        else:
-            current_content.append(line)
-
-    # Don't forget the last section
-    if current_header or current_content:
-        sections.append((current_header, "\n".join(current_content)))
-
-    return sections
+    Wraps ``memory_utils.parse_markdown_sections()`` to join content lines
+    into a single string per section (decay.py's expected format).
+    """
+    return [(header, "\n".join(lines)) for header, lines in parse_markdown_sections(content)]
 
 
 def parse_learnings(section_content: str) -> list[tuple[str, date | None]]:

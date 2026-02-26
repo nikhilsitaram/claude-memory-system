@@ -41,6 +41,7 @@ from memory_utils import (
     load_settings,
     load_synthesis_state,
     project_name_to_filename,
+    resolve_project_path_to_name,
     resolve_worktree_to_main_repo,
 )
 from transcript_ops import (
@@ -454,28 +455,22 @@ def _build_synthesis_prompt(
 def _find_projects_in_extracts(daily_data: dict[str, list[dict]]) -> set[str]:
     """Find project names from extracted session data.
 
+    Delegates path-to-name resolution to
+    ``memory_utils.resolve_project_path_to_name()``.
+
     Args:
         daily_data: Dict mapping date -> list of session dicts
 
     Returns set of project names that had sessions extracted.
     """
-    projects_index = load_json_file(get_projects_index_file(), {})
-    projects = projects_index.get("projects", {})
-
-    # Collect unique project paths from sessions
-    project_paths: set[str] = set()
+    result: set[str] = set()
     for sessions in daily_data.values():
         for s in sessions:
             pp = s.get("project_path")
             if pp:
-                project_paths.add(pp)
-
-    # Map to project names
-    result: set[str] = set()
-    for path in project_paths:
-        data = projects.get(path)
-        if data and data.get("name"):
-            result.add(data["name"])
+                name = resolve_project_path_to_name(pp)
+                if name:
+                    result.add(name)
     return result
 
 

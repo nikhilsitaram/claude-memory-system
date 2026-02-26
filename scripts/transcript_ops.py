@@ -24,6 +24,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from indexing import get_session_date, list_recent_sessions
+from memory_utils import resolve_project_path_to_name
 
 
 def _resolve_project_name(
@@ -32,43 +33,11 @@ def _resolve_project_name(
 ) -> str | None:
     """Resolve a session's project_path to a project name via projects-index.
 
-    Falls back to matching project_hash against encodedPaths when
-    project_path is unavailable (sessions-index.json missing).
-
-    If exact match fails and the hash contains ``--worktrees-``, a prefix
-    fallback extracts the base repo path (before ``--worktrees-``) and
-    compares it to the base of each known encodedPath. This resolves
-    unindexed worktrees to their parent project.
+    Delegates to ``memory_utils.resolve_project_path_to_name()`` which
+    handles direct path lookup, encodedPaths fallback, and worktree
+    prefix matching.
     """
-    if not project_path and not project_hash:
-        return None
-    try:
-        from memory_utils import get_projects_index_file, load_json_file
-        index = load_json_file(get_projects_index_file(), {})
-        projects = index.get("projects", {})
-        # Primary: direct path lookup
-        if project_path:
-            data = projects.get(project_path)
-            if data and data.get("name"):
-                return data["name"]
-        # Fallback 1: match encoded folder name against encodedPaths
-        if project_hash:
-            for _path, data in projects.items():
-                if project_hash in data.get("encodedPaths", []):
-                    return data.get("name")
-            # Fallback 2: prefix match for unindexed worktrees
-            # e.g., -home-user-project--worktrees-new-branch matches
-            #        -home-user-project or -home-user-project--worktrees-old-branch
-            base = project_hash.rsplit("--worktrees-", 1)[0]
-            if base != project_hash:  # only if hash contains --worktrees-
-                for _path, data in projects.items():
-                    for ep in data.get("encodedPaths", []):
-                        ep_base = ep.rsplit("--worktrees-", 1)[0]
-                        if base == ep_base:
-                            return data.get("name")
-    except Exception:
-        pass
-    return None
+    return resolve_project_path_to_name(project_path, project_hash=project_hash)
 
 __all__ = [
     # Parsing

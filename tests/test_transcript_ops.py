@@ -605,18 +605,13 @@ class TestFormatTranscriptsIncrementalProjectHeader:
 class TestResolveProjectName:
     """Test _resolve_project_name with project_hash fallback."""
 
+    def setup_method(self):
+        """Clear the projects index cache before each test."""
+        from memory_utils import _clear_projects_index_cache
+        _clear_projects_index_cache()
+
     def _make_index(self, projects):
         return {"projects": projects, "version": 1}
-
-    def _patch_index(self, index, tmp_path):
-        """Return context manager that patches the projects-index lookup."""
-        return mock.patch.dict(
-            "memory_utils.__dict__",
-        ), mock.patch(
-            "memory_utils.load_json_file", return_value=index,
-        ), mock.patch(
-            "memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json",
-        )
 
     def test_resolves_via_project_path(self, tmp_path):
         """Direct project_path lookup (existing behavior)."""
@@ -715,6 +710,11 @@ class TestResolveProjectName:
 
 class TestResolveProjectNameWorktreePrefix:
     """Test that unindexed worktrees resolve via prefix match."""
+
+    def setup_method(self):
+        """Clear the projects index cache before each test."""
+        from memory_utils import _clear_projects_index_cache
+        _clear_projects_index_cache()
 
     def test_new_worktree_resolves_to_parent(self, tmp_path):
         """ts-phase-4 should resolve to 'investing' when ts-phase-1..3 are indexed."""
