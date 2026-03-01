@@ -45,6 +45,8 @@ __all__ = [
     "get_synthesis_error_log",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
+    "resolve_git_subdir_to_root",
+    "resolve_session_path",
     # Settings
     "load_settings",
     "save_settings",
@@ -91,6 +93,10 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 #   get_project_memory_dir() -> Path      get_projects_dir() -> Path
 #   get_global_memory_file() -> Path      get_settings_file() -> Path
 #   get_projects_index_file() -> Path
+# Path resolution:
+#   resolve_worktree_to_main_repo(path) -> str
+#   resolve_git_subdir_to_root(path) -> str
+#   resolve_session_path(path) -> str
 # Settings:
 #   load_settings() -> dict               save_settings(settings) -> None
 # Synthesis state:
@@ -826,6 +832,69 @@ def resolve_worktree_to_main_repo(path: str) -> str:
         return _worktree_pattern_fallback(path)
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return _worktree_pattern_fallback(path)
+
+
+def resolve_git_subdir_to_root(path: str) -> str:
+    """Resolve a git subdirectory to its repository root.
+
+    If path is inside a git repo but is not the root:
+      - If the relative path is gitignored -> return path unchanged (separate project)
+      - If not gitignored -> return git root (collapse to parent project)
+
+    If path IS the git root, or not in a git repo, returns unchanged.
+    Falls back to returning path unchanged on any error.
+    """
+    try:
+        toplevel_result = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if toplevel_result.returncode != 0:
+            return path
+        toplevel = toplevel_result.stdout.strip()
+        if not toplevel:
+            return path
+
+        # Normalize both paths for comparison
+        norm_path = os.path.normpath(path)
+        norm_toplevel = os.path.normpath(toplevel)
+
+        if norm_path == norm_toplevel:
+            return path  # Already at git root
+
+        # Compute relative path from git root
+        rel_path = os.path.relpath(norm_path, norm_toplevel)
+
+        # Check if relative path is gitignored
+        ignore_result = subprocess.run(
+            ["git", "-C", norm_toplevel, "check-ignore", "-q", rel_path],
+            capture_output=True, text=True, timeout=5,
+        )
+
+        if ignore_result.returncode == 0:
+            # Path IS gitignored — keep as separate project
+            return path
+        elif ignore_result.returncode == 1:
+            # Path is NOT gitignored — collapse to git root
+            return toplevel
+        else:
+            # Unexpected error from check-ignore
+            return path
+    except (FileNotFoundError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, OSError):
+        return path
+
+
+def resolve_session_path(path: str) -> str:
+    """Full resolution chain: worktree -> git-subdir -> result.
+
+    Applies both resolution steps in order:
+    1. resolve_worktree_to_main_repo — handles git worktrees
+    2. resolve_git_subdir_to_root — handles non-root subdirs of git repos
+    """
+    path = resolve_worktree_to_main_repo(path)
+    path = resolve_git_subdir_to_root(path)
+    return path
 
 
 def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
