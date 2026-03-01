@@ -1,8 +1,6 @@
 # Claude Code Memory System - Development Guide
 
-## Project Purpose
-
-Markdown-based memory persistence for Claude Code. Installs hooks, scripts, and skills that enable context across sessions.
+Markdown-based memory persistence for Claude Code. See README.md for user-facing documentation.
 
 ## Repo Structure
 
@@ -26,55 +24,9 @@ claude-memory-system/
 ```
 
 **Installs to:**
-- `scripts/*.py` → `~/.claude/scripts/`
-- `skills/*/` → `~/.claude/skills/`
-- `templates/` → `~/.claude/memory/templates/` (always) + `~/.claude/memory/` (if not exists)
-
-## Two-Tier Memory Architecture
-
-**Long-term memory** (curated, persistent):
-| Tier | File | Loaded | Content |
-|------|------|--------|---------|
-| Global | `~/.claude/memory/global-long-term-memory.md` | Every session | User profile, global patterns |
-| Project | `~/.claude/memory/project-memory/{project}-long-term-memory.md` | When `$PWD` matches | Project-specific learnings |
-
-**Short-term memory** (recent daily summaries, filtered by scope tags):
-| Tier | Source | Days | Filter |
-|------|--------|------|--------|
-| Global | `~/.claude/memory/daily/*.md` | 2 | `[global/*]` tagged entries only |
-| Project | `~/.claude/memory/daily/*.md` | 7 | `[project-name/*]` tagged entries only |
-
-**Learning flow:**
-```
-Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions, Learnings)
-                  → /synthesize Phase 2 → Route to long-term memory
-```
-
-**Daily file format:**
-- `## Actions` - What was done, tagged `[scope/action]`
-- `## Decisions` - Choices with rationale, tagged `[scope/decision]`
-- `## Learnings` - Patterns/gotchas, format: `- [scope/type] Description`
-- `## Lessons` - Actionable takeaways, format: `- [scope/type] Takeaway`
-
-**Long-term file format (decay-eligible sections):**
-- `## Key Actions` - Significant actions (from daily Actions)
-- `## Key Decisions` - Important choices (from daily Decisions)
-- `## Key Learnings` - Patterns/insights (from daily Learnings)
-- `## Key Lessons` - Actionable takeaways (from daily Lessons)
-
-**Long-term entry format:** `- (YYYY-MM-DD) [type] Description` (date first, then subtype)
-
-**Action types:** `implement`, `improve`, `document`, `analyze`
-**Decision types:** `design`, `tradeoff`, `scope`
-**Learning types:** `gotcha`, `pitfall`, `pattern`
-**Lesson types:** `insight`, `tip`, `workaround`
-
-**Routed entries:** Entries that exist in both daily files and LTM are prefixed with `[routed]` (e.g., `- [routed][scope/type] Description`) and skipped at load time. Marking is applied by `synthesis.py` at write time and reinforced by `devtools.py mark-routed` post-processing.
-
-**Filtering:** Tags determine which short-term memory tier content appears in:
-- `[global/*]` → Global Short-Term Memory (loaded every session)
-- `[project-name/*]` → Project Short-Term Memory (loaded when in that project)
-- Untagged content is excluded from short-term (only appears in raw daily files)
+- `scripts/*.py` → `~/.claude/scripts/` (symlinked)
+- `skills/*/` → `~/.claude/skills/` (symlinked)
+- `templates/` → `~/.claude/memory/templates/` (always) + `~/.claude/memory/` (if not exists, copied)
 
 ## Making Changes
 
@@ -88,87 +40,110 @@ Session transcript → /synthesize Phase 1 → Daily summary (Actions, Decisions
 2. Add to `link_scripts()` in `install.py`
 3. If it needs a hook, add in `merge_hooks()` function
 
-### Testing
+## Testing
 
-**Rule: Always add or update unit tests when adding new functions or modifying existing function behavior.** Tests live in `tests/test_<module>.py` matching the script they test. Run `python3 -m pytest tests/ -q` before considering any change complete.
+**Rule: Always add or update unit tests when adding new functions or modifying existing function behavior.**
 
-Test conventions:
+Tests live in `tests/test_<module>.py` matching the script they test.
+
+```bash
+python3 -m pytest tests/ -q                  # Run all (do this first)
+python3 -m pytest tests/ -v                  # Verbose for debugging
+python3 install.py                           # Apply changes
+python3 ~/.claude/scripts/load_memory.py     # Test memory loading
+python3 ~/.claude/scripts/indexing.py list-recent  # Test session listing
+python3 ~/.claude/scripts/decay.py --dry-run # Test decay
+```
+
+**Conventions:**
 - Class per function/feature: `class TestFunctionName`
 - Use pytest `tmp_path` fixture for filesystem isolation (not `tempfile`)
 - Use `unittest.mock.patch` to mock path helpers (`get_projects_dir`, etc.)
 - Use `@pytest.mark.parametrize` for input/output variations instead of separate test methods
-- Put shared factories in `tests/helpers.py`; path setup lives in `tests/conftest.py`
+- Shared factories in `tests/helpers.py`; path setup in `tests/conftest.py`
 - Test happy path, edge cases, and error conditions
-- Never hardcode configurable values — import constants (`DEFAULT_AGE_DAYS`, `DEFAULT_SETTINGS`, etc.) and make test data relative to them (e.g., `timedelta(days=DEFAULT_AGE_DAYS * 2)` not `timedelta(days=60)`)
+- Never hardcode configurable values — import constants (`DEFAULT_AGE_DAYS`, `DEFAULT_SETTINGS`, etc.) and derive test data from them (e.g., `timedelta(days=DEFAULT_AGE_DAYS * 2)` not `timedelta(days=60)`)
 
-```bash
-python3 -m pytest tests/ -q                  # Run all unit tests (do this first)
-python3 -m pytest tests/ -v                  # Verbose output for debugging
-python3 install.py                           # Apply changes
-python3 ~/.claude/scripts/load_memory.py     # Test memory loading
-python3 ~/.claude/scripts/indexing.py list-recent  # Test recent session listing
-python3 ~/.claude/scripts/decay.py --dry-run # Test decay
-```
+## Architecture
 
-## Key Implementation Details
+### Data Model
+
+**Long-term memory** (curated, persistent):
+| Tier | File | Loaded |
+|------|------|--------|
+| Global | `global-long-term-memory.md` | Every session |
+| Project | `project-memory/{project}-long-term-memory.md` | When `$PWD` matches |
+
+**Short-term memory** (recent daily summaries):
+| Tier | Default Days | Filter |
+|------|------|--------|
+| Global | 2 | `[global/*]` tagged entries |
+| Project | 5 | `[project-name/*]` tagged entries |
+
+### Entry Formats
+
+**Daily files:** `- [scope/type] Description`
+**Long-term files:** `- (YYYY-MM-DD) [type] Description`
+**Routed entries:** `- [routed][scope/type] Description` (skipped at load time)
+
+| Category | Types |
+|----------|-------|
+| Actions | `implement`, `improve`, `document`, `analyze` |
+| Decisions | `design`, `tradeoff`, `scope` |
+| Learnings | `gotcha`, `pitfall`, `pattern` |
+| Lessons | `insight`, `tip`, `workaround` |
+
+### Key Pipelines
+
+**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles context string → outputs to stdout for SessionStart hook injection.
+
+**Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → inject scopes from CWD metadata → LLM summarizes → programmatic daily merge → LTM routing with keyword-overlap dedup (threshold 0.6) + route cap (5/file) → update `.synthesis-state.json` offsets.
+
+**Decay** (`decay.py`): Scan LTM files for `(YYYY-MM-DD)` dated entries → archive entries older than threshold → purge expired archives. `## Pinned` section protected.
+
+## Implementation Details
 
 ### Hooks (defined in `install.py` `merge_hooks()`)
-- `SessionStart` - loads memory context
-- `PreToolUse` - auto-approves memory operations (workaround for subagent permission bug)
-- `SessionEnd` - triggers deferred synthesis via systemd
+- `SessionStart` — loads memory context via `load_memory.py`
+- `PreToolUse` — auto-approves operations targeting `.claude/memory` paths
+- `SessionEnd` — triggers deferred synthesis via systemd
 
-Note: Transcripts are read directly from Claude Code's storage (`~/.claude/projects/`), not copied via hooks.
+Transcripts are read directly from `~/.claude/projects/` (source of truth), not copied via hooks.
 
 ### PreToolUse Auto-Approval
-Subagents don't inherit permissions (GitHub #10906, #11934, #18172, #18950). The PreToolUse hook returns `{"permissionDecision": "allow"}` for operations targeting `.claude/memory` paths.
+Subagents don't inherit permissions (GitHub #10906, #11934, #18172, #18950). The hook returns `{"permissionDecision": "allow"}` for `.claude/memory` path operations.
 
 ### Permission Path Formats
 | Format | Meaning |
 |--------|---------|
 | `~/path` | Home-relative (use this) |
 | `//path` | Absolute filesystem path |
-| `/path` | ❌ Relative from settings file |
+| `/path` | Relative from settings file (avoid) |
 
-Note: Only matters for Read permissions; Edit/Write bypass via PreToolUse hook.
+Only matters for Read permissions; Edit/Write bypass via PreToolUse hook.
 
 ### Cross-Platform
-- Uses `pathlib.Path` for paths, `Path.home()` for home dir
-- Directory-based locking (mkdir is atomic everywhere)
+- `pathlib.Path` for paths, `Path.home()` for home dir
+- Directory-based locking (`mkdir` is atomic everywhere)
 - Hook commands use absolute paths generated at install time
 
-## Settings Reference
+## Settings Defaults
 
-Use `/settings` skill to view/modify. Key settings in `~/.claude/memory/settings.json`:
+Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 
-| Setting | Default | Notes |
-|---------|---------|-------|
-| `globalShortTerm.workingDays` | 2 | Days of global daily summaries |
-| `projectShortTerm.workingDays` | 5 | Days of project history |
-| `*LongTerm.tokenLimit` | 3,000 | Fixed limit per long-term file |
-| `synthesis.intervalHours` | 2 | Hours between auto-synthesis |
-| `synthesis.model` | sonnet | Model for synthesis subagent |
-| `synthesis.background` | true | Run auto-synthesis in background |
-| `synthesis.deferred` | true | Enable deferred synthesis (systemd timer instead of in-session) |
-| `synthesis.minSessionMessages` | 10 | Skip sessions with fewer messages during synthesis |
-| `decay.ageDays` | 30 | Global LTM: archive after N calendar days |
-| `decay.projectWorkingDays` | 20 | Project LTM: archive after N project work days |
+| Setting | Default |
+|---------|---------|
+| `globalShortTerm.workingDays` | 2 |
+| `globalLongTerm.tokenLimit` | 3,000 |
+| `projectShortTerm.workingDays` | 5 |
+| `projectLongTerm.tokenLimit` | 3,000 |
+| `synthesis.intervalHours` | 2 |
+| `synthesis.model` | sonnet |
+| `synthesis.background` | true |
+| `synthesis.deferred` | true |
+| `synthesis.minSessionMessages` | 10 |
+| `decay.ageDays` | 30 |
+| `decay.projectWorkingDays` | 20 |
+| `decay.archiveRetentionDays` | 365 |
 
-Short-term token limits calculated as `workingDays × 750` (reduced due to scope filtering).
-
-## Features Summary
-
-| Feature | Implementation |
-|---------|----------------|
-| Tag-based filtering | Short-term memory filtered by `[scope/*]` tags; global loads `[global/*]`, project loads `[project/*]`; pipe-delimited `[scope1\|scope2/type]` for multi-scope |
-| Age-based decay | Entries with `(YYYY-MM-DD)` date prefix archived after 30 days; `## Pinned` section protected |
-| Session exclusion | `--exclude-session` flag prevents active session from being synthesized |
-| Direct transcript reading | Reads from `~/.claude/projects/` (source of truth); `.synthesis-state.json` tracks processing state |
-| Mtime-based recency | Sessions filtered by file modification time (default 7 days); stale state entries auto-pruned |
-| Synthesis scheduling | First session of day + every N hours (default 2); `load_memory.py` parses session_id from stdin |
-| Background synthesis | Auto-synthesis runs in background by default (configurable); embedded prompt eliminates SKILL.md read; `synthesis.py` applies output |
-| Zero-tool synthesis | `synthesis.py` parses structured output, applies daily files + LTM routes; `load_memory.py` embeds all inputs in prompt |
-| Incremental synthesis | `.synthesis-state.json` tracks per-session byte offset + line count; skips unchanged, delta-extracts grown sessions; merge context for existing dailies |
-| Project detection | Matches `$PWD` to `projects-index.json`; loads project memory + project-tagged entries |
-| Worktree-aware detection | `resolve_worktree_to_main_repo()` resolves git worktree paths to main repo via `git rev-parse`; falls back to `/.worktrees/` path pattern for deleted worktrees |
-| Deterministic synthesis | Scope injection from session CWD metadata (`inject_scopes`), programmatic daily merge (`merge_daily_sections`), keyword-overlap dedup in LTM (`is_routed_match` 0.6), route cap (5/file); LLM outputs `[type]` + optional `[GLOBAL]`, code handles structure |
-| Deferred synthesis | `synthesis.deferred` setting gates in-session synthesis; `synthesis_cron.py` + systemd timer runs synthesis out-of-session via `claude -p`; SessionEnd hook triggers on session exit |
+Short-term token limits: `workingDays × 750` (calculated in `_calculate_token_limits()`).
