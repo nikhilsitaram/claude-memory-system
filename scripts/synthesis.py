@@ -63,6 +63,7 @@ __all__ = [
     "run_mark_routed",
     "run_validate_ltm",
     "run_decay",
+    "_rebuild_projects_index",
     "run_post_processing",
 ]
 
@@ -775,15 +776,36 @@ def run_validate_ltm() -> None:
         pass  # Non-critical
 
 
+def _rebuild_projects_index() -> None:
+    """Rebuild projects-index.json so decay sees current work days."""
+    try:
+        from indexing import build_projects_index
+
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        try:
+            build_projects_index()
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+    except Exception:
+        pass  # Non-critical
+
+
 def run_decay() -> None:
-    """Run decay as function call (no subprocess)."""
+    """Run decay as function call (no subprocess).
+
+    Passes skip_index_rebuild=True because run_post_processing already
+    calls _rebuild_projects_index() before invoking this function.
+    """
     try:
         from decay import run as decay_run
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         try:
-            decay_run(dry_run=False)
+            decay_run(dry_run=False, skip_index_rebuild=True)
         finally:
             sys.stdout = old_stdout
     except Exception:
@@ -812,6 +834,9 @@ def run_post_processing(
             Path(path).unlink(missing_ok=True)
         except OSError:
             pass
+
+    # Rebuild projects index so decay sees current work days
+    _rebuild_projects_index()
 
     # Direct function calls instead of subprocesses
     run_mark_routed()
