@@ -183,7 +183,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
             result = run_synthesis()
@@ -202,7 +203,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
             result = run_synthesis()
