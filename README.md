@@ -12,7 +12,9 @@ A markdown-based memory system for Claude Code that automatically captures sessi
 - **Configurable settings**: Token budgets, working days, synthesis scheduling, and decay via `~/.claude/memory/settings.json`
 - **Proactive recall**: Claude automatically searches older memory when historical context would help
 - **Recovery**: Orphaned transcripts from ungraceful exits are recovered automatically on session start
-- **Auto-synthesis**: Scheduled synthesis (first session of day + every N hours) to keep memory fresh
+- **Auto-synthesis**: Scheduled synthesis (first session of day + every N hours) to keep memory fresh; deferred mode runs via systemd timer outside active sessions
+- **Per-date synthesis**: Multi-day backlogs are processed one date at a time, preventing collapse into a single daily file
+- **Error surfacing**: Synthesis failures are logged and surfaced as alerts on the next session start
 - **Manual notes**: `/remember` for specific highlights
 - **Historical search**: `/recall` for searching older memory
 - **Cross-platform**: Works on Windows, macOS, and Linux (Python 3.9+ required)
@@ -189,6 +191,8 @@ Synthesis is scheduled to balance freshness with efficiency:
 
 - **First session of day (UTC)**: Always prompts if transcripts pending
 - **Subsequent sessions**: Only prompts if more than `synthesis.intervalHours` since last synthesis
+- **Deferred mode** (default): Synthesis runs outside active sessions via a systemd user timer, avoiding in-session subagent overhead. When multiple dates are pending, each date is processed as a separate LLM call to ensure correct daily file assignment.
+- **Error handling**: If deferred synthesis fails (e.g., `claude` binary not found), errors are logged to `.synthesis-errors.log` and surfaced as an alert on the next session start.
 
 Claude spawns a background Sonnet subagent to process transcripts, keeping the main conversation context lean. The model is configurable via `synthesis.model` in settings.
 
