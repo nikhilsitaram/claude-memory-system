@@ -1492,5 +1492,56 @@ class TestSynthesisDeferredSetting:
         assert "AUTO-SYNTHESIZE" in output
 
 
+class TestCheckSynthesisErrors:
+    """Tests for check_synthesis_errors()."""
+
+    def test_returns_none_when_no_log(self, tmp_path):
+        """No error log file -> None."""
+        from load_memory import check_synthesis_errors
+        with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+            assert check_synthesis_errors() is None
+
+    def test_returns_none_when_empty_log(self, tmp_path):
+        """Empty error log file -> None."""
+        from load_memory import check_synthesis_errors
+        error_log = tmp_path / ".synthesis-errors.log"
+        error_log.write_text("")
+        with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", error_log):
+            assert check_synthesis_errors() is None
+
+    def test_returns_alert_with_errors(self, tmp_path):
+        """Error log with content -> alert text."""
+        from load_memory import check_synthesis_errors
+        error_log = tmp_path / ".synthesis-errors.log"
+        error_log.write_text("[2026-03-01T14:00:00Z] FileNotFoundError: claude\n")
+        with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", error_log):
+            result = check_synthesis_errors()
+        assert result is not None
+        assert "Synthesis Error Alert" in result
+        assert "FileNotFoundError" in result
+
+    def test_clears_log_after_reading(self, tmp_path):
+        """Error log should be deleted after surfacing."""
+        from load_memory import check_synthesis_errors
+        error_log = tmp_path / ".synthesis-errors.log"
+        error_log.write_text("[2026-03-01T14:00:00Z] test error\n")
+        with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", error_log):
+            check_synthesis_errors()
+        assert not error_log.exists()
+
+    def test_limits_to_last_5_errors(self, tmp_path):
+        """Should only show the last 5 errors."""
+        from load_memory import check_synthesis_errors
+        error_log = tmp_path / ".synthesis-errors.log"
+        lines = [f"[2026-03-01T{i:02d}:00:00Z] error {i}\n" for i in range(10)]
+        error_log.write_text("".join(lines))
+        with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", error_log):
+            result = check_synthesis_errors()
+        # Should contain errors 5-9 (last 5), not 0-4
+        assert "error 5" in result
+        assert "error 9" in result
+        assert "error 0" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

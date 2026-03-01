@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from synthesis_cron import (
+    _clear_eager_timestamp,
+    _log_error,
     build_claude_command,
     run_synthesis,
     should_run_deferred_synthesis,
@@ -287,3 +289,215 @@ class TestRunSynthesis:
 
         env = mock_run.call_args[1].get("env", {})
         assert env.get("CLAUDECODE") == ""
+
+    def test_keeps_timestamp_on_timeout(self, tmp_path):
+        """When claude -p times out, timestamp preserved (partial success possible)."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        last_synth = tmp_path / ".last-synthesis"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("synthesis_cron._log_error"):
+            mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
+            result = run_synthesis()
+
+        assert result == 1
+        # Timestamp kept — next run will re-extract only still-pending dates
+        assert last_synth.exists()
+
+    def test_keeps_timestamp_on_nonzero_exit(self, tmp_path):
+        """When claude -p exits non-zero, timestamp preserved."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        last_synth = tmp_path / ".last-synthesis"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("synthesis_cron._log_error"):
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+            result = run_synthesis()
+
+        assert result == 1
+        assert last_synth.exists()
+
+    def test_keeps_timestamp_on_file_not_found(self, tmp_path):
+        """When claude binary is missing, timestamp preserved."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        last_synth = tmp_path / ".last-synthesis"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("synthesis_cron._log_error"):
+            mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
+            result = run_synthesis()
+
+        assert result == 1
+        assert last_synth.exists()
+
+    def test_logs_error_on_failure(self, tmp_path):
+        """When claude -p fails, should write to error log."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        error_log = tmp_path / ".synthesis-errors.log"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
+            run_synthesis()
+
+        assert error_log.exists()
+        content = error_log.read_text()
+        assert "claude -p exited 1" in content
+        assert "some error" in content
+
+    def test_logs_error_on_file_not_found(self, tmp_path):
+        """When claude binary is missing, should write to error log."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        error_log = tmp_path / ".synthesis-errors.log"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+            mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
+            run_synthesis()
+
+        assert error_log.exists()
+        content = error_log.read_text()
+        assert "claude" in content
+
+
+    def test_runs_claude_once_per_date(self, tmp_path):
+        """With multiple prompt files, should call claude -p for each."""
+        prompt_a = tmp_path / "synthesis-prompt-2026-02-26-1234.txt"
+        prompt_b = tmp_path / "synthesis-prompt-2026-02-27-1234.txt"
+        prompt_a.write_text("date A content")
+        prompt_b.write_text("date B content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_a}")
+            print(f"prompt_file={prompt_b}")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_synthesis()
+
+        assert result == 0
+        assert mock_run.call_count == 2
+
+    def test_continues_on_partial_failure(self, tmp_path, capsys):
+        """If one date fails, should continue with remaining dates."""
+        prompt_a = tmp_path / "synthesis-prompt-2026-02-26-1234.txt"
+        prompt_b = tmp_path / "synthesis-prompt-2026-02-27-1234.txt"
+        prompt_a.write_text("date A content")
+        prompt_b.write_text("date B content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_a}")
+            print(f"prompt_file={prompt_b}")
+
+        call_count = 0
+
+        def alternating_results(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return MagicMock(returncode=1, stdout="", stderr="fail first")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run", side_effect=alternating_results), \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron._log_error"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            result = run_synthesis()
+
+        assert result == 1  # Partial failure
+        assert call_count == 2  # Both dates attempted
+        output = capsys.readouterr().out
+        assert "complete" in output.lower()  # Second date succeeded
+
+
+class TestClearEagerTimestamp:
+    """Tests for _clear_eager_timestamp."""
+
+    def test_removes_existing_file(self, tmp_path):
+        ts_file = tmp_path / ".last-synthesis"
+        ts_file.write_text("2026-01-01T00:00:00Z")
+        with patch("synthesis_cron.get_last_synthesis_file", return_value=ts_file):
+            _clear_eager_timestamp()
+        assert not ts_file.exists()
+
+    def test_noop_when_file_missing(self, tmp_path):
+        ts_file = tmp_path / ".last-synthesis"
+        with patch("synthesis_cron.get_last_synthesis_file", return_value=ts_file):
+            _clear_eager_timestamp()  # Should not raise
+
+
+class TestLogError:
+    """Tests for _log_error."""
+
+    def test_creates_log_file(self, tmp_path):
+        error_log = tmp_path / ".synthesis-errors.log"
+        with patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+            _log_error("test error message")
+        assert error_log.exists()
+        content = error_log.read_text()
+        assert "test error message" in content
+
+    def test_appends_to_existing_log(self, tmp_path):
+        error_log = tmp_path / ".synthesis-errors.log"
+        error_log.write_text("[2026-01-01T00:00:00Z] old error\n")
+        with patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+            _log_error("new error")
+        lines = error_log.read_text().strip().splitlines()
+        assert len(lines) == 2
+        assert "old error" in lines[0]
+        assert "new error" in lines[1]
+
+    def test_includes_timestamp(self, tmp_path):
+        error_log = tmp_path / ".synthesis-errors.log"
+        with patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+            _log_error("test")
+        content = error_log.read_text()
+        assert content.startswith("[2026-")

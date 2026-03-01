@@ -6,6 +6,7 @@ After=network.target
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/.claude/scripts/synthesis_cron.py
 Environment=CLAUDECODE=
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 TimeoutStartSec=300
 
 # Logging

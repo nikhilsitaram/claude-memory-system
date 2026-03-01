@@ -71,9 +71,38 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # =============================================================================
 
 
+SYNTHESIS_ERROR_LOG = get_memory_dir() / ".synthesis-errors.log"
+
+
 def get_last_synthesis_file() -> Path:
     """Get the path to the .last-synthesis timestamp file."""
     return get_memory_dir() / ".last-synthesis"
+
+
+def check_synthesis_errors() -> str | None:
+    """Check for recent synthesis errors and return alert text.
+
+    Reads the error log, surfaces its contents, and clears the log
+    so the alert only appears once.
+
+    Returns:
+        Alert text if errors found, None otherwise.
+    """
+    if not SYNTHESIS_ERROR_LOG.exists():
+        return None
+    content = SYNTHESIS_ERROR_LOG.read_text(encoding="utf-8").strip()
+    if not content:
+        return None
+    # Clear the log after reading so alert surfaces once
+    SYNTHESIS_ERROR_LOG.unlink()
+    lines = content.splitlines()
+    return (
+        "## Synthesis Error Alert\n"
+        "Deferred synthesis has been failing. Recent errors:\n"
+        + "\n".join(f"- `{line}`" for line in lines[-5:])
+        + "\n\nCheck `journalctl --user -u claude-memory-synthesis.service` for details.\n"
+        "Inform the user about this error.\n"
+    )
 
 
 def should_synthesize(settings: dict) -> bool:
@@ -588,11 +617,14 @@ def pre_extract_transcripts_incremental(
 
 
 def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
-    """Generate synthesis prompt and write to temp file.
+    """Generate per-date synthesis prompts and write to temp files.
+
+    Produces one prompt file per pending date so each date gets its own
+    daily summary file (prevents multi-day collapse into a single file).
 
     Prints to stdout:
         model=<model>
-        prompt_file=<path>
+        prompt_file=<path>     (one line per date)
     """
     settings = load_settings()
     model = settings.get("synthesis", {}).get("model", "sonnet")
@@ -610,19 +642,25 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
         print("No pending transcripts with content.")
         return
 
-    include_dailies = bool(session_offsets)
-    embedded = _build_embedded_files(
-        extracted_files, include_dailies=include_dailies, daily_data=daily_data
-    )
-
-    prompt = _build_synthesis_prompt(list(extracted_files.keys()), extracted_files, embedded)
-
-    # Write prompt to temp file instead of stdout (avoids 30K Bash truncation)
-    prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{os.getpid()}.txt"
-    Path(prompt_path).write_text(prompt, encoding="utf-8")
-
     print(f"model={model}")
-    print(f"prompt_file={prompt_path}")
+
+    # Build one prompt per date to ensure each date gets its own daily file
+    for date in sorted(extracted_files.keys()):
+        single_date_files = {date: extracted_files[date]}
+        single_date_data = {date: daily_data.get(date, [])} if daily_data else {}
+
+        include_dailies = bool(session_offsets)
+        embedded = _build_embedded_files(
+            single_date_files, include_dailies=include_dailies,
+            daily_data=single_date_data,
+        )
+
+        prompt = _build_synthesis_prompt([date], single_date_files, embedded)
+
+        prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"
+        Path(prompt_path).write_text(prompt, encoding="utf-8")
+
+        print(f"prompt_file={prompt_path}")
 
 
 def main() -> None:
@@ -663,6 +701,12 @@ def main() -> None:
     print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
     print()
 
+    # Surface synthesis errors from deferred runs
+    error_alert = check_synthesis_errors()
+    if error_alert:
+        print(error_alert)
+        print()
+
     # Check for pending transcripts (only if synthesis scheduling allows)
     # Exclude current session — it's still active and shouldn't be synthesized
     pending_dates = get_recent_days(exclude_session_id=current_session_id)
@@ -683,31 +727,60 @@ def main() -> None:
         )
 
         if extracted_files:
-            # Pre-read all files for embedding in prompt (zero tool calls for subagent)
-            include_dailies = bool(session_offsets)
-            embedded = _build_embedded_files(
-                extracted_files, include_dailies=include_dailies, daily_data=daily_data
-            )
+            # Build one prompt per date to ensure separate daily files
+            prompt_paths = []
+            for date in sorted(extracted_files.keys()):
+                single_date_files = {date: extracted_files[date]}
+                single_date_data = {date: daily_data.get(date, [])} if daily_data else {}
 
-            synth_prompt = _build_synthesis_prompt(
-                list(extracted_files.keys()), extracted_files, embedded
-            )
+                include_dailies = bool(session_offsets)
+                embedded = _build_embedded_files(
+                    single_date_files, include_dailies=include_dailies,
+                    daily_data=single_date_data,
+                )
 
-            # Write prompt to temp file (avoids 30K char Bash truncation)
-            prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{os.getpid()}.txt"
-            Path(prompt_path).write_text(synth_prompt, encoding="utf-8")
+                synth_prompt = _build_synthesis_prompt(
+                    [date], single_date_files, embedded
+                )
+
+                prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"
+                Path(prompt_path).write_text(synth_prompt, encoding="utf-8")
+                prompt_paths.append(prompt_path)
 
             print("## AUTO-SYNTHESIZE REQUIRED")
             print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
             print()
-            if synthesis_background:
-                print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
+            if len(prompt_paths) == 1:
+                prompt_path = prompt_paths[0]
+                if synthesis_background:
+                    print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
+                else:
+                    print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
+                print(f"Read the prompt file at `{prompt_path}` and use it as the subagent prompt:")
+                print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
+                      f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {prompt_path}>)')
+                print()
             else:
-                print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
-            print(f"Read the prompt file at `{prompt_path}` and use it as the subagent prompt:")
-            print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
-                  f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {prompt_path}>)')
-            print()
+                # Multiple dates: run sequentially to avoid LTM write conflicts
+                if synthesis_background:
+                    print("**IMPORTANT**: Spawn a **single background** subagent that processes ALL prompt files **sequentially** (one at a time).")
+                else:
+                    print("**IMPORTANT**: Spawn a **single** subagent that processes ALL prompt files **sequentially**.")
+                print("Do NOT spawn parallel subagents — they write to shared LTM files.")
+                print()
+                for i, prompt_path in enumerate(prompt_paths, 1):
+                    print(f"  {i}. Read `{prompt_path}` and execute it")
+                print()
+                # Combine all prompts into a single wrapper prompt
+                combined_prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-combined-{os.getpid()}.txt"
+                combined_parts = []
+                for prompt_path in prompt_paths:
+                    combined_parts.append(Path(prompt_path).read_text(encoding="utf-8"))
+                combined_prompt = "\n\n---\n\nAfter completing the above, proceed to the next synthesis task:\n\n".join(combined_parts)
+                Path(combined_prompt_path).write_text(combined_prompt, encoding="utf-8")
+                print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
+                      f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {combined_prompt_path}>)')
+                print()
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
