@@ -21,14 +21,14 @@ from decay import (  # noqa: I001
     decay_file,
     is_decay_eligible,
     is_protected_section,
+    main,
     parse_learning_date,
     parse_learnings,
     parse_sections,
     purge_old_archives,
-    rebuild_projects_index_quiet,
-    run,
     should_decay_entry,
 )
+from memory_utils import rebuild_projects_index_quiet
 
 # =============================================================================
 # Date Parsing Tests
@@ -519,34 +519,23 @@ class TestRebuildProjectsIndexQuiet:
 
     def test_swallows_runtime_error(self):
         """Does not raise when build_projects_index raises."""
-        fake_indexing = type("m", (), {"build_projects_index": staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("boom")))})()
+        mock_build = mock.MagicMock(side_effect=RuntimeError("boom"))
+        fake_indexing = type("m", (), {"build_projects_index": mock_build})()
         with mock.patch.dict("sys.modules", {"indexing": fake_indexing}):
-            # Should not raise
             rebuild_projects_index_quiet()
 
 
-class TestRunRebuildsBeforeDecay:
-    """Tests that run() rebuilds the projects index before decay."""
+class TestMainCallsRebuild:
+    """Tests that main() calls rebuild_projects_index_quiet before run()."""
 
-    def test_run_calls_rebuild_by_default(self, tmp_path):
-        """run() rebuilds projects index when skip_index_rebuild is False."""
+    def test_main_calls_rebuild_before_run(self, tmp_path):
+        """main() rebuilds projects index before invoking run()."""
         with mock.patch("decay.rebuild_projects_index_quiet") as mock_rebuild, \
-             mock.patch("decay.load_settings", return_value={}), \
-             mock.patch("decay.get_global_memory_file", return_value=tmp_path / "g.md"), \
-             mock.patch("decay.get_project_memory_dir", return_value=tmp_path / "pm"), \
-             mock.patch("decay.get_memory_dir", return_value=tmp_path):
-            run(dry_run=True)
+             mock.patch("decay.run", return_value=0) as mock_run, \
+             mock.patch("sys.argv", ["decay.py"]):
+            main()
         mock_rebuild.assert_called_once()
-
-    def test_run_skips_rebuild_when_requested(self, tmp_path):
-        """run() skips rebuild when skip_index_rebuild=True."""
-        with mock.patch("decay.rebuild_projects_index_quiet") as mock_rebuild, \
-             mock.patch("decay.load_settings", return_value={}), \
-             mock.patch("decay.get_global_memory_file", return_value=tmp_path / "g.md"), \
-             mock.patch("decay.get_project_memory_dir", return_value=tmp_path / "pm"), \
-             mock.patch("decay.get_memory_dir", return_value=tmp_path):
-            run(dry_run=True, skip_index_rebuild=True)
-        mock_rebuild.assert_not_called()
+        mock_run.assert_called_once()
 
 
 if __name__ == "__main__":

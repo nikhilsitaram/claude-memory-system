@@ -15,6 +15,7 @@ Requirements: Python 3.9+
 """
 
 import argparse
+import contextlib
 import io
 import json
 import re
@@ -37,6 +38,7 @@ from memory_utils import (  # noqa: E402
     is_routed_match,
     parse_markdown_sections,
     prune_stale_state_entries,
+    rebuild_projects_index_quiet,
     update_synthesis_state,
 )
 
@@ -63,7 +65,6 @@ __all__ = [
     "run_mark_routed",
     "run_validate_ltm",
     "run_decay",
-    "_rebuild_projects_index",
     "run_post_processing",
 ]
 
@@ -749,13 +750,8 @@ def run_mark_routed() -> None:
     try:
         from devtools import cmd_mark_routed
 
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            args = argparse.Namespace(dry_run=False)
-            cmd_mark_routed(args)
-        finally:
-            sys.stdout = old_stdout
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_mark_routed(argparse.Namespace(dry_run=False))
     except Exception:
         pass  # Non-critical
 
@@ -765,49 +761,19 @@ def run_validate_ltm() -> None:
     try:
         from devtools import cmd_validate_ltm
 
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            args = argparse.Namespace()
-            cmd_validate_ltm(args)
-        finally:
-            sys.stdout = old_stdout
-    except Exception:
-        pass  # Non-critical
-
-
-def _rebuild_projects_index() -> None:
-    """Rebuild projects-index.json so decay sees current work days."""
-    try:
-        from indexing import build_projects_index
-
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
-        try:
-            build_projects_index()
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_validate_ltm(argparse.Namespace())
     except Exception:
         pass  # Non-critical
 
 
 def run_decay() -> None:
-    """Run decay as function call (no subprocess).
-
-    Passes skip_index_rebuild=True because run_post_processing already
-    calls _rebuild_projects_index() before invoking this function.
-    """
+    """Run decay as function call (no subprocess)."""
     try:
         from decay import run as decay_run
 
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            decay_run(dry_run=False, skip_index_rebuild=True)
-        finally:
-            sys.stdout = old_stdout
+        with contextlib.redirect_stdout(io.StringIO()):
+            decay_run(dry_run=False)
     except Exception:
         pass  # Non-critical
 
@@ -836,7 +802,7 @@ def run_post_processing(
             pass
 
     # Rebuild projects index so decay sees current work days
-    _rebuild_projects_index()
+    rebuild_projects_index_quiet()
 
     # Direct function calls instead of subprocesses
     run_mark_routed()

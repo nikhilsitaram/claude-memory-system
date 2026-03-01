@@ -8,6 +8,8 @@ and file locking. Used by load_memory.py, indexing.py, and other scripts.
 Requirements: Python 3.9+
 """
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -40,6 +42,7 @@ __all__ = [
     "get_settings_file",
     "get_projects_index_file",
     "get_global_memory_file",
+    "get_synthesis_error_log",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     # Settings
@@ -70,6 +73,7 @@ __all__ = [
     "project_name_to_filename",
     "extract_entry_keywords",
     "is_routed_match",
+    "rebuild_projects_index_quiet",
     "FileLock",
 ]
 
@@ -194,6 +198,11 @@ def get_global_memory_file() -> Path:
     return get_memory_dir() / "global-long-term-memory.md"
 
 
+def get_synthesis_error_log() -> Path:
+    """Get the synthesis error log file path."""
+    return get_memory_dir() / ".synthesis-errors.log"
+
+
 # Token limit formulas
 SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per day
 
@@ -315,6 +324,19 @@ def estimate_tokens(text: str) -> int:
     This is a rough estimate that works reasonably well for English text.
     """
     return len(text) // 4
+
+
+def rebuild_projects_index_quiet() -> None:
+    """Rebuild projects-index.json, suppressing output. Best-effort."""
+    try:
+        from indexing import build_projects_index
+
+        with contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            build_projects_index()
+    except Exception:
+        pass
+    _clear_projects_index_cache()
 
 
 class FileLock:
@@ -513,6 +535,11 @@ def get_working_days(days_limit: int) -> list[str]:
 # Regex to extract scope(s) from tagged entries: [scope/type] or [scope1|scope2/type]
 TAG_PATTERN = re.compile(r"^\s*-\s*\[([^\]/]+(?:\|[^\]/]+)*)(?:/[^\]]+)?\]")
 
+# Pre-compiled patterns for filter_daily_content hot path (runs every SessionStart)
+_COMMENT_LINE_RE = re.compile(r"^\s*<!--.*-->\s*$")
+_ROUTED_PREFIX_RE = re.compile(r"^\s*-\s*\[routed\]")
+_DATE_ONLY_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
+
 
 def filter_daily_content(content: str, scope: str) -> str:
     """
@@ -558,11 +585,11 @@ def filter_daily_content(content: str, scope: str) -> str:
         # If we're in a section, process the line
         if current_section:
             # Skip HTML comments (template hints, not useful at load time)
-            if re.match(r"^\s*<!--.*-->\s*$", line):
+            if _COMMENT_LINE_RE.match(line):
                 continue
 
             # Skip entries marked as routed to LTM
-            if re.match(r"^\s*-\s*\[routed\]", line):
+            if _ROUTED_PREFIX_RE.match(line):
                 continue
 
             # Check if this is a tagged entry
@@ -593,7 +620,7 @@ def filter_daily_content(content: str, scope: str) -> str:
     filtered = "\n".join(result_lines)
 
     # Only return content if we have more than just the date header
-    if filtered.strip() and not re.match(r"^#\s+\d{4}-\d{2}-\d{2}\s*$", filtered.strip()):
+    if filtered.strip() and not _DATE_ONLY_RE.match(filtered.strip()):
         return filtered
     return ""
 
