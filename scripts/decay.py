@@ -14,6 +14,7 @@ Requirements: Python 3.9+
 """
 
 import argparse
+import io
 import re
 import sys
 from datetime import date, datetime, timedelta
@@ -319,8 +320,33 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
     return purged_count
 
 
-def run(dry_run: bool = False) -> int:
-    """Run decay on all memory files. Returns 0 on success."""
+def rebuild_projects_index_quiet() -> None:
+    """Rebuild projects-index.json so work days are current before decay."""
+    try:
+        from indexing import build_projects_index
+
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        try:
+            build_projects_index()
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+    except Exception:
+        pass  # Best-effort; decay proceeds with stale index if rebuild fails
+
+
+def run(dry_run: bool = False, skip_index_rebuild: bool = False) -> int:
+    """Run decay on all memory files. Returns 0 on success.
+
+    Args:
+        dry_run: Show what would be archived without making changes.
+        skip_index_rebuild: Skip projects-index rebuild (caller already did it).
+    """
+    if not skip_index_rebuild:
+        rebuild_projects_index_quiet()
+
     settings = load_settings()
     age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
     project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)

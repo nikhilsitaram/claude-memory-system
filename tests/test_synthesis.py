@@ -776,7 +776,8 @@ class TestRunPostProcessing:
         extract = tmp_path / "extract.txt"
         extract.write_text("data")
 
-        with patch("synthesis.run_mark_routed"), \
+        with patch("synthesis._rebuild_projects_index"), \
+             patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"):
@@ -786,7 +787,8 @@ class TestRunPostProcessing:
 
     def test_prunes_stale_state(self):
         """Calls prune_stale_state_entries during post-processing."""
-        with patch("synthesis.run_mark_routed"), \
+        with patch("synthesis._rebuild_projects_index"), \
+             patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries") as mock_prune:
@@ -796,7 +798,8 @@ class TestRunPostProcessing:
 
     def test_updates_timestamp(self, tmp_path):
         """Writes .last-synthesis timestamp file."""
-        with patch("synthesis.run_mark_routed"), \
+        with patch("synthesis._rebuild_projects_index"), \
+             patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
@@ -1225,7 +1228,8 @@ class TestRunPostProcessingOffsetsCleanup:
         offsets_file = tmp_path / "offsets.json"
         offsets_file.write_text('{"s1": {"offset": 100}}')
 
-        with patch("synthesis.run_mark_routed"), \
+        with patch("synthesis._rebuild_projects_index"), \
+             patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
@@ -1239,7 +1243,8 @@ class TestRunPostProcessingOffsetsCleanup:
 
     def test_no_offsets_no_error(self, tmp_path):
         """run_post_processing works fine without offsets_json."""
-        with patch("synthesis.run_mark_routed"), \
+        with patch("synthesis._rebuild_projects_index"), \
+             patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
@@ -1263,6 +1268,7 @@ class TestRunPostProcessingNoSubprocess:
         """run_post_processing calls run_mark_routed."""
         with patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis._rebuild_projects_index"), \
              patch("synthesis.run_mark_routed") as mock_mr, \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"):
@@ -1273,6 +1279,7 @@ class TestRunPostProcessingNoSubprocess:
         """run_post_processing calls run_validate_ltm."""
         with patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis._rebuild_projects_index"), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm") as mock_vl, \
              patch("synthesis.run_decay"):
@@ -1283,11 +1290,43 @@ class TestRunPostProcessingNoSubprocess:
         """run_post_processing calls run_decay."""
         with patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis._rebuild_projects_index"), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay") as mock_decay:
             run_post_processing(extract_paths=[])
         mock_decay.assert_called_once()
+
+    def test_calls_rebuild_projects_index(self, tmp_path):
+        """run_post_processing rebuilds projects index before decay."""
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis._rebuild_projects_index") as mock_rebuild, \
+             patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"):
+            run_post_processing(extract_paths=[])
+        mock_rebuild.assert_called_once()
+
+    def test_rebuild_before_decay_ordering(self, tmp_path):
+        """Projects index rebuild runs before decay."""
+        call_order = []
+
+        def track_rebuild():
+            call_order.append("rebuild")
+
+        def track_decay():
+            call_order.append("decay")
+
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis._rebuild_projects_index", side_effect=track_rebuild), \
+             patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay", side_effect=track_decay):
+            run_post_processing(extract_paths=[])
+
+        assert call_order.index("rebuild") < call_order.index("decay")
 
 
 # =============================================================================
