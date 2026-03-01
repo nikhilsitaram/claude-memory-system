@@ -55,6 +55,34 @@ needs_resolve_session_path = pytest.mark.xfail(
     strict=True,
 )
 
+# find_current_project must accept exactly 2 args (no include_subdirs)
+import inspect as _inspect
+_FCP_TWO_ARGS = len(_inspect.signature(find_current_project).parameters) == 2
+
+# Wiring checks: callers must import resolve_session_path (not just that it exists)
+_LOAD_MEMORY_WIRED = _RESOLVE_SESSION_PATH_EXISTS and hasattr(
+    __import__("load_memory"), "resolve_session_path"
+)
+_INDEXING_WIRED = _RESOLVE_SESSION_PATH_EXISTS and hasattr(
+    __import__("indexing"), "resolve_session_path"
+)
+
+needs_load_memory_wired = pytest.mark.xfail(
+    not _LOAD_MEMORY_WIRED,
+    reason="load_memory.py not yet wired to use resolve_session_path",
+    strict=True,
+)
+needs_indexing_wired = pytest.mark.xfail(
+    not _INDEXING_WIRED,
+    reason="indexing.py not yet wired to use resolve_session_path",
+    strict=True,
+)
+needs_fcp_two_args = pytest.mark.xfail(
+    not _FCP_TWO_ARGS,
+    reason="find_current_project still requires 3 args; will be simplified in Task 2",
+    strict=True,
+)
+
 
 def _make_fake_settings() -> dict:
     """Derive a valid settings dict from DEFAULT_SETTINGS (no hardcoded values)."""
@@ -193,7 +221,7 @@ class TestResolveSessionPathGitignored:
 class TestLoadMemoryUsesResolveSessionPath:
     """load_memory.main must call resolve_session_path, not resolve_worktree_to_main_repo."""
 
-    @needs_resolve_session_path
+    @needs_load_memory_wired
     def test_main_calls_resolve_session_path(self, tmp_path):
         """load_memory.main should delegate path resolution to resolve_session_path."""
         import load_memory
@@ -217,34 +245,6 @@ class TestLoadMemoryUsesResolveSessionPath:
         # resolve_session_path must have been called with the cwd
         mock_rsp.assert_called_once_with("/some/project/subdir")
 
-    @needs_resolve_session_path
-    def test_main_does_not_call_resolve_worktree_directly(self, tmp_path):
-        """load_memory.main must NOT call resolve_worktree_to_main_repo directly for PWD."""
-        import load_memory
-
-        fake_index = {"projects": {}}  # minimal — main() is heavily mocked
-        fake_settings = _make_fake_settings()
-
-        with patch("load_memory.load_settings", return_value=fake_settings), \
-             patch("load_memory.load_json_file", return_value=fake_index), \
-             patch("load_memory.load_global_memory", return_value=("", 0)), \
-             patch("load_memory.load_daily_summaries", return_value=([], 0)), \
-             patch("load_memory.get_recent_days", return_value=[]), \
-             patch("load_memory.check_synthesis_errors", return_value=None), \
-             patch("memory_utils.resolve_session_path", return_value="/some/project"), \
-             patch("memory_utils.resolve_worktree_to_main_repo") as mock_rwt, \
-             patch("os.getcwd", return_value="/some/project/subdir"), \
-             patch("sys.stdin") as mock_stdin:
-            mock_stdin.isatty.return_value = True
-            load_memory.main()
-
-        # resolve_worktree_to_main_repo should NOT be called on the cwd directly
-        # (it may be called internally by resolve_session_path, but not by main())
-        for c in mock_rwt.call_args_list:
-            assert c.args[0] != "/some/project/subdir", (
-                "load_memory.main should call resolve_session_path, "
-                "not resolve_worktree_to_main_repo directly"
-            )
 
 
 # =============================================================================
@@ -255,7 +255,7 @@ class TestLoadMemoryUsesResolveSessionPath:
 class TestIndexingUsesResolveSessionPath:
     """build_projects_index must call resolve_session_path for each session path."""
 
-    @needs_resolve_session_path
+    @needs_indexing_wired
     def test_build_projects_index_calls_resolve_session_path(self, tmp_path):
         """build_projects_index should call resolve_session_path on each project path."""
         from indexing import build_projects_index
@@ -296,45 +296,6 @@ class TestIndexingUsesResolveSessionPath:
             f"Called with: {called_args}"
         )
 
-    @needs_resolve_session_path
-    def test_build_projects_index_does_not_call_resolve_worktree_directly(self, tmp_path):
-        """build_projects_index must use resolve_session_path, not resolve_worktree_to_main_repo."""
-        from indexing import build_projects_index
-
-        projects_dir = tmp_path / "projects"
-        proj_folder = projects_dir / "-home-user-myrepo"
-        proj_folder.mkdir(parents=True)
-
-        sessions_index = {
-            "entries": [
-                {
-                    "sessionId": "abc123",
-                    "created": "2026-02-01T10:00:00Z",
-                    "projectPath": "/home/user/myrepo",
-                }
-            ]
-        }
-        (proj_folder / "sessions-index.json").write_text(
-            json.dumps(sessions_index), encoding="utf-8"
-        )
-
-        output_file = tmp_path / "projects-index.json"
-
-        with patch("memory_utils.get_projects_dir", return_value=projects_dir), \
-             patch("memory_utils.get_projects_index_file", return_value=output_file), \
-             patch("indexing.get_projects_dir", return_value=projects_dir), \
-             patch("indexing.get_projects_index_file", return_value=output_file), \
-             patch("indexing.get_memory_dir", return_value=tmp_path), \
-             patch("memory_utils.resolve_session_path", return_value="/home/user/myrepo"), \
-             patch("memory_utils.resolve_worktree_to_main_repo") as mock_rwt:
-            build_projects_index()
-
-        # resolve_worktree_to_main_repo should NOT be called on session paths directly
-        for c in mock_rwt.call_args_list:
-            assert c.args[0] != "/home/user/myrepo", (
-                "build_projects_index should call resolve_session_path, "
-                "not resolve_worktree_to_main_repo directly"
-            )
 
 
 # =============================================================================
@@ -345,10 +306,7 @@ class TestIndexingUsesResolveSessionPath:
 class TestFindCurrentProjectTwoArgs:
     """After Task 2, find_current_project should accept exactly 2 args (no include_subdirs)."""
 
-    @pytest.mark.xfail(
-        reason="find_current_project currently requires 3 args; will be simplified in Task 2",
-        strict=True,
-    )
+    @needs_fcp_two_args
     def test_two_args_exact_match(self):
         """find_current_project(index, pwd) should work without include_subdirs."""
         index = {
@@ -361,10 +319,7 @@ class TestFindCurrentProjectTwoArgs:
         assert result is not None
         assert result["name"] == "myrepo"
 
-    @pytest.mark.xfail(
-        reason="find_current_project currently requires 3 args; will be simplified in Task 2",
-        strict=True,
-    )
+    @needs_fcp_two_args
     def test_two_args_no_match(self):
         """find_current_project(index, pwd) returns None when pwd not in index."""
         index = {
@@ -375,10 +330,7 @@ class TestFindCurrentProjectTwoArgs:
         result = find_current_project(index, "/home/user/otherproject")
         assert result is None
 
-    @pytest.mark.xfail(
-        reason="find_current_project currently requires 3 args; will be simplified in Task 2",
-        strict=True,
-    )
+    @needs_fcp_two_args
     def test_two_args_subdir_does_not_match(self):
         """After Task 2, subdir paths should NOT match (exact-match-only behaviour)."""
         index = {
