@@ -105,7 +105,7 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 #   prune_stale_state_entries(max_age_days?) -> int
 # Content:
 #   filter_daily_content(content, scope) -> str
-#   find_current_project(index, pwd, include_subdirs?) -> dict | None
+#   find_current_project(index, pwd) -> dict | None
 #   get_working_days(days_limit) -> list[str]
 # Utilities:
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
@@ -897,30 +897,18 @@ def resolve_session_path(path: str) -> str:
     return path
 
 
-def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
+def find_current_project(projects_index: dict, pwd: str) -> dict | None:
     """
     Find the project matching the current working directory.
+
+    Uses exact match only. Subdirectory resolution is handled upstream
+    by resolve_session_path() before this function is called.
 
     Returns project dict with 'name', 'originalPath', 'workDays' or None.
     """
     projects = projects_index.get("projects", {})
     pwd_lower = pwd.lower()
-
-    if include_subdirs:
-        # Match if PWD starts with any known project path (longest match wins)
-        best_match = None
-        best_length = 0
-
-        for path_key, project in projects.items():
-            if pwd_lower.startswith(path_key) or pwd_lower == path_key:
-                if len(path_key) > best_length:
-                    best_match = project
-                    best_length = len(path_key)
-
-        return best_match
-    else:
-        # Exact match only
-        return projects.get(pwd_lower)
+    return projects.get(pwd_lower)
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads

@@ -492,16 +492,17 @@ class TestFindCurrentProject:
                 }
             }
         }
-        result = find_current_project(index, "/home/user/project", include_subdirs=False)
+        result = find_current_project(index, "/home/user/project")
         assert result is not None
         assert result["name"] == "project"
 
     def test_no_match(self):
         index = {"projects": {"/home/user/project": {"name": "project"}}}
-        result = find_current_project(index, "/home/user/other", include_subdirs=False)
+        result = find_current_project(index, "/home/user/other")
         assert result is None
 
-    def test_subdirectory_match_when_enabled(self):
+    def test_subdirectory_does_not_match(self):
+        """Subdirectory matching removed — resolution handles this upstream."""
         index = {
             "projects": {
                 "/home/user/project": {
@@ -510,45 +511,26 @@ class TestFindCurrentProject:
                 }
             }
         }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=True
-        )
-        assert result is not None
-        assert result["name"] == "project"
-
-    def test_subdirectory_no_match_when_disabled(self):
-        index = {
-            "projects": {
-                "/home/user/project": {
-                    "name": "project",
-                    "originalPath": "/home/user/project",
-                }
-            }
-        }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=False
-        )
+        result = find_current_project(index, "/home/user/project/subdir")
         assert result is None
-
-    def test_longest_subdirectory_match(self):
-        """When multiple projects match, pick the longest (most specific) path."""
-        index = {
-            "projects": {
-                "/home/user": {"name": "user", "originalPath": "/home/user"},
-                "/home/user/project": {
-                    "name": "project",
-                    "originalPath": "/home/user/project",
-                },
-            }
-        }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=True
-        )
-        assert result["name"] == "project"
 
     def test_empty_projects(self):
-        result = find_current_project({"projects": {}}, "/home/user", include_subdirs=False)
+        result = find_current_project({"projects": {}}, "/home/user")
         assert result is None
+
+    def test_case_insensitive_match(self):
+        """Keys in index are lowercase; PWD is lowercased for lookup."""
+        index = {
+            "projects": {
+                "/home/user/project": {
+                    "name": "project",
+                    "originalPath": "/home/User/Project",
+                }
+            }
+        }
+        result = find_current_project(index, "/home/User/Project")
+        assert result is not None
+        assert result["name"] == "project"
 
 
 # =============================================================================
