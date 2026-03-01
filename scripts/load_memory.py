@@ -36,6 +36,7 @@ from memory_utils import (
     get_memory_dir,
     get_project_memory_dir,
     get_projects_index_file,
+    get_synthesis_error_log,
     get_working_days,
     load_json_file,
     load_settings,
@@ -71,7 +72,7 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # =============================================================================
 
 
-SYNTHESIS_ERROR_LOG = get_memory_dir() / ".synthesis-errors.log"
+SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
 
 
 def get_last_synthesis_file() -> Path:
@@ -694,9 +695,8 @@ def main() -> None:
     print("<memory>")
 
     # Include current local time for context
-    now = datetime.now()
-    utc_now = datetime.now(timezone.utc)
-    utc_offset_hours = (now - utc_now.replace(tzinfo=None)).total_seconds() / 3600
+    now = datetime.now(timezone.utc).astimezone()
+    utc_offset_hours = now.utcoffset().total_seconds() / 3600
     offset_sign = "+" if utc_offset_hours >= 0 else ""
     print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
     print()

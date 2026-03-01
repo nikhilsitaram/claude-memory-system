@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import io
 import os
 import subprocess
@@ -25,9 +26,9 @@ from load_memory import (
     should_synthesize,
     write_synthesis_prompt,
 )
-from memory_utils import get_memory_dir, load_settings
+from memory_utils import get_synthesis_error_log, load_settings
 
-SYNTHESIS_ERROR_LOG = get_memory_dir() / ".synthesis-errors.log"
+SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
 
 
 def should_run_deferred_synthesis() -> bool:
@@ -103,12 +104,9 @@ def run_synthesis(force: bool = False) -> int:
         return 0
 
     # Capture write_synthesis_prompt output to parse model + prompt_file
-    old_stdout = sys.stdout
-    sys.stdout = captured = io.StringIO()
-    try:
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
         write_synthesis_prompt()
-    finally:
-        sys.stdout = old_stdout
 
     output = captured.getvalue()
 

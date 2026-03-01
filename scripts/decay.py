@@ -14,7 +14,6 @@ Requirements: Python 3.9+
 """
 
 import argparse
-import io
 import re
 import sys
 from datetime import date, datetime, timedelta
@@ -36,6 +35,7 @@ from memory_utils import (
     local_today,
     parse_markdown_sections,
     project_name_to_filename,
+    rebuild_projects_index_quiet,
 )
 
 # Default decay thresholds (used as fallbacks when settings.json missing)
@@ -320,33 +320,8 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
     return purged_count
 
 
-def rebuild_projects_index_quiet() -> None:
-    """Rebuild projects-index.json so work days are current before decay."""
-    try:
-        from indexing import build_projects_index
-
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
-        try:
-            build_projects_index()
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-    except Exception:
-        pass  # Best-effort; decay proceeds with stale index if rebuild fails
-
-
-def run(dry_run: bool = False, skip_index_rebuild: bool = False) -> int:
-    """Run decay on all memory files. Returns 0 on success.
-
-    Args:
-        dry_run: Show what would be archived without making changes.
-        skip_index_rebuild: Skip projects-index rebuild (caller already did it).
-    """
-    if not skip_index_rebuild:
-        rebuild_projects_index_quiet()
-
+def run(dry_run: bool = False) -> int:
+    """Run decay on all memory files. Returns 0 on success."""
     settings = load_settings()
     age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
     project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)
@@ -415,6 +390,7 @@ def main() -> int:
         help="Show what would be archived/purged without making changes"
     )
     args = parser.parse_args()
+    rebuild_projects_index_quiet()
     return run(dry_run=args.dry_run)
 
 
