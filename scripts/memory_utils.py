@@ -230,7 +230,7 @@ DEFAULT_SETTINGS = {
         "tokenLimit": 3000,
     },
     "synthesis": {
-        "intervalHours": 2,
+        "intervalHours": 0.5,
         "model": "sonnet",
         "background": True,
         "deferred": True,

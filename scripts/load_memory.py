@@ -28,6 +28,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (
+    DEFAULT_SETTINGS,
     check_python_version,
     filter_daily_content,
     find_current_project,
@@ -122,7 +123,9 @@ def should_synthesize(settings: dict) -> bool:
         True if synthesis should run, False otherwise
     """
     last_synthesis_file = get_last_synthesis_file()
-    interval_hours = settings.get("synthesis", {}).get("intervalHours", 2)
+    interval_hours = settings.get("synthesis", {}).get(
+        "intervalHours", DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+    )
 
     try:
         if not last_synthesis_file.exists():

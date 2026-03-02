@@ -18,7 +18,7 @@
     "_comment": "project-memory/{project}-long-term-memory.md - project-specific learnings"
   },
   "synthesis": {
-    "intervalHours": 2,
+    "intervalHours": 0.5,
     "model": "sonnet",
     "background": true,
     "deferred": true,

@@ -115,7 +115,7 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
     do_all = args.mode == "all"
 
     sys.path.insert(0, str(REPO_DIR / "scripts"))
-    from memory_utils import get_daily_dir, get_memory_dir, load_settings
+    from memory_utils import DEFAULT_SETTINGS, get_daily_dir, get_memory_dir, load_settings
 
     settings = load_settings()
 
@@ -141,7 +141,7 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
         last_file = get_memory_dir() / ".last-synthesis"
         if last_file.exists():
             print(f"  Last: {last_file.read_text(encoding='utf-8').strip()}")
-            print(f"  Interval: {settings.get('synthesis', {}).get('intervalHours', 2)}h")
+            print(f"  Interval: {settings.get('synthesis', {}).get('intervalHours', DEFAULT_SETTINGS['synthesis']['intervalHours'])}h")
         else:
             print("  Never synthesized")
         print()
