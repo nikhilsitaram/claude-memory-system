@@ -49,7 +49,7 @@
     "globalLongTerm.tokenLimit": 3000,
     "projectShortTerm.workingDays": 5,
     "projectLongTerm.tokenLimit": 3000,
-    "synthesis.intervalHours": 2,
+    "synthesis.intervalHours": 0.5,
     "synthesis.model": "sonnet",
     "synthesis.background": true,
     "synthesis.deferred": true,
