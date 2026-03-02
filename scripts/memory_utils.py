@@ -45,6 +45,8 @@ __all__ = [
     "get_synthesis_error_log",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
+    "resolve_git_subdir_to_root",
+    "resolve_session_path",
     # Settings
     "load_settings",
     "save_settings",
@@ -91,6 +93,10 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 #   get_project_memory_dir() -> Path      get_projects_dir() -> Path
 #   get_global_memory_file() -> Path      get_settings_file() -> Path
 #   get_projects_index_file() -> Path
+# Path resolution:
+#   resolve_worktree_to_main_repo(path) -> str
+#   resolve_git_subdir_to_root(path) -> str
+#   resolve_session_path(path) -> str
 # Settings:
 #   load_settings() -> dict               save_settings(settings) -> None
 # Synthesis state:
@@ -99,7 +105,7 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 #   prune_stale_state_entries(max_age_days?) -> int
 # Content:
 #   filter_daily_content(content, scope) -> str
-#   find_current_project(index, pwd, include_subdirs?) -> dict | None
+#   find_current_project(index, pwd) -> dict | None
 #   get_working_days(days_limit) -> list[str]
 # Utilities:
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
@@ -222,9 +228,6 @@ DEFAULT_SETTINGS = {
     },
     "projectLongTerm": {
         "tokenLimit": 3000,
-    },
-    "projectSettings": {
-        "includeSubdirectories": False,
     },
     "synthesis": {
         "intervalHours": 2,
@@ -828,30 +831,81 @@ def resolve_worktree_to_main_repo(path: str) -> str:
         return _worktree_pattern_fallback(path)
 
 
-def find_current_project(projects_index: dict, pwd: str, include_subdirs: bool) -> dict | None:
+def resolve_git_subdir_to_root(path: str) -> str:
+    """Resolve a git subdirectory to its repository root.
+
+    If path is inside a git repo but is not the root:
+      - If the relative path is gitignored -> return path unchanged (separate project)
+      - If not gitignored -> return git root (collapse to parent project)
+
+    If path IS the git root, or not in a git repo, returns unchanged.
+    Falls back to returning path unchanged on any error.
+    """
+    try:
+        toplevel_result = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if toplevel_result.returncode != 0:
+            return path
+        toplevel = toplevel_result.stdout.strip()
+        if not toplevel:
+            return path
+
+        # Normalize both paths for comparison
+        norm_path = os.path.normpath(path)
+        norm_toplevel = os.path.normpath(toplevel)
+
+        if norm_path == norm_toplevel:
+            return norm_toplevel  # Already at git root
+
+        # Compute relative path from git root
+        rel_path = os.path.relpath(norm_path, norm_toplevel)
+
+        # Check if relative path is gitignored
+        ignore_result = subprocess.run(
+            ["git", "-C", norm_toplevel, "check-ignore", "-q", rel_path],
+            capture_output=True, text=True, timeout=5,
+        )
+
+        if ignore_result.returncode == 0:
+            # Path IS gitignored — keep as separate project
+            return norm_path
+        elif ignore_result.returncode == 1:
+            # Path is NOT gitignored — collapse to git root
+            return norm_toplevel
+        else:
+            # Unexpected error from check-ignore
+            return path
+    except (FileNotFoundError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, OSError):
+        return path
+
+
+def resolve_session_path(path: str) -> str:
+    """Full resolution chain: worktree -> git-subdir -> result.
+
+    Applies both resolution steps in order:
+    1. resolve_worktree_to_main_repo — handles git worktrees
+    2. resolve_git_subdir_to_root — handles non-root subdirs of git repos
+    """
+    path = resolve_worktree_to_main_repo(path)
+    path = resolve_git_subdir_to_root(path)
+    return path
+
+
+def find_current_project(projects_index: dict, pwd: str) -> dict | None:
     """
     Find the project matching the current working directory.
+
+    Uses exact match only. Subdirectory resolution is handled upstream
+    by resolve_session_path() before this function is called.
 
     Returns project dict with 'name', 'originalPath', 'workDays' or None.
     """
     projects = projects_index.get("projects", {})
     pwd_lower = pwd.lower()
-
-    if include_subdirs:
-        # Match if PWD starts with any known project path (longest match wins)
-        best_match = None
-        best_length = 0
-
-        for path_key, project in projects.items():
-            if pwd_lower.startswith(path_key) or pwd_lower == path_key:
-                if len(path_key) > best_length:
-                    best_match = project
-                    best_length = len(path_key)
-
-        return best_match
-    else:
-        # Exact match only
-        return projects.get(pwd_lower)
+    return projects.get(pwd_lower)
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads

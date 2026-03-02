@@ -694,7 +694,7 @@ class TestBuildProjectsIndex:
         }
         (wt_folder / "sessions-index.json").write_text(json.dumps(wt_sessions))
 
-        with mock.patch("indexing.resolve_worktree_to_main_repo") as mock_resolve:
+        with mock.patch("indexing.resolve_session_path") as mock_resolve:
             # Worktree path resolves to main repo
             def side_effect(p):
                 if ".worktrees" in p:

@@ -35,6 +35,8 @@ from memory_utils import (
     project_name_to_filename,
     prune_stale_state_entries,
     resolve_project_path_to_name,
+    resolve_git_subdir_to_root,
+    resolve_session_path,
     resolve_worktree_to_main_repo,
     save_json_file,
     save_synthesis_state,
@@ -490,16 +492,17 @@ class TestFindCurrentProject:
                 }
             }
         }
-        result = find_current_project(index, "/home/user/project", include_subdirs=False)
+        result = find_current_project(index, "/home/user/project")
         assert result is not None
         assert result["name"] == "project"
 
     def test_no_match(self):
         index = {"projects": {"/home/user/project": {"name": "project"}}}
-        result = find_current_project(index, "/home/user/other", include_subdirs=False)
+        result = find_current_project(index, "/home/user/other")
         assert result is None
 
-    def test_subdirectory_match_when_enabled(self):
+    def test_subdirectory_does_not_match(self):
+        """Subdirectory matching removed — resolution handles this upstream."""
         index = {
             "projects": {
                 "/home/user/project": {
@@ -508,45 +511,26 @@ class TestFindCurrentProject:
                 }
             }
         }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=True
-        )
-        assert result is not None
-        assert result["name"] == "project"
-
-    def test_subdirectory_no_match_when_disabled(self):
-        index = {
-            "projects": {
-                "/home/user/project": {
-                    "name": "project",
-                    "originalPath": "/home/user/project",
-                }
-            }
-        }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=False
-        )
+        result = find_current_project(index, "/home/user/project/subdir")
         assert result is None
-
-    def test_longest_subdirectory_match(self):
-        """When multiple projects match, pick the longest (most specific) path."""
-        index = {
-            "projects": {
-                "/home/user": {"name": "user", "originalPath": "/home/user"},
-                "/home/user/project": {
-                    "name": "project",
-                    "originalPath": "/home/user/project",
-                },
-            }
-        }
-        result = find_current_project(
-            index, "/home/user/project/subdir", include_subdirs=True
-        )
-        assert result["name"] == "project"
 
     def test_empty_projects(self):
-        result = find_current_project({"projects": {}}, "/home/user", include_subdirs=False)
+        result = find_current_project({"projects": {}}, "/home/user")
         assert result is None
+
+    def test_case_insensitive_match(self):
+        """Keys in index are lowercase; PWD is lowercased for lookup."""
+        index = {
+            "projects": {
+                "/home/user/project": {
+                    "name": "project",
+                    "originalPath": "/home/User/Project",
+                }
+            }
+        }
+        result = find_current_project(index, "/home/User/Project")
+        assert result is not None
+        assert result["name"] == "project"
 
 
 # =============================================================================
@@ -1066,6 +1050,150 @@ class TestResolveWorktreeToMainRepo:
             ]
             result = resolve_worktree_to_main_repo("/home/user/project/.worktrees/feature")
             assert result == "/home/user/project"
+
+
+# =============================================================================
+# resolve_git_subdir_to_root Tests
+# =============================================================================
+
+
+class TestResolveGitSubdirToRoot:
+    """Tests for resolve_git_subdir_to_root()."""
+
+    def test_git_root_returns_unchanged(self):
+        """When path IS the git root, return unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="/repo\n")
+            result = resolve_git_subdir_to_root("/repo")
+            assert result == "/repo"
+
+    def test_non_ignored_subdir_collapses_to_root(self):
+        """Subdir that is NOT gitignored should collapse to git root."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            # First call: rev-parse --show-toplevel -> /repo
+            # Second call: check-ignore -q -> returncode 1 (not ignored)
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo\n"),
+                MagicMock(returncode=1, stdout=""),
+            ]
+            result = resolve_git_subdir_to_root("/repo/src/mypackage")
+            assert result == "/repo"
+
+    def test_gitignored_subdir_stays_separate(self):
+        """Subdir that IS gitignored should remain as a separate project."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            # First call: rev-parse --show-toplevel -> /repo
+            # Second call: check-ignore -q -> returncode 0 (ignored)
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo\n"),
+                MagicMock(returncode=0, stdout="vendor/lib\n"),
+            ]
+            result = resolve_git_subdir_to_root("/repo/vendor/lib")
+            assert result == "/repo/vendor/lib"
+
+    def test_not_in_git_repo_returns_unchanged(self):
+        """Path not in a git repo (git returns nonzero) returns unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=128, stdout="")
+            result = resolve_git_subdir_to_root("/tmp/not-a-repo")
+            assert result == "/tmp/not-a-repo"
+
+    def test_git_not_installed_returns_unchanged(self):
+        """FileNotFoundError when git is missing — return path unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("git not found")
+            result = resolve_git_subdir_to_root("/some/path")
+            assert result == "/some/path"
+
+    def test_git_timeout_returns_unchanged(self):
+        """subprocess.TimeoutExpired — return path unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(["git"], 5)
+            result = resolve_git_subdir_to_root("/some/path")
+            assert result == "/some/path"
+
+    def test_empty_toplevel_returns_unchanged(self):
+        """If git returns empty stdout, return path unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="\n")
+            result = resolve_git_subdir_to_root("/some/path")
+            assert result == "/some/path"
+
+    def test_deeply_nested_subdir_collapses(self):
+        """Deeply nested non-ignored subdirs should still collapse to git root."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo\n"),
+                MagicMock(returncode=1, stdout=""),
+            ]
+            result = resolve_git_subdir_to_root("/repo/a/b/c/d/e")
+            assert result == "/repo"
+
+    def test_check_ignore_called_with_relative_path(self):
+        """check-ignore must be called with the relative path from git root."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo\n"),
+                MagicMock(returncode=1, stdout=""),
+            ]
+            resolve_git_subdir_to_root("/repo/src/pkg")
+            # Second call must be check-ignore with relative path
+            second_call_args = mock_run.call_args_list[1][0][0]
+            assert "check-ignore" in second_call_args
+            assert "-q" in second_call_args
+            assert "src/pkg" in second_call_args
+
+    def test_check_ignore_error_returns_unchanged(self):
+        """Unexpected check-ignore exit code (not 0 or 1) returns unchanged."""
+        with patch("memory_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="/repo\n"),
+                MagicMock(returncode=2, stdout=""),
+            ]
+            result = resolve_git_subdir_to_root("/repo/src/pkg")
+            assert result == "/repo/src/pkg"
+
+
+# =============================================================================
+# resolve_session_path Tests
+# =============================================================================
+
+
+class TestResolveSessionPath:
+    """Tests for resolve_session_path()."""
+
+    def test_worktree_resolves_then_git_subdir_noops(self):
+        """Worktree resolves to main repo root; git-subdir step sees root and no-ops."""
+        with patch("memory_utils.resolve_worktree_to_main_repo") as mock_worktree, \
+             patch("memory_utils.resolve_git_subdir_to_root") as mock_subdir:
+            mock_worktree.return_value = "/repo"
+            mock_subdir.return_value = "/repo"
+            result = resolve_session_path("/repo/.worktrees/feature")
+            mock_worktree.assert_called_once_with("/repo/.worktrees/feature")
+            mock_subdir.assert_called_once_with("/repo")
+            assert result == "/repo"
+
+    def test_non_worktree_subdir_goes_through_git_subdir_resolution(self):
+        """Non-worktree path passes straight to git-subdir resolver."""
+        with patch("memory_utils.resolve_worktree_to_main_repo") as mock_worktree, \
+             patch("memory_utils.resolve_git_subdir_to_root") as mock_subdir:
+            mock_worktree.return_value = "/repo/src"
+            mock_subdir.return_value = "/repo"
+            result = resolve_session_path("/repo/src")
+            mock_worktree.assert_called_once_with("/repo/src")
+            mock_subdir.assert_called_once_with("/repo/src")
+            assert result == "/repo"
+
+    def test_gitignored_subdir_passes_through_both_resolvers_unchanged(self):
+        """Gitignored subdir: worktree no-ops, git-subdir no-ops too."""
+        with patch("memory_utils.resolve_worktree_to_main_repo") as mock_worktree, \
+             patch("memory_utils.resolve_git_subdir_to_root") as mock_subdir:
+            mock_worktree.return_value = "/repo/vendor/lib"
+            mock_subdir.return_value = "/repo/vendor/lib"
+            result = resolve_session_path("/repo/vendor/lib")
+            mock_worktree.assert_called_once_with("/repo/vendor/lib")
+            mock_subdir.assert_called_once_with("/repo/vendor/lib")
+            assert result == "/repo/vendor/lib"
 
 
 class TestExtractEntryKeywordsMultiScope:

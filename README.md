@@ -90,7 +90,7 @@ Daily files contain entries tagged with scopes like `[global/implement]` or `[cl
 
 ### Project Detection
 
-Uses exact `$PWD` match against `projects-index.json`. Enable `projectSettings.includeSubdirectories` to match subdirectories to parent projects. Git worktree paths are resolved to the main repo via `git rev-parse`.
+Git subdirectories automatically map to their repository root unless gitignored. Git worktree paths are resolved to the main repo via `git rev-parse`.
 
 **Working days**: Days without matching tagged content are skipped, so sporadic projects get all their context from meaningful work sessions.
 
@@ -136,7 +136,6 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "globalLongTerm": { "tokenLimit": 3000 },
   "projectShortTerm": { "workingDays": 5 },
   "projectLongTerm": { "tokenLimit": 3000 },
-  "projectSettings": { "includeSubdirectories": false },
   "synthesis": {
     "intervalHours": 2,
     "model": "sonnet",
@@ -158,7 +157,6 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `globalLongTerm.tokenLimit` | 3,000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 5 | Project-specific days to load |
 | `projectLongTerm.tokenLimit` | 3,000 | Token limit for project long-term memory |
-| `projectSettings.includeSubdirectories` | false | Match subdirectories to parent project |
 | `synthesis.intervalHours` | 2 | Hours between auto-synthesis checks |
 | `synthesis.model` | sonnet | Model for synthesis LLM calls |
 | `synthesis.background` | true | Run in-session synthesis in background |

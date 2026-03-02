@@ -1,0 +1,42 @@
+{
+  "planFile": "docs/plans/2026-03-01-git-subdir-mapping/plan-git-subdir-mapping.md",
+  "createdAt": "2026-03-01T22:15:00Z",
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Task 1: Add resolve_git_subdir_to_root() and resolve_session_path()",
+      "status": "done",
+      "blockedBy": []
+    },
+    {
+      "id": 2,
+      "title": "Task 2: Simplify find_current_project() to exact-match-only",
+      "status": "done",
+      "blockedBy": [1]
+    },
+    {
+      "id": 3,
+      "title": "Task 3: Update load_memory.py to use resolve_session_path()",
+      "status": "done",
+      "blockedBy": [2]
+    },
+    {
+      "id": 4,
+      "title": "Task 4: Update indexing.py to use resolve_session_path()",
+      "status": "done",
+      "blockedBy": [2]
+    },
+    {
+      "id": 5,
+      "title": "Task 5: Update token_usage.py to use resolve_session_path()",
+      "status": "done",
+      "blockedBy": [2]
+    },
+    {
+      "id": 6,
+      "title": "Task 6: Remove projectSettings.includeSubdirectories from settings, templates, docs",
+      "status": "done",
+      "blockedBy": [3, 4, 5]
+    }
+  ]
+}

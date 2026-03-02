@@ -52,7 +52,6 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
 | `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
-| `projectSettings.includeSubdirectories` | bool | — | false | Match subdirs to parent project |
 | `synthesis.intervalHours` | int | 1-24 | 2 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
 | `synthesis.background` | bool | — | true | Run auto-synthesis in background |
@@ -78,7 +77,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 
 **Working days**: Both tiers use "working days" — days that have matching tagged content (`[global/*]` or `[project-name/*]`). Days without matching content are skipped.
 
-**Subdirectories**: When enabled, working in `/project/backend/` loads history for `/project/` (longest path match wins). Use with caution on large monorepos.
+**Git subdirectories**: Subdirectories of a git repo automatically map to the repo root unless gitignored — no configuration required. Gitignored paths (e.g. `projects/`) stay as separate projects.
 
 **Synthesis**: First session of day (UTC) always prompts if transcripts pending. Manual `/synthesize` always runs in foreground regardless of `background` setting.
 
