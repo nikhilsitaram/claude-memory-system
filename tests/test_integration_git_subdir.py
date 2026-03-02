@@ -235,7 +235,7 @@ class TestLoadMemoryUsesResolveSessionPath:
              patch("load_memory.load_daily_summaries", return_value=([], 0)), \
              patch("load_memory.get_recent_days", return_value=[]), \
              patch("load_memory.check_synthesis_errors", return_value=None), \
-             patch("memory_utils.resolve_session_path") as mock_rsp, \
+             patch("load_memory.resolve_session_path") as mock_rsp, \
              patch("os.getcwd", return_value="/some/project/subdir"), \
              patch("sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
@@ -285,7 +285,7 @@ class TestIndexingUsesResolveSessionPath:
              patch("indexing.get_projects_dir", return_value=projects_dir), \
              patch("indexing.get_projects_index_file", return_value=output_file), \
              patch("indexing.get_memory_dir", return_value=tmp_path), \
-             patch("memory_utils.resolve_session_path") as mock_rsp:
+             patch("indexing.resolve_session_path") as mock_rsp:
             mock_rsp.return_value = "/home/user/myrepo"
             build_projects_index()
 

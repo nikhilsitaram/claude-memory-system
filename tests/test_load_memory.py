@@ -1276,7 +1276,7 @@ class TestWorktreeProjectDetection:
 
     def test_worktree_path_resolved_before_project_lookup(self):
         """CWD in a worktree should resolve to main repo for project matching."""
-        from load_memory import resolve_worktree_to_main_repo as imported
+        from load_memory import resolve_session_path as imported
         assert imported is not None
 
 
@@ -1471,7 +1471,7 @@ class TestSynthesisDeferredSetting:
 
         # Mock memory loading functions (not under test here)
         monkeypatch.setattr("load_memory.load_global_memory", lambda: ("", 0))
-        monkeypatch.setattr("load_memory.resolve_worktree_to_main_repo", lambda p: p)
+        monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
         monkeypatch.setattr("load_memory.load_json_file", lambda p, d: {})
         monkeypatch.setattr("load_memory.find_current_project", lambda *a: None)
         monkeypatch.setattr("load_memory.load_daily_summaries", lambda *a, **kw: ([], 0))

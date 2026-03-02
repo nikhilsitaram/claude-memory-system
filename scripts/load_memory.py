@@ -43,7 +43,7 @@ from memory_utils import (
     load_synthesis_state,
     project_name_to_filename,
     resolve_project_path_to_name,
-    resolve_worktree_to_main_repo,
+    resolve_session_path,
 )
 from transcript_ops import (
     extract_transcripts_incremental,
@@ -685,7 +685,6 @@ def main() -> None:
     settings = load_settings()
     short_term_days = settings["globalShortTerm"]["workingDays"]
     project_days = settings["projectShortTerm"]["workingDays"]
-    include_subdirs = settings["projectSettings"]["includeSubdirectories"]
     total_budget = settings["totalTokenBudget"]
 
     # Track total bytes for token estimation
@@ -791,10 +790,10 @@ def main() -> None:
         print(global_content)
         print()
 
-    # Detect current project (resolve worktree to main repo for matching)
-    pwd = resolve_worktree_to_main_repo(os.getcwd())
+    # Detect current project (resolve worktree/subdir to repo root for matching)
+    pwd = resolve_session_path(os.getcwd())
     projects_index = load_json_file(get_projects_index_file(), {})
-    current_project = find_current_project(projects_index, pwd, include_subdirs)
+    current_project = find_current_project(projects_index, pwd)
 
     # Load project-specific long-term memory
     if current_project:
