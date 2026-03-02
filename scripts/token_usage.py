@@ -20,13 +20,13 @@ from memory_utils import (
     load_json_file,
     load_settings,
     project_name_to_filename,
-    resolve_worktree_to_main_repo,
+    resolve_session_path,
 )
 
 
 def calculate_usage():
     """Calculate token usage for all memory components."""
-    cwd = resolve_worktree_to_main_repo(os.getcwd())
+    cwd = resolve_session_path(os.getcwd())
 
     # Load settings using shared utility (handles missing file + JSON errors)
     settings = load_settings()
@@ -38,7 +38,6 @@ def calculate_usage():
     project_long_limit = settings["projectLongTerm"]["tokenLimit"]
     project_short_limit = settings["projectShortTerm"]["tokenLimit"]
     total_budget = settings["totalTokenBudget"]
-    include_subdirs = settings["projectSettings"]["includeSubdirectories"]
 
     # Global long-term
     global_memory = get_global_memory_file()
@@ -59,7 +58,7 @@ def calculate_usage():
 
     # Project: find by CWD match using shared utility (lowercases CWD correctly)
     projects_index = load_json_file(get_projects_index_file(), {})
-    current_project = find_current_project(projects_index, cwd, include_subdirs)
+    current_project = find_current_project(projects_index, cwd)
     project_name = current_project.get("name") if current_project else None
 
     # Project long-term (uses project_name_to_filename for correct kebab-case)
