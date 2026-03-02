@@ -873,7 +873,7 @@ def resolve_git_subdir_to_root(path: str) -> str:
             return path
         elif ignore_result.returncode == 1:
             # Path is NOT gitignored — collapse to git root
-            return toplevel
+            return norm_toplevel
         else:
             # Unexpected error from check-ignore
             return path
