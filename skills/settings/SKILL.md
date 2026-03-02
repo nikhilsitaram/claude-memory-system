@@ -52,7 +52,6 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
 | `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
-| `projectSettings.includeSubdirectories` | bool | — | false | Match subdirs to parent project |
 | `synthesis.intervalHours` | int | 1-24 | 2 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
 | `synthesis.background` | bool | — | true | Run auto-synthesis in background |

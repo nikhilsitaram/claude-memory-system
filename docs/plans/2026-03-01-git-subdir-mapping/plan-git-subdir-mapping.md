@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: Complete
 ---
 
 # Git-Aware Subdirectory Project Mapping — Implementation Plan
@@ -19,22 +19,22 @@ status: Not Yet Started
 ## Phases
 
 ### Phase 1 — Core Resolution Functions
-**Status:** Not Yet Started
+**Status:** Complete (2026-03-01)
 
-- [ ] Task 1: Add `resolve_git_subdir_to_root()` and `resolve_session_path()` to memory_utils.py
-- [ ] Task 2: Simplify `find_current_project()` to exact-match-only
+- [x] Task 1: Add `resolve_git_subdir_to_root()` and `resolve_session_path()` to memory_utils.py
+- [x] Task 2: Simplify `find_current_project()` to exact-match-only
 
 ### Phase 2 — Wire Up Callers
-**Status:** Not Yet Started
+**Status:** Complete (2026-03-01)
 
-- [ ] Task 3: Update load_memory.py to use `resolve_session_path()`
-- [ ] Task 4: Update indexing.py to use `resolve_session_path()`
-- [ ] Task 5: Update token_usage.py to use `resolve_session_path()`
+- [x] Task 3: Update load_memory.py to use `resolve_session_path()`
+- [x] Task 4: Update indexing.py to use `resolve_session_path()`
+- [x] Task 5: Update token_usage.py to use `resolve_session_path()`
 
 ### Phase 3 — Remove Deprecated Setting
-**Status:** Not Yet Started
+**Status:** Complete (2026-03-01)
 
-- [ ] Task 6: Remove `projectSettings.includeSubdirectories` from settings, templates, docs, and skills
+- [x] Task 6: Remove `projectSettings.includeSubdirectories` from settings, templates, docs, and skills
 
 ---
 

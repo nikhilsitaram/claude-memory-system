@@ -229,9 +229,6 @@ DEFAULT_SETTINGS = {
     "projectLongTerm": {
         "tokenLimit": 3000,
     },
-    "projectSettings": {
-        "includeSubdirectories": False,
-    },
     "synthesis": {
         "intervalHours": 2,
         "model": "sonnet",

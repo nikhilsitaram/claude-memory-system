@@ -11,7 +11,7 @@ Tests cover:
 3. Full chain: Gitignored subdir stays separate
 4. End-to-end wiring: load_memory.main calls resolve_session_path
 5. End-to-end wiring: indexing.build_projects_index calls resolve_session_path
-6. find_current_project 2-arg: works with exactly 2 args (no include_subdirs)
+6. find_current_project 2-arg: works with exactly 2 args
 
 Run with: python -m pytest tests/test_integration_git_subdir.py -v
 """
@@ -55,7 +55,7 @@ needs_resolve_session_path = pytest.mark.xfail(
     strict=True,
 )
 
-# find_current_project must accept exactly 2 args (no include_subdirs)
+# find_current_project must accept exactly 2 args
 import inspect as _inspect
 _FCP_TWO_ARGS = len(_inspect.signature(find_current_project).parameters) == 2
 
@@ -299,16 +299,16 @@ class TestIndexingUsesResolveSessionPath:
 
 
 # =============================================================================
-# Test 6: find_current_project with exactly 2 args (no include_subdirs)
+# Test 6: find_current_project with exactly 2 args
 # =============================================================================
 
 
 class TestFindCurrentProjectTwoArgs:
-    """After Task 2, find_current_project should accept exactly 2 args (no include_subdirs)."""
+    """After Task 2, find_current_project should accept exactly 2 args."""
 
     @needs_fcp_two_args
     def test_two_args_exact_match(self):
-        """find_current_project(index, pwd) should work without include_subdirs."""
+        """find_current_project(index, pwd) should work with exactly 2 args."""
         index = {
             "projects": {
                 "/home/user/myrepo": {"name": "myrepo", "originalPath": "/home/user/myrepo", "workDays": []},
