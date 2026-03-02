@@ -38,6 +38,22 @@ status: Complete
 
 ---
 
+## Completion Report
+
+**Completed:** 2026-03-01
+
+### Summary
+
+Replaced the `projectSettings.includeSubdirectories` boolean setting with git-aware subdirectory resolution. New `resolve_git_subdir_to_root()` function uses `git rev-parse --show-toplevel` and `git check-ignore -q` to determine whether a subdirectory should collapse to its repo root (tracked) or stay separate (gitignored). The composition function `resolve_session_path()` chains worktree resolution then git-subdir resolution, and all three callers (load_memory, indexing, token_usage) now use it. `find_current_project()` was simplified to exact-match-only (2 args).
+
+### Deviations from Plan
+
+- **Integration test xfail markers (Rule 1):** The initial `needs_resolve_session_path` marker was too coarse — it only checked function existence, not caller wiring. Added fine-grained markers (`needs_load_memory_wired`, `needs_indexing_wired`, `needs_fcp_two_args`) to prevent intermediate-state failures.
+- **Removed negative wiring tests (Rule 1):** The "does not call resolve_worktree_to_main_repo directly" integration tests patched at the wrong module level (memory_utils instead of the caller module), causing them to trivially pass. Removed in favor of the positive wiring tests which are sufficient.
+- **Integration test mock targets (Rule 1):** Fixed `patch("memory_utils.resolve_session_path")` to `patch("load_memory.resolve_session_path")` / `patch("indexing.resolve_session_path")` to correctly intercept the caller's module-level binding.
+
+---
+
 ## Task Details
 
 ### Task 1: Add `resolve_git_subdir_to_root()` and `resolve_session_path()`
@@ -221,7 +237,7 @@ def resolve_git_subdir_to_root(path: str) -> str:
         norm_toplevel = os.path.normpath(toplevel)
 
         if norm_path == norm_toplevel:
-            return path  # Already at git root
+            return norm_toplevel  # Already at git root
 
         # Compute relative path from git root
         rel_path = os.path.relpath(norm_path, norm_toplevel)
@@ -234,10 +250,10 @@ def resolve_git_subdir_to_root(path: str) -> str:
 
         if ignore_result.returncode == 0:
             # Path IS gitignored — keep as separate project
-            return path
+            return norm_path
         elif ignore_result.returncode == 1:
             # Path is NOT gitignored — collapse to git root
-            return toplevel
+            return norm_toplevel
         else:
             # Unexpected error from check-ignore
             return path

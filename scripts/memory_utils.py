@@ -857,7 +857,7 @@ def resolve_git_subdir_to_root(path: str) -> str:
         norm_toplevel = os.path.normpath(toplevel)
 
         if norm_path == norm_toplevel:
-            return path  # Already at git root
+            return norm_toplevel  # Already at git root
 
         # Compute relative path from git root
         rel_path = os.path.relpath(norm_path, norm_toplevel)
@@ -870,7 +870,7 @@ def resolve_git_subdir_to_root(path: str) -> str:
 
         if ignore_result.returncode == 0:
             # Path IS gitignored — keep as separate project
-            return path
+            return norm_path
         elif ignore_result.returncode == 1:
             # Path is NOT gitignored — collapse to git root
             return norm_toplevel

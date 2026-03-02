@@ -211,6 +211,8 @@ class TestResolveSessionPathGitignored:
         assert mock_run.call_count == 2
         assert "--show-toplevel" in mock_run.call_args_list[0].args[0]
         assert "check-ignore" in mock_run.call_args_list[1].args[0]
+        # Non-ignored subdir should collapse to git root
+        assert result == str(tmp_path / "repo")
 
 
 # =============================================================================
