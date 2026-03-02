@@ -52,7 +52,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
 | `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
-| `synthesis.intervalHours` | int | 1-24 | 2 | Hours between auto-synthesis |
+| `synthesis.intervalHours` | float | 0.25-24 | 0.5 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
 | `synthesis.background` | bool | — | true | Run auto-synthesis in background |
 | `synthesis.deferred` | bool | — | true | Use systemd timer instead of in-session synthesis |

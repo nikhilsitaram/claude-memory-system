@@ -137,7 +137,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "projectShortTerm": { "workingDays": 5 },
   "projectLongTerm": { "tokenLimit": 3000 },
   "synthesis": {
-    "intervalHours": 2,
+    "intervalHours": 0.5,
     "model": "sonnet",
     "background": true,
     "deferred": true,
@@ -157,7 +157,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `globalLongTerm.tokenLimit` | 3,000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 5 | Project-specific days to load |
 | `projectLongTerm.tokenLimit` | 3,000 | Token limit for project long-term memory |
-| `synthesis.intervalHours` | 2 | Hours between auto-synthesis checks |
+| `synthesis.intervalHours` | 0.5 | Hours between auto-synthesis checks |
 | `synthesis.model` | sonnet | Model for synthesis LLM calls |
 | `synthesis.background` | true | Run in-session synthesis in background |
 | `synthesis.deferred` | true | Use systemd timer instead of in-session synthesis |
