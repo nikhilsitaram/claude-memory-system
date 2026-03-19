@@ -43,6 +43,7 @@ __all__ = [
     "get_projects_index_file",
     "get_global_memory_file",
     "get_synthesis_error_log",
+    "get_db_path",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     "resolve_git_subdir_to_root",
@@ -207,6 +208,11 @@ def get_global_memory_file() -> Path:
 def get_synthesis_error_log() -> Path:
     """Get the synthesis error log file path."""
     return get_memory_dir() / ".synthesis-errors.log"
+
+
+def get_db_path() -> Path:
+    """Get the path to the unified memory database (memory.db)."""
+    return get_memory_dir() / "memory.db"
 
 
 # Token limit formulas

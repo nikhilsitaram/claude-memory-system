@@ -1369,5 +1369,22 @@ class TestParseMarkdownSections:
         assert sections[0][1] == ["Just plain text", "with no headers"]
 
 
+# =============================================================================
+# get_db_path Tests
+# =============================================================================
+
+
+class TestGetDbPath:
+    def test_returns_memory_db_path(self, tmp_path):
+        with mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
+            from memory_utils import get_db_path
+            result = get_db_path()
+            assert result == tmp_path / "memory.db"
+
+    def test_in_all_exports(self):
+        from memory_utils import __all__
+        assert "get_db_path" in __all__
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
