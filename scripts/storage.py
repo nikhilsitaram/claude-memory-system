@@ -12,10 +12,12 @@ Requirements: Python 3.9+
 """
 
 import hashlib
+import re
 import sqlite3
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -118,6 +120,15 @@ __all__ = [
     "get_db",
     "close_db",
     "_get_schema_version",
+    "insert_chunk",
+    "query_chunks_by_scope",
+    "query_chunks_by_source",
+    "delete_chunks_by_source",
+    "insert_node",
+    "query_nodes_by_scope",
+    "query_node_by_name_and_type",
+    "update_node_access",
+    "insert_edge",
 ]
 
 
@@ -226,3 +237,182 @@ def _content_hash(text: str) -> str:
 
 def _generate_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+# ============================================================================
+# Chunk CRUD (A5)
+# ============================================================================
+
+def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
+    """Insert a chunk row into the chunks table.
+
+    Auto-generates id and content_hash if not set on the ChunkRow.
+    Returns the chunk ID.
+    """
+    chunk_id = chunk.id or _generate_id()
+    content_hash = chunk.content_hash or _content_hash(chunk.content)
+
+    conn.execute(
+        "INSERT INTO chunks "
+        "(id, content, source_file, source_type, section, scope, entry_type, "
+        "chunk_index, created_at, content_hash, simhash, salience, access_count, "
+        "last_accessed, source_sessions, evidence_count, entities) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            chunk_id, chunk.content, chunk.source_file, chunk.source_type,
+            chunk.section, chunk.scope, chunk.entry_type, chunk.chunk_index,
+            chunk.created_at, content_hash, chunk.simhash, chunk.salience,
+            chunk.access_count, chunk.last_accessed, chunk.source_sessions,
+            chunk.evidence_count, chunk.entities,
+        ),
+    )
+    return chunk_id
+
+
+# Column list is the single source of truth for SELECT order.
+# _row_to_chunk maps by position -- keep these two in sync.
+_CHUNK_COLUMNS = (
+    "id, content, source_file, source_type, section, scope, entry_type, "
+    "chunk_index, created_at, content_hash, simhash, salience, access_count, "
+    "last_accessed, source_sessions, evidence_count, entities"
+)
+
+
+def _row_to_chunk(row: tuple) -> ChunkRow:
+    """Convert a raw SQLite row tuple to a ChunkRow dataclass.
+
+    Column order must match _CHUNK_COLUMNS exactly.
+    """
+    return ChunkRow(
+        id=row[0], content=row[1], source_file=row[2], source_type=row[3],
+        section=row[4], scope=row[5], entry_type=row[6], chunk_index=row[7],
+        created_at=row[8], content_hash=row[9], simhash=row[10],
+        salience=row[11], access_count=row[12], last_accessed=row[13],
+        source_sessions=row[14], evidence_count=row[15], entities=row[16],
+    )
+
+
+def query_chunks_by_scope(
+    conn: sqlite3.Connection, scope: str
+) -> list[ChunkRow]:
+    """Query all chunks matching the given scope."""
+    rows = conn.execute(
+        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE scope = ?", (scope,)
+    ).fetchall()
+    return [_row_to_chunk(r) for r in rows]
+
+
+def query_chunks_by_source(
+    conn: sqlite3.Connection, source_file: str
+) -> list[ChunkRow]:
+    """Query all chunks from a specific source file."""
+    rows = conn.execute(
+        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE source_file = ?",
+        (source_file,),
+    ).fetchall()
+    return [_row_to_chunk(r) for r in rows]
+
+
+def delete_chunks_by_source(
+    conn: sqlite3.Connection, source_file: str
+) -> int:
+    """Delete all chunks from a specific source file. Returns count deleted."""
+    cursor = conn.execute(
+        "DELETE FROM chunks WHERE source_file = ?", (source_file,)
+    )
+    return cursor.rowcount
+
+
+# ============================================================================
+# Node and Edge CRUD (A6)
+# ============================================================================
+
+# Column list is the single source of truth for SELECT order.
+# _row_to_node maps by position -- keep these two in sync.
+_NODE_COLUMNS = (
+    "id, name, type, description, scope, access_count, last_accessed, "
+    "salience, created_at, content_hash, simhash, source_sessions, "
+    "evidence_count, consolidated"
+)
+
+
+def _row_to_node(row: tuple) -> NodeRow:
+    """Convert a raw SQLite row tuple to a NodeRow dataclass.
+
+    Column order must match _NODE_COLUMNS exactly.
+    """
+    return NodeRow(
+        id=row[0], name=row[1], type=row[2], description=row[3],
+        scope=row[4], access_count=row[5], last_accessed=row[6],
+        salience=row[7], created_at=row[8], content_hash=row[9],
+        simhash=row[10], source_sessions=row[11], evidence_count=row[12],
+        consolidated=row[13],
+    )
+
+
+def insert_node(conn: sqlite3.Connection, node: NodeRow) -> str:
+    """Insert a node row into the nodes table. Returns the node ID."""
+    node_id = node.id or _generate_id()
+    conn.execute(
+        "INSERT INTO nodes "
+        "(id, name, type, description, scope, access_count, last_accessed, "
+        "salience, created_at, content_hash, simhash, source_sessions, "
+        "evidence_count, consolidated) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            node_id, node.name, node.type, node.description, node.scope,
+            node.access_count, node.last_accessed, node.salience,
+            node.created_at, node.content_hash, node.simhash,
+            node.source_sessions, node.evidence_count, node.consolidated,
+        ),
+    )
+    return node_id
+
+
+def query_nodes_by_scope(
+    conn: sqlite3.Connection, scope: str
+) -> list[NodeRow]:
+    """Query all nodes matching the given scope."""
+    rows = conn.execute(
+        f"SELECT {_NODE_COLUMNS} FROM nodes WHERE scope = ?", (scope,)
+    ).fetchall()
+    return [_row_to_node(r) for r in rows]
+
+
+def query_node_by_name_and_type(
+    conn: sqlite3.Connection, name: str, node_type: str
+) -> Optional[NodeRow]:
+    """Query a single node by name and type. Returns None if not found."""
+    row = conn.execute(
+        f"SELECT {_NODE_COLUMNS} FROM nodes WHERE name = ? AND type = ?",
+        (name, node_type),
+    ).fetchone()
+    return _row_to_node(row) if row else None
+
+
+def update_node_access(conn: sqlite3.Connection, node_id: str) -> None:
+    """Increment access_count and set last_accessed to now (UTC ISO)."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn.execute(
+        "UPDATE nodes SET access_count = access_count + 1, "
+        "last_accessed = ? WHERE id = ?",
+        (now, node_id),
+    )
+
+
+def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
+    """Insert an edge row into the edges table. Returns the edge ID."""
+    edge_id = edge.id or _generate_id()
+    conn.execute(
+        "INSERT INTO edges "
+        "(id, source, target, type, fact, properties, created_at, "
+        "valid_from, valid_to, expired_at, weight, source_sessions) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            edge_id, edge.source, edge.target, edge.type, edge.fact,
+            edge.properties, edge.created_at, edge.valid_from,
+            edge.valid_to, edge.expired_at, edge.weight,
+            edge.source_sessions,
+        ),
+    )
+    return edge_id
