@@ -12,12 +12,10 @@ Requirements: Python 3.9+
 """
 
 import hashlib
-import re
 import sqlite3
 import sys
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -26,7 +24,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from memory_utils import get_db_path, get_memory_dir  # noqa: E402
+from memory_utils import get_db_path  # noqa: E402
 
 # Schema version -- increment when schema changes require migration
 SCHEMA_VERSION = 1
@@ -116,6 +114,10 @@ __all__ = [
     "ChunkRow",
     "NodeRow",
     "EdgeRow",
+    "ensure_db",
+    "get_db",
+    "close_db",
+    "_get_schema_version",
 ]
 
 
@@ -175,3 +177,52 @@ class EdgeRow:
     weight: float = 1.0
     source_sessions: Optional[str] = None
     id: Optional[str] = None  # Auto-generated if None
+
+
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    return conn.execute('PRAGMA user_version').fetchone()[0]
+
+
+def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
+    pass  # v1 is the initial schema -- no migrations needed yet
+
+
+def ensure_db() -> sqlite3.Connection:
+    db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('PRAGMA foreign_keys=ON')
+    current_version = _get_schema_version(conn)
+    conn.executescript(SCHEMA_DDL)
+    if current_version < SCHEMA_VERSION:
+        _migrate_schema(conn, current_version)
+    assert isinstance(SCHEMA_VERSION, int), 'SCHEMA_VERSION must be int'
+    conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+    conn.commit()
+    return conn
+
+
+def get_db() -> sqlite3.Connection:
+    db_path = get_db_path()
+    if not db_path.exists():
+        raise FileNotFoundError(f'Memory database not found: {db_path}')
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('PRAGMA foreign_keys=ON')
+    return conn
+
+
+def close_db(conn: sqlite3.Connection) -> None:
+    if conn:
+        conn.close()
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+
+
+def _generate_id() -> str:
+    return uuid.uuid4().hex[:12]
