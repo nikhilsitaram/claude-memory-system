@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Storage Foundation Implementation Plan
@@ -461,9 +461,9 @@ python3 -m pytest tests/test_memory_utils.py::TestGetDbPath -v
 
 **Verification:** `python3 -c "from storage import SCHEMA_VERSION, ChunkRow, NodeRow, EdgeRow; print('OK')"` -- imports succeed. `python3 -m pytest tests/test_storage.py::TestSchemaCreation -v` -- schema tests still RED (no functions yet, but constants importable)
 
-**Done when:** `SCHEMA_VERSION`, `SCHEMA_DDL`, and all dataclass definitions (`ChunkRow`, `NodeRow`, `EdgeRow`) are importable from `storage`. The DDL string matches the design doc schema exactly (including all provenance columns from #55 and simhash from #53). Tests still fail because `ensure_db` etc. are not yet implemented.
+**Done when:** `SCHEMA_VERSION`, `SCHEMA_DDL`, `__all__`, and all dataclass definitions (`ChunkRow`, `NodeRow`, `EdgeRow`) are importable from `storage`. The DDL string matches the design doc schema exactly (including all provenance columns from #55 and simhash from #53). Tests still fail because `ensure_db` etc. are not yet implemented.
 
-**Avoid:** Do not implement any functions yet -- only constants and dataclasses. Do not add `vec_chunks` virtual table to the DDL -- sqlite-vec is a Worktree 3 dependency; we define the SQL constant but gate creation behind a `has_sqlite_vec()` check (added when Worktree 3 lands). Do not use `TypedDict` -- use `@dataclass` for consistency with existing `synthesis.py` patterns.
+**Avoid:** Do not implement any functions yet -- only constants, `__all__`, and dataclasses. Do not add `vec_chunks` virtual table to the DDL -- sqlite-vec is a Worktree 3 dependency; we define the SQL constant but gate creation behind a `has_sqlite_vec()` check (added when Worktree 3 lands). Do not use `TypedDict` -- use `@dataclass` for consistency with existing `synthesis.py` patterns.
 
 **Step 1: Create storage.py with schema version and DDL string**
 
@@ -582,9 +582,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
 """
 ```
 
-**Step 2: Add dataclass definitions**
+**Step 2: Add `__all__` exports**
 
-Append to `scripts/storage.py` after the DDL constants:
+Append to `scripts/storage.py` after the DDL constants (before the dataclasses). This list will be extended in A4-A6 as functions are added.
+
+```python
+__all__ = [
+    "SCHEMA_VERSION",
+    "SCHEMA_DDL",
+    "VEC_CHUNKS_DDL",
+    "ChunkRow",
+    "NodeRow",
+    "EdgeRow",
+]
+```
+
+**Step 3: Add dataclass definitions**
+
+Append to `scripts/storage.py` after the `__all__` list:
 
 ```python
 @dataclass
@@ -653,20 +668,36 @@ class EdgeRow:
 
 **Verification:** `python3 -m pytest tests/test_storage.py::TestSchemaCreation -v` -- all schema tests GREEN
 
-**Done when:** `ensure_db()`, `get_db()`, and `close_db()` are implemented. `ensure_db()` creates the DB file with WAL mode, `busy_timeout=5000`, `foreign_keys=ON`, sets `user_version` to `SCHEMA_VERSION`, and executes `SCHEMA_DDL`. Calling `ensure_db()` twice does not drop existing data (idempotent via `CREATE IF NOT EXISTS`). The `TestSchemaCreation` class passes.
+**Done when:** `ensure_db()`, `get_db()`, `close_db()`, `_get_schema_version()`, and `_migrate_schema()` are implemented. `ensure_db()` creates the DB file with WAL mode, `busy_timeout=5000`, `foreign_keys=ON`, sets `user_version` to `SCHEMA_VERSION`, and executes `SCHEMA_DDL`. If the DB already exists with an older version, `_migrate_schema()` is called (no-op for v1). Calling `ensure_db()` twice does not drop existing data (idempotent via `CREATE IF NOT EXISTS`). The `TestSchemaCreation` class passes. `__all__` is extended with `"ensure_db"`, `"get_db"`, `"close_db"`, `"_get_schema_version"`.
 
 **Avoid:** Do not attempt to create `vec_chunks` -- that requires the sqlite-vec extension which is a Worktree 3 dependency. The `VEC_CHUNKS_DDL` constant exists for documentation but is not executed. Do not use connection pooling -- each caller opens/closes its own connection per the design doc.
 
-**Step 1: Implement ensure_db**
+**Step 1: Implement ensure_db and schema migration stub**
 
 Add to `scripts/storage.py`:
 
 ```python
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    """Read the current schema version from the database."""
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
+    """Run incremental schema migrations from current_version to SCHEMA_VERSION.
+
+    Currently a no-op for v1. Future schema changes add elif branches:
+        if current_version < 2:
+            conn.executescript("ALTER TABLE chunks ADD COLUMN ...")
+    """
+    pass  # v1 is the initial schema -- no migrations needed yet
+
+
 def ensure_db() -> sqlite3.Connection:
     """Create or open the memory database with WAL mode and full schema.
 
     Idempotent -- safe to call multiple times. Uses CREATE IF NOT EXISTS
-    so existing data is never dropped.
+    so existing data is never dropped. If the DB exists with an older
+    schema version, runs incremental migrations.
 
     Returns an open connection. Caller must call close_db() when done.
     """
@@ -677,7 +708,15 @@ def ensure_db() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
+
+    current_version = _get_schema_version(conn)
     conn.executescript(SCHEMA_DDL)
+
+    if current_version < SCHEMA_VERSION:
+        _migrate_schema(conn, current_version)
+
+    # PRAGMA doesn't support parameterized queries; guard the constant type
+    assert isinstance(SCHEMA_VERSION, int), "SCHEMA_VERSION must be int"
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
     return conn
@@ -744,7 +783,7 @@ All 8 tests in `TestSchemaCreation` should pass. Other test classes still fail (
 
 **Verification:** `python3 -m pytest tests/test_storage.py::TestChunkCRUD -v` -- all chunk tests GREEN
 
-**Done when:** `insert_chunk()`, `query_chunks_by_scope()`, `query_chunks_by_source()`, and `delete_chunks_by_source()` are implemented. `insert_chunk` auto-generates `id` and `content_hash` when not provided. All `TestChunkCRUD` tests pass.
+**Done when:** `insert_chunk()`, `query_chunks_by_scope()`, `query_chunks_by_source()`, and `delete_chunks_by_source()` are implemented. `insert_chunk` auto-generates `id` and `content_hash` when not provided. All `TestChunkCRUD` tests pass. `__all__` is extended with `"insert_chunk"`, `"query_chunks_by_scope"`, `"query_chunks_by_source"`, `"delete_chunks_by_source"`.
 
 **Avoid:** Do not auto-commit inside CRUD functions -- let callers control transactions. Use `conn.commit()` only after batch operations in higher-level functions. The test fixture's `ensure_db()` already commits the schema, and individual test methods can rely on SQLite's implicit transaction for single-connection reads of uncommitted writes (autocommit behavior in Python sqlite3 for DML within the same connection).
 
@@ -780,8 +819,20 @@ def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
 **Step 2: Implement query functions**
 
 ```python
+# Column list is the single source of truth for SELECT order.
+# _row_to_chunk maps by position -- keep these two in sync.
+_CHUNK_COLUMNS = (
+    "id, content, source_file, source_type, section, scope, entry_type, "
+    "chunk_index, created_at, content_hash, simhash, salience, access_count, "
+    "last_accessed, source_sessions, evidence_count, entities"
+)
+
+
 def _row_to_chunk(row: tuple) -> ChunkRow:
-    """Convert a raw SQLite row tuple to a ChunkRow dataclass."""
+    """Convert a raw SQLite row tuple to a ChunkRow dataclass.
+
+    Column order must match _CHUNK_COLUMNS exactly.
+    """
     return ChunkRow(
         id=row[0], content=row[1], source_file=row[2], source_type=row[3],
         section=row[4], scope=row[5], entry_type=row[6], chunk_index=row[7],
@@ -789,13 +840,6 @@ def _row_to_chunk(row: tuple) -> ChunkRow:
         salience=row[11], access_count=row[12], last_accessed=row[13],
         source_sessions=row[14], evidence_count=row[15], entities=row[16],
     )
-
-
-_CHUNK_COLUMNS = (
-    "id, content, source_file, source_type, section, scope, entry_type, "
-    "chunk_index, created_at, content_hash, simhash, salience, access_count, "
-    "last_accessed, source_sessions, evidence_count, entities"
-)
 
 
 def query_chunks_by_scope(
@@ -848,15 +892,27 @@ All 5 tests in `TestChunkCRUD` should pass.
 
 **Verification:** `python3 -m pytest tests/test_storage.py::TestNodeCRUD tests/test_storage.py::TestEdgeCRUD -v` -- all node/edge tests GREEN
 
-**Done when:** `insert_node()`, `query_nodes_by_scope()`, `query_node_by_name_and_type()`, `update_node_access()`, and `insert_edge()` are implemented. All `TestNodeCRUD` and `TestEdgeCRUD` tests pass. Full test suite (`python3 -m pytest tests/test_storage.py -v`) is GREEN.
+**Done when:** `insert_node()`, `query_nodes_by_scope()`, `query_node_by_name_and_type()`, `update_node_access()`, and `insert_edge()` are implemented. All `TestNodeCRUD` and `TestEdgeCRUD` tests pass. Full test suite (`python3 -m pytest tests/test_storage.py -v`) is GREEN. `__all__` is extended with `"insert_node"`, `"query_nodes_by_scope"`, `"query_node_by_name_and_type"`, `"update_node_access"`, `"insert_edge"`.
 
 **Avoid:** Do not add complex graph traversal queries yet -- keep to simple single-table CRUD. Graph traversal is a Phase 2 concern. Do not add cascade deletes on edges when nodes are deleted -- that logic belongs to higher-level migration/cleanup functions.
 
 **Step 1: Implement node CRUD**
 
 ```python
+# Column list is the single source of truth for SELECT order.
+# _row_to_node maps by position -- keep these two in sync.
+_NODE_COLUMNS = (
+    "id, name, type, description, scope, access_count, last_accessed, "
+    "salience, created_at, content_hash, simhash, source_sessions, "
+    "evidence_count, consolidated"
+)
+
+
 def _row_to_node(row: tuple) -> NodeRow:
-    """Convert a raw SQLite row tuple to a NodeRow dataclass."""
+    """Convert a raw SQLite row tuple to a NodeRow dataclass.
+
+    Column order must match _NODE_COLUMNS exactly.
+    """
     return NodeRow(
         id=row[0], name=row[1], type=row[2], description=row[3],
         scope=row[4], access_count=row[5], last_accessed=row[6],
@@ -864,13 +920,6 @@ def _row_to_node(row: tuple) -> NodeRow:
         simhash=row[10], source_sessions=row[11], evidence_count=row[12],
         consolidated=row[13],
     )
-
-
-_NODE_COLUMNS = (
-    "id, name, type, description, scope, access_count, last_accessed, "
-    "salience, created_at, content_hash, simhash, source_sessions, "
-    "evidence_count, consolidated"
-)
 
 
 def insert_node(conn: sqlite3.Connection, node: NodeRow) -> str:
@@ -977,7 +1026,7 @@ All tests in `TestSchemaCreation`, `TestChunkCRUD`, `TestNodeCRUD`, and `TestEdg
 
 **Verification:** `python3 -m pytest tests/test_migration.py -v`
 
-**Done when:** `migrate_markdown_to_db()` scans all LTM files (global + project) and daily files, parses them into chunks using entry-level boundaries, and inserts them into the DB. Content hashing ensures re-running migration skips unchanged content. Running migration twice on the same files produces no duplicates. The function returns a `MigrationStats` dataclass with counts.
+**Done when:** `migrate_markdown_to_db()` scans all LTM files (global + project) and daily files, parses them into chunks using entry-level boundaries, and inserts them into the DB. Content hashing ensures re-running migration skips unchanged content. Running migration twice on the same files produces no duplicates. The function returns a `MigrationStats` dataclass with counts. `__all__` is extended with `"MigrationStats"`, `"migrate_markdown_to_db"`.
 
 **Avoid:** Do not modify any existing markdown files during migration -- the DB is additive. Do not chunk at sub-paragraph level -- each `- (date) [type] description` LTM entry is one chunk, and each `- [scope/type] description` daily entry is one chunk. Paragraph chunking with overlap is Worktree 2's responsibility (`chunking.py`); this migration uses the natural entry boundaries. Do not import from `chunking.py` since it does not exist yet.
 
@@ -1277,12 +1326,28 @@ class TestParseLtmEntries:
     def test_skips_non_entry_lines(self):
         content = (
             "# Title\n"
-            "## Pinned\n"
-            "- Important item without date\n"
+            "Some descriptive text\n"
             "<!-- comment -->\n"
         )
         chunks = _parse_ltm_entries(content, "test.md", "global")
         assert len(chunks) == 0
+
+    def test_skips_pinned_undated_entries(self):
+        """Pinned entries lack dates and are intentionally excluded from migration.
+
+        These are human-curated items that don't follow the dated entry pattern.
+        They remain in markdown only -- the DB indexes dated entries.
+        """
+        content = (
+            "## Pinned\n"
+            "- Important pinned item (no date)\n"
+            "- Another pinned item\n\n"
+            "## Key Learnings\n"
+            "- (2026-03-01) [pattern] This one should be parsed\n"
+        )
+        chunks = _parse_ltm_entries(content, "test.md", "global")
+        assert len(chunks) == 1
+        assert chunks[0].entry_type == "pattern"
 
     def test_tracks_section_headers(self):
         content = (
@@ -1430,7 +1495,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import check_python_version, get_db_path  # noqa: E402
-from storage import close_db, get_db  # noqa: E402
+from storage import _get_schema_version, close_db, get_db  # noqa: E402
 
 # Alert thresholds
 COLD_RATIO_THRESHOLD = 0.8  # Alert if 80%+ chunks are cold
@@ -1451,6 +1516,7 @@ class HealthReport:
     db_size_bytes: int = 0
     ltm_chunks: int = 0
     daily_chunks: int = 0
+    schema_version: int = 0
 
 
 def health_report(conn: sqlite3.Connection) -> HealthReport:
@@ -1459,6 +1525,7 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     Returns a HealthReport dataclass. All queries are read-only.
     """
     report = HealthReport()
+    report.schema_version = _get_schema_version(conn)
 
     # Chunk statistics
     row = conn.execute("""
@@ -1547,6 +1614,7 @@ def format_report(report: HealthReport, alerts: list[str]) -> str:
         f"  Invalid edges: {report.invalidated_edges}",
         "",
         f"  DB size:       {report.db_size_bytes / 1024:.1f} KB",
+        f"  Schema ver:    {report.schema_version}",
     ]
 
     if alerts:
@@ -1630,6 +1698,7 @@ from health import (
     health_report,
 )
 from storage import (
+    SCHEMA_VERSION,
     ChunkRow,
     NodeRow,
     close_db,
@@ -1660,6 +1729,10 @@ class TestHealthReport:
         assert report.total_chunks == 0
         assert report.graph_nodes == 0
         assert report.avg_salience == 0.0
+
+    def test_schema_version(self, db):
+        report = health_report(db)
+        assert report.schema_version == SCHEMA_VERSION
 
     def test_chunk_counts(self, db):
         for i in range(5):
@@ -1853,23 +1926,27 @@ Add to `tests/test_install.py`:
 
 
 class TestCreateDatabase:
-    def test_scripts_list_includes_storage(self):
-        """Verify storage.py is in the link list."""
-        import inspect
-        source = inspect.getsource(install.link_scripts)
-        assert '"storage.py"' in source
+    def test_link_scripts_includes_storage(self, tmp_path):
+        """Verify storage.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "storage.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "storage.py").exists()
 
-    def test_scripts_list_includes_health(self):
-        """Verify health.py is in the link list."""
-        import inspect
-        source = inspect.getsource(install.link_scripts)
-        assert '"health.py"' in source
-
-    def test_create_database_called_in_main(self):
-        """Verify create_database is called during install."""
-        import inspect
-        source = inspect.getsource(install.main)
-        assert "create_database" in source
+    def test_link_scripts_includes_health(self, tmp_path):
+        """Verify health.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "health.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "health.py").exists()
 
     def test_create_database_handles_import_error(self, capsys):
         """Verify graceful degradation if storage module missing."""
