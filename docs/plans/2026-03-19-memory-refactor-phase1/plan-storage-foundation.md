@@ -15,19 +15,41 @@ status: In Development
 ---
 
 ## Phase A -- Schema and Connection Layer
-**Status:** Not Started | **Rationale:** All subsequent tasks depend on the DB file existing with the correct schema and connection helpers being available. This phase establishes the foundation that Phase B (migration, health, install integration) builds upon.
+**Status:** Complete | **Rationale:** All subsequent tasks depend on the DB file existing with the correct schema and connection helpers being available. This phase establishes the foundation that Phase B (migration, health, install integration) builds upon.
 
 ### Phase A Checklist
-- [ ] A1: Integration test skeleton for storage module
-- [ ] A2: Add get_db_path to memory_utils
-- [ ] A3: Schema constants and DDL
-- [ ] A4: Connection helpers and DB lifecycle
-- [ ] A5: CRUD operations for chunks table
-- [ ] A6: CRUD operations for nodes and edges tables
+- [x] A1: Integration test skeleton for storage module
+- [x] A2: Add get_db_path to memory_utils
+- [x] A3: Schema constants and DDL
+- [x] A4: Connection helpers and DB lifecycle
+- [x] A5: CRUD operations for chunks table
+- [x] A6: CRUD operations for nodes and edges tables
 
 ### Phase A Completion Notes
 <!-- Written by dispatcher after all tasks complete.
      Implementation review changes appended here by orchestrator. -->
+
+**Completed:** 2026-03-19 | **HEAD:** 8939a69
+
+**Summary:** All 6 tasks (A1-A6) implemented and verified. The `scripts/storage.py` module provides the complete SQLite storage foundation with schema creation, connection lifecycle, and CRUD operations for chunks, nodes, and edges.
+
+**Test results:** 19/19 tests pass in `test_storage.py`, 148/148 pass in `test_memory_utils.py`.
+
+**Public API (storage.py):**
+- Constants: `SCHEMA_VERSION` (1), `SCHEMA_DDL`, `VEC_CHUNKS_DDL`
+- Dataclasses: `ChunkRow`, `NodeRow`, `EdgeRow`
+- Lifecycle: `ensure_db()` -> Connection, `get_db()` -> Connection, `close_db(conn)`
+- Schema: `_get_schema_version(conn)` -> int
+- Chunk CRUD: `insert_chunk(conn, chunk)` -> str, `query_chunks_by_scope(conn, scope)` -> list[ChunkRow], `query_chunks_by_source(conn, source_file)` -> list[ChunkRow], `delete_chunks_by_source(conn, source_file)` -> int
+- Node CRUD: `insert_node(conn, node)` -> str, `query_nodes_by_scope(conn, scope)` -> list[NodeRow], `query_node_by_name_and_type(conn, name, type)` -> Optional[NodeRow], `update_node_access(conn, node_id)`
+- Edge CRUD: `insert_edge(conn, edge)` -> str
+- Internal: `_content_hash(text)` -> str, `_generate_id()` -> str
+
+**Path helper (memory_utils.py):** `get_db_path()` -> Path (returns `get_memory_dir() / "memory.db"`)
+
+**Deviations:**
+- A4/A5/A6 committed together (single commit) because test_storage.py imports all functions at module level -- no individual task could produce a green test run in isolation.
+- Fixed missing `datetime`/`timezone` and `re` imports that were in the plan spec but not in the A3 commit.
 
 ### Phase A Tasks
 
@@ -1018,7 +1040,7 @@ All tests in `TestSchemaCreation`, `TestChunkCRUD`, `TestNodeCRUD`, and `TestEdg
 ### Phase B Tasks
 
 #### B1: Markdown-to-DB migration pipeline
-> **Handoff from A6:** [TBD -- Phase A dispatcher fills in actual details after completing A6: confirm storage.py public API (ensure_db, close_db, insert_chunk, ChunkRow, get_db_path, _content_hash, get_memory_dir), any signature changes from planned design]
+> **Handoff from A6:** Confirmed -- storage.py public API matches planned design exactly. Key imports for B1: `ensure_db`, `close_db`, `insert_chunk`, `ChunkRow`, `_content_hash`, `query_chunks_by_source` from `storage`; `get_db_path`, `get_memory_dir` from `memory_utils`. No signature changes from planned design. The `re` module is already imported in storage.py.
 
 **Files:**
 - Modify: `scripts/storage.py`
@@ -1450,7 +1472,7 @@ python3 -m pytest tests/test_migration.py -v
 ---
 
 #### B2: Health diagnostics script
-> **Handoff from A6:** [TBD -- Phase A dispatcher fills in actual details after completing A6: confirm storage.py exports (get_db, close_db, get_db_path, ChunkRow, NodeRow, insert_chunk, insert_node), any signature changes]
+> **Handoff from A6:** Confirmed -- storage.py exports match planned design. Key imports for B2: `get_db`, `close_db`, `_get_schema_version` from `storage`; `get_db_path` from `memory_utils`. For test fixtures: `ensure_db`, `insert_chunk`, `insert_node`, `ChunkRow`, `NodeRow`, `SCHEMA_VERSION` from `storage`. No signature changes.
 
 **Files:**
 - Create: `scripts/health.py`
@@ -1852,7 +1874,7 @@ python3 -m pytest tests/test_health.py -v
 ---
 
 #### B3: Install.py integration
-> **Handoff from A6:** [TBD -- Phase A dispatcher fills in actual details after completing A6: confirm storage.py exports (ensure_db, close_db, migrate_markdown_to_db, MigrationStats)]
+> **Handoff from A6:** Confirmed -- storage.py exports match planned design. Key imports for B3: `ensure_db`, `close_db`, `migrate_markdown_to_db` from `storage`. Note: `MigrationStats` and `migrate_markdown_to_db` will be added to storage.py by B1 before B3 runs. No signature changes from planned design.
 
 **Files:**
 - Modify: `install.py`
