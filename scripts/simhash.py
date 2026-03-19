@@ -104,6 +104,13 @@ def hamming_distance(a: int, b: int) -> int:
 
     Returns:
         Number of differing bit positions (0-64).
+
+    Warning:
+        Both arguments must be non-negative (unsigned) 64-bit integers.
+        Mixing a signed value (e.g., read back from SQLite as a negative int)
+        with an unsigned value produces silently wrong results because
+        bin(a ^ b).count("1") counts extra sign-extension bits.
+        Cast SQLite values with: value & 0xFFFFFFFFFFFFFFFF before comparing.
     """
     return bin(a ^ b).count("1")
 
@@ -122,5 +129,9 @@ def are_near_duplicates(
 
     Returns:
         True if Hamming distance <= threshold.
+
+    Warning:
+        Both arguments must be non-negative (unsigned) 64-bit integers.
+        See hamming_distance() for details on the signed/unsigned footgun.
     """
     return hamming_distance(a, b) <= threshold
