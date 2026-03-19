@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Text Processing Pipeline — Implementation Plan
@@ -20,12 +20,14 @@ status: Not Yet Started
 **Status:** Not Started | **Rationale:** SimHash is a standalone module with no dependencies on chunking. Building it first means chunking (Phase B) can import and use it to populate the `simhash` field on every chunk.
 
 ### Phase A Checklist
-- [ ] A1: Create `scripts/simhash.py` with SimHash computation and Hamming distance
-- [ ] A2: Create `tests/test_simhash.py` with full test coverage
+- [x] A1: Create `scripts/simhash.py` with SimHash computation and Hamming distance
+- [x] A2: Create `tests/test_simhash.py` with full test coverage
 
 ### Phase A Completion Notes
-<!-- Written by dispatcher after all tasks complete.
-     Implementation review changes appended here by orchestrator. -->
+
+**Date:** 2026-03-19
+**Summary:** Created `scripts/simhash.py` with the standard SimHash algorithm: 3-shingle tokenization, SHA-256-truncated 64-bit per-shingle hashes, bit-accumulator fingerprint. Exports `compute_simhash(text) -> int`, `hamming_distance(a, b) -> int`, `are_near_duplicates(a, b, threshold) -> bool`, plus constants `SIMHASH_BITS=64` and `DEFAULT_HAMMING_THRESHOLD=3`. Created `tests/test_simhash.py` with 22 tests covering all required categories.
+**Deviations:** A2 — `test_similar_texts_close_hashes` assertion changed from `dist <= DEFAULT_HAMMING_THRESHOLD * 3` (bound of 9) to a relative comparison `dist_similar < dist_different` plus `dist_similar < 32` — Rule 1 (bug fix: the plan's absolute bound of 9 doesn't hold for short texts with 3-shingles; actual distance for a 1-word substitution is ~18 due to cascading shingle changes).
 
 ### Phase A Tasks
 
@@ -39,6 +41,8 @@ status: Not Yet Started
 **Done when:** `simhash.py` exports three functions: `compute_simhash(text) -> int`, `hamming_distance(a, b) -> int`, `are_near_duplicates(a, b, threshold) -> bool`. Module imports cleanly.
 
 **Avoid:** Do not use external libraries (e.g., `simhash` PyPI package) — the algorithm is ~30 lines and adding a dependency is not worth it. Do not use 128-bit hashes — the design specifies 64-bit and the SQLite `simhash INTEGER` column stores a 64-bit signed int.
+
+**Note:** `compute_simhash` returns unsigned 64-bit integers (range `[0, 2^64)`). SQLite `INTEGER` stores signed 64-bit values. Values `>= 2^63` must be converted at the storage boundary (in `storage-foundation` worktree): `signed = val - (1 << 64) if val >= (1 << 63) else val`. This module intentionally returns unsigned values — conversion is the storage layer's responsibility.
 
 **Step 1: Create the module**
 
@@ -225,13 +229,11 @@ class TestComputeSimhash:
         result = compute_simhash("hello world this is a test of the simhash algorithm")
         assert 0 <= result < (1 << SIMHASH_BITS)
 
-    def test_deterministic(self):
+    def test_deterministic_across_calls(self):
         text = "implementing the chunking pipeline for memory files"
-        assert compute_simhash(text) == compute_simhash(text)
-
-    def test_identical_texts_same_hash(self):
-        text = "fix the bug in the synthesis pipeline that causes duplicate entries"
-        assert compute_simhash(text) == compute_simhash(text)
+        result_a = compute_simhash(text)
+        result_b = compute_simhash(text)
+        assert result_a == result_b
 
     def test_similar_texts_close_hashes(self):
         a = "added pytest fixtures for memory loading with temporary directories"
@@ -334,7 +336,7 @@ class TestAreNearDuplicates:
 
 Run: `python3 -m pytest tests/test_simhash.py -v`
 
-Expected: All tests pass (16+ tests).
+Expected: All tests pass (15+ tests).
 
 **Step 3: Commit**
 
@@ -366,12 +368,12 @@ near-duplicate detection. 16 tests."
 
 #### B1: Create `scripts/chunking.py` with Chunk dataclass and LTM paragraph chunking
 
-> **Handoff from A1:** [TBD — Phase A dispatcher fills in actual details after completing A1. Expected: `scripts/simhash.py` exports `compute_simhash(text: str) -> int`.]
+> **Handoff from A1:** `scripts/simhash.py` created at commit `8d94192`. Exports: `compute_simhash(text: str) -> int` (64-bit unsigned SimHash fingerprint; returns 0 for empty/whitespace-only text), `hamming_distance(a: int, b: int) -> int`, `are_near_duplicates(a: int, b: int, threshold: int = DEFAULT_HAMMING_THRESHOLD) -> bool`. Constants: `SIMHASH_BITS = 64`, `DEFAULT_HAMMING_THRESHOLD = 3`. Import with `from simhash import compute_simhash` (conftest.py adds `scripts/` to sys.path).
 
 **Files:**
 - Create: `scripts/chunking.py`
 
-**Verification:** `python3 -c "from chunking import Chunk, chunk_ltm_file, chunk_daily_file, DEFAULT_OVERLAP_RATIO; print('imports OK')"`
+**Verification:** `python3 -c "from chunking import Chunk, chunk_ltm_file, chunk_daily_file, DEFAULT_OVERLAP_RATIO, MAX_OVERLAP_PARAGRAPHS; print('imports OK')"`
 
 **Done when:** `chunking.py` defines the `Chunk` dataclass with all 10 fields specified in the design doc (`content`, `source_file`, `source_type`, `section`, `chunk_index`, `created_at`, `content_hash`, `simhash`, `scope`, `entry_type`). `chunk_ltm_file()` splits LTM content into paragraph-level chunks with configurable overlap, respecting `## Section` boundaries via `parse_markdown_sections()`. Module imports cleanly.
 
@@ -404,6 +406,7 @@ from simhash import compute_simhash
 __all__ = [
     "Chunk",
     "DEFAULT_OVERLAP_RATIO",
+    "MAX_OVERLAP_PARAGRAPHS",
     "chunk_ltm_file",
     "chunk_daily_file",
 ]
@@ -411,9 +414,17 @@ __all__ = [
 # Overlap ratio for paragraph-level chunking (10-20% as per design doc)
 DEFAULT_OVERLAP_RATIO = 0.15
 
+# Maximum number of preceding paragraphs to include as overlap context.
+# Caps the ratio-based calculation to prevent unbounded growth in large sections.
+MAX_OVERLAP_PARAGRAPHS = 2
+
 # Comment line pattern (replicates memory_utils._COMMENT_LINE_RE locally
 # to keep this module self-contained for its internal parsing)
 _COMMENT_RE = re.compile(r"^\s*<!--.*-->\s*$")
+
+# Footer patterns: structural metadata that should not become chunks
+_FOOTER_RE = re.compile(r"^---\s*$")
+_SYNTH_TIMESTAMP_RE = re.compile(r"^\*Last synthesized:.*\*\s*$")
 
 # LTM entry pattern: - (YYYY-MM-DD) [type] Description
 _LTM_ENTRY_RE = re.compile(
@@ -469,11 +480,15 @@ def _content_hash(text: str) -> str:
 
 
 def _is_content_line(line: str) -> bool:
-    """Check if a line has meaningful content (not blank, not a comment)."""
+    """Check if a line has meaningful content (not blank, not structural metadata)."""
     stripped = line.strip()
     if not stripped:
         return False
     if _COMMENT_RE.match(line):
+        return False
+    if _FOOTER_RE.match(stripped):
+        return False
+    if _SYNTH_TIMESTAMP_RE.match(stripped):
         return False
     return True
 
@@ -528,12 +543,15 @@ def _chunk_paragraphs_with_overlap(
     (e.g., "- (2026-01-15) [pattern] Description"). These are kept as
     individual chunks — overlap adds the preceding entry(ies) as context.
 
+    The overlap count is capped at MAX_OVERLAP_PARAGRAPHS to prevent
+    unbounded growth in large sections.
+
     Args:
         paragraphs: List of paragraph line-groups.
         overlap_ratio: Fraction of preceding paragraphs to include as overlap.
             0.0 = no overlap, 0.15 = ~15% overlap (1 paragraph lookback per ~7).
             The overlap count is at least 1 when ratio > 0 and there are
-            preceding paragraphs.
+            preceding paragraphs, and at most MAX_OVERLAP_PARAGRAPHS.
 
     Returns:
         List of chunk text strings.
@@ -541,8 +559,12 @@ def _chunk_paragraphs_with_overlap(
     if not paragraphs:
         return []
 
-    # Calculate overlap count: at least 1 if ratio > 0
-    overlap_count = max(1, round(len(paragraphs) * overlap_ratio)) if overlap_ratio > 0 else 0
+    # Calculate overlap count: at least 1 if ratio > 0, capped at MAX_OVERLAP_PARAGRAPHS
+    overlap_count = (
+        min(MAX_OVERLAP_PARAGRAPHS, max(1, round(len(paragraphs) * overlap_ratio)))
+        if overlap_ratio > 0
+        else 0
+    )
 
     chunks: list[str] = []
     for i, para in enumerate(paragraphs):
@@ -735,7 +757,7 @@ The implementation in B1 already handles these cases via `_DAILY_ENTRY_RE` and `
 
 #### B3: Create `tests/test_chunking.py` — LTM chunking tests
 
-> **Handoff from A2:** [TBD — Phase A dispatcher fills in actual details after completing A2. Expected: `simhash.py` fully tested, `compute_simhash()` returns deterministic 64-bit integers.]
+> **Handoff from A2:** `tests/test_simhash.py` created at commit `8d94192`. 22 tests, all passing. `compute_simhash()` verified deterministic, 64-bit unsigned, returns 0 for empty text, case-insensitive, punctuation-ignored. `hamming_distance()` and `are_near_duplicates()` fully tested including boundary and custom-threshold cases.
 
 **Files:**
 - Create: `tests/test_chunking.py`
@@ -757,6 +779,7 @@ import hashlib
 
 from chunking import (
     DEFAULT_OVERLAP_RATIO,
+    MAX_OVERLAP_PARAGRAPHS,
     Chunk,
     chunk_daily_file,
     chunk_ltm_file,
@@ -918,6 +941,25 @@ class TestChunkLtmFile:
         assert len(decision_chunks) == 1
         assert "Action entry" not in decision_chunks[0].content
 
+    def test_overlap_capped_at_max(self):
+        """Overlap count never exceeds MAX_OVERLAP_PARAGRAPHS even with many paragraphs."""
+        entries = []
+        for i in range(20):
+            entries.append(f"- (2026-01-{i+1:02d}) [implement] Entry number {i}\n")
+        content = "## Key Actions\n" + "\n".join(entries)
+        chunks = chunk_ltm_file(
+            content, "/tmp/ltm.md",
+            overlap_ratio=DEFAULT_OVERLAP_RATIO,
+        )
+        # Last chunk should contain at most MAX_OVERLAP_PARAGRAPHS preceding entries
+        last = chunks[-1]
+        overlap_entries = [
+            line for line in last.content.split("\n")
+            if line.startswith("- (") and "Entry number" in line
+        ]
+        # Current paragraph + at most MAX_OVERLAP_PARAGRAPHS overlap paragraphs
+        assert len(overlap_entries) <= MAX_OVERLAP_PARAGRAPHS + 1
+
     def test_comments_skipped(self):
         content = (
             "## Key Actions\n"
@@ -927,6 +969,20 @@ class TestChunkLtmFile:
         chunks = chunk_ltm_file(content, "/tmp/ltm.md")
         assert len(chunks) == 1
         assert "Subject to 30-day decay" not in chunks[0].content
+
+    def test_footer_separator_skipped(self):
+        """The --- footer separator is not chunked as content."""
+        content = (
+            "## Key Learnings\n"
+            "- (2026-01-15) [gotcha] Real entry\n"
+            "\n"
+            "---\n"
+            "*Last synthesized: 2026-01-15*\n"
+        )
+        chunks = chunk_ltm_file(content, "/tmp/ltm.md", overlap_ratio=0)
+        assert len(chunks) == 1
+        assert "---" not in chunks[0].content
+        assert "Last synthesized" not in chunks[0].content
 
     def test_content_hash_deterministic(self):
         content = "## Test\n- (2026-01-15) [pattern] Same content\n"
@@ -1283,11 +1339,10 @@ class TestChunkingIntegration:
             self.REALISTIC_LTM, "/tmp/global-ltm.md",
             scope="global", overlap_ratio=0,
         )
-        # About Me: 1 paragraph (2 lines), Pinned: 1, Key Actions: 3,
-        # Key Decisions: 1, Key Learnings: 1, preamble: 1 (# header line)
-        # Footer ("---" + "*Last synthesized*") may or may not produce a chunk
-        # depending on section parsing. At minimum we expect 7 content chunks.
-        assert len(chunks) >= 7
+        # Preamble: 1 ("# Long-Term Memory"), About Me: 1 (2 lines as 1 paragraph),
+        # Pinned: 1, Key Actions: 3, Key Decisions: 1, Key Learnings: 1
+        # Footer ("---" + "*Last synthesized*") is filtered by _is_content_line
+        assert len(chunks) == 8
 
     def test_ltm_all_chunks_have_valid_hashes(self):
         chunks = chunk_ltm_file(
