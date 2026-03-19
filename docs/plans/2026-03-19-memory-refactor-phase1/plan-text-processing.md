@@ -17,7 +17,7 @@ status: In Development
 ---
 
 ## Phase A — SimHash Fingerprinting
-**Status:** Not Started | **Rationale:** SimHash is a standalone module with no dependencies on chunking. Building it first means chunking (Phase B) can import and use it to populate the `simhash` field on every chunk.
+**Status:** Complete (2026-03-19) | **Rationale:** SimHash is a standalone module with no dependencies on chunking. Building it first means chunking (Phase B) can import and use it to populate the `simhash` field on every chunk.
 
 ### Phase A Checklist
 - [x] A1: Create `scripts/simhash.py` with SimHash computation and Hamming distance
@@ -28,6 +28,10 @@ status: In Development
 **Date:** 2026-03-19
 **Summary:** Created `scripts/simhash.py` with the standard SimHash algorithm: 3-shingle tokenization, SHA-256-truncated 64-bit per-shingle hashes, bit-accumulator fingerprint. Exports `compute_simhash(text) -> int`, `hamming_distance(a, b) -> int`, `are_near_duplicates(a, b, threshold) -> bool`, plus constants `SIMHASH_BITS=64` and `DEFAULT_HAMMING_THRESHOLD=3`. Created `tests/test_simhash.py` with 22 tests covering all required categories.
 **Deviations:** A2 — `test_similar_texts_close_hashes` assertion changed from `dist <= DEFAULT_HAMMING_THRESHOLD * 3` (bound of 9) to a relative comparison `dist_similar < dist_different` plus `dist_similar < 32` — Rule 1 (bug fix: the plan's absolute bound of 9 doesn't hold for short texts with 3-shingles; actual distance for a 1-word substitution is ~18 due to cascading shingle changes).
+
+**Implementation review fixes (9b4fe80):**
+- Added docstring warnings to `hamming_distance` and `are_near_duplicates` that both arguments must be non-negative unsigned 64-bit integers (signed/unsigned mixing gives wrong results)
+- Added `simhash.py` to `install.py` `link_scripts()` — deployed installations would have failed to import without this
 
 ### Phase A Tasks
 
