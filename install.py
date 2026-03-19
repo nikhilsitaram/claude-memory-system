@@ -19,6 +19,7 @@ Usage:
 Requirements: Python 3.9+
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,8 @@ from memory_utils import (  # noqa: E402
     load_json_file,
     save_json_file,
 )
+
+LAUNCHD_LABEL = "com.claude.memory-synthesis"
 
 
 def check_python_version() -> None:
@@ -276,6 +279,62 @@ def install_systemd_units(script_dir: Path) -> None:
     print("Installed systemd units (timer enabled)")
 
 
+def install_launchd_agent(python_cmd: str) -> None:
+    """Install a launchd user agent for periodic synthesis on macOS."""
+    import plistlib
+
+    launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
+    launch_agents_dir.mkdir(parents=True, exist_ok=True)
+
+    plist_path = launch_agents_dir / f"{LAUNCHD_LABEL}.plist"
+    scripts_dir = Path.home() / ".claude" / "scripts"
+    log_dir = Path.home() / "Library" / "Logs" / "claude-memory"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    home = str(Path.home())
+
+    # Resolve full path (launchd has minimal default PATH)
+    python_path = shutil.which(python_cmd) or python_cmd
+
+    plist = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": [python_path, str(scripts_dir / "synthesis_cron.py")],
+        "StartInterval": 7200,  # Every 2 hours (matches systemd timer)
+        "StandardOutPath": str(log_dir / "synthesis.log"),
+        "StandardErrorPath": str(log_dir / "synthesis.err"),
+        "EnvironmentVariables": {
+            "CLAUDECODE": "",  # Unset nesting guard
+            "PATH": f"{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        },
+    }
+
+    # Unload existing agent if present (ignore errors on first install)
+    uid = os.getuid()
+    subprocess.run(
+        ["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"],
+        capture_output=True, timeout=10,
+    )
+
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+
+    # Load the agent
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        capture_output=True, timeout=10,
+    )
+    if result.returncode != 0:
+        print(f"Warning: launchctl bootstrap failed (rc={result.returncode})")
+
+    print(f"Installed launchd agent ({LAUNCHD_LABEL})")
+
+
+def _session_end_command() -> str:
+    """Return the platform-appropriate SessionEnd hook command."""
+    if sys.platform == "darwin":
+        return f"launchctl kickstart gui/{os.getuid()}/{LAUNCHD_LABEL}"
+    return "systemctl --user start --no-block claude-memory-synthesis.service"
+
+
 def hook_entry_key(entry: dict) -> tuple:
     """Generate a unique key for a hook entry based on matcher and commands."""
     matcher = entry.get("matcher", "")
@@ -389,14 +448,14 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 ],
             },
         ],
-        # SessionEnd triggers deferred synthesis via systemd
+        # SessionEnd triggers deferred synthesis (platform-aware)
         "SessionEnd": [
             {
                 "matcher": "",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                        "command": _session_end_command(),
                         "timeout": 5,
                     }
                 ],
@@ -406,6 +465,19 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
 
     if "hooks" not in settings:
         settings["hooks"] = {}
+
+    # Remove existing synthesis SessionEnd hooks (handles platform migration)
+    # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
+    if "SessionEnd" in settings.get("hooks", {}):
+        settings["hooks"]["SessionEnd"] = [
+            entry for entry in settings["hooks"]["SessionEnd"]
+            if not any(
+                "memory-synthesis" in h.get("command", "")
+                for h in entry.get("hooks", [])
+            )
+        ]
+        if not settings["hooks"]["SessionEnd"]:
+            del settings["hooks"]["SessionEnd"]
 
     for event, new_entries in hooks_to_add.items():
         if event not in settings["hooks"]:
@@ -535,7 +607,10 @@ def main() -> int:
 
     # Link scripts, hooks, and skills (symlinks for auto-apply on repo changes)
     link_scripts(script_dir)
-    install_systemd_units(script_dir)
+    if sys.platform == "darwin":
+        install_launchd_agent(python_cmd)
+    else:
+        install_systemd_units(script_dir)
     link_hooks(script_dir)
     link_skills(script_dir)
     copy_templates(script_dir)

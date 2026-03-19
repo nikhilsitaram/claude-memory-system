@@ -406,31 +406,42 @@ class TestInstallSystemdUnits:
 
 
 # ---------------------------------------------------------------------------
+# _session_end_command
+# ---------------------------------------------------------------------------
+
+
+class TestSessionEndCommand:
+    def test_returns_launchctl_on_darwin(self):
+        with mock.patch("install.sys") as mock_sys, \
+             mock.patch("install.os") as mock_os:
+            mock_sys.platform = "darwin"
+            mock_os.getuid.return_value = 501
+            result = install._session_end_command()
+        assert "launchctl kickstart" in result
+        assert "gui/501/" in result
+        assert install.LAUNCHD_LABEL in result
+
+    def test_returns_systemctl_on_linux(self):
+        with mock.patch("install.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            result = install._session_end_command()
+        assert "systemctl" in result
+        assert "--no-block" in result
+
+
+# ---------------------------------------------------------------------------
 # SessionEnd hook
 # ---------------------------------------------------------------------------
 
 
 class TestSessionEndHook:
     def test_session_end_hook_added_to_settings(self):
-        """merge_hooks adds SessionEnd hook with systemctl command."""
+        """merge_hooks adds a SessionEnd hook."""
         settings = {"hooks": {}}
         result = install.merge_hooks(settings, "python3")
         assert "SessionEnd" in result["hooks"]
         hooks = result["hooks"]["SessionEnd"]
-        assert any(
-            "systemctl" in h.get("command", "")
-            for entry in hooks
-            for h in entry.get("hooks", [])
-        )
-
-    def test_session_end_hook_uses_no_block(self):
-        """SessionEnd hook uses --no-block to avoid blocking session exit."""
-        settings = install.merge_hooks({}, "python3")
-        hooks = settings["hooks"]["SessionEnd"]
-        for entry in hooks:
-            for h in entry.get("hooks", []):
-                if "systemctl" in h.get("command", ""):
-                    assert "--no-block" in h["command"]
+        assert len(hooks) >= 1
 
     def test_session_end_hook_has_short_timeout(self):
         """SessionEnd hook has a short timeout since it's fire-and-forget."""
@@ -438,7 +449,8 @@ class TestSessionEndHook:
         hooks = settings["hooks"]["SessionEnd"]
         for entry in hooks:
             for h in entry.get("hooks", []):
-                if "systemctl" in h.get("command", ""):
+                cmd = h.get("command", "")
+                if "claude-memory-synthesis" in cmd:
                     assert h.get("timeout", 999) <= 5
 
     def test_session_end_hook_not_duplicated(self):
@@ -448,3 +460,186 @@ class TestSessionEndHook:
         settings = install.merge_hooks(settings, "python3")
         count_after = len(settings["hooks"]["SessionEnd"])
         assert count_before == count_after
+
+    def test_migration_removes_old_systemctl_hook(self):
+        """On macOS, old systemctl hook is replaced with launchctl."""
+        settings = {
+            "hooks": {
+                "SessionEnd": [
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        with mock.patch("install.sys") as mock_sys, \
+             mock.patch("install.os") as mock_os:
+            mock_sys.platform = "darwin"
+            mock_os.getuid.return_value = 501
+            result = install.merge_hooks(settings, "python3")
+
+        hooks = result["hooks"]["SessionEnd"]
+        commands = [
+            h.get("command", "")
+            for entry in hooks
+            for h in entry.get("hooks", [])
+        ]
+        assert not any("systemctl" in c for c in commands)
+        assert any("launchctl" in c for c in commands)
+
+    def test_migration_removes_old_launchctl_hook(self):
+        """On Linux, old launchctl hook is replaced with systemctl."""
+        settings = {
+            "hooks": {
+                "SessionEnd": [
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "launchctl kickstart gui/501/com.claude.memory-synthesis",
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        with mock.patch("install.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            result = install.merge_hooks(settings, "python3")
+
+        hooks = result["hooks"]["SessionEnd"]
+        commands = [
+            h.get("command", "")
+            for entry in hooks
+            for h in entry.get("hooks", [])
+        ]
+        assert not any("launchctl" in c for c in commands)
+        assert any("systemctl" in c for c in commands)
+
+    def test_preserves_non_synthesis_session_end_hooks(self):
+        """Migration only removes synthesis hooks, not other SessionEnd hooks."""
+        settings = {
+            "hooks": {
+                "SessionEnd": [
+                    {
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo done"}],
+                    },
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "python3")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["SessionEnd"]
+            for h in entry.get("hooks", [])
+        ]
+        assert any("echo done" in c for c in commands)
+
+
+# ---------------------------------------------------------------------------
+# install_launchd_agent
+# ---------------------------------------------------------------------------
+
+
+class TestInstallLaunchdAgent:
+    def test_creates_plist_file(self, tmp_path):
+        """Plist is created in ~/Library/LaunchAgents/."""
+        import plistlib
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.os.getuid", return_value=501), \
+             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_launchd_agent("python3")
+
+        plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
+        assert plist_path.exists()
+
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+
+        assert plist["Label"] == install.LAUNCHD_LABEL
+        assert plist["StartInterval"] == 7200
+        assert plist["EnvironmentVariables"]["CLAUDECODE"] == ""
+        assert "synthesis_cron.py" in plist["ProgramArguments"][1]
+
+    def test_calls_bootout_then_bootstrap(self, tmp_path):
+        """Calls launchctl bootout (cleanup) then bootstrap (load)."""
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.os.getuid", return_value=501), \
+             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_launchd_agent("python3")
+
+        calls = mock_run.call_args_list
+        assert len(calls) == 2
+        # First: bootout
+        assert "bootout" in calls[0][0][0]
+        assert "gui/501/" in calls[0][0][0][2]
+        # Second: bootstrap
+        assert "bootstrap" in calls[1][0][0]
+        assert "gui/501" in calls[1][0][0][2]
+
+    def test_creates_log_directory(self, tmp_path):
+        """Creates ~/Library/Logs/claude-memory/ for output."""
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.os.getuid", return_value=501), \
+             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_launchd_agent("python3")
+
+        assert (tmp_path / "Library" / "Logs" / "claude-memory").is_dir()
+
+    def test_uses_resolved_python_path(self, tmp_path):
+        """ProgramArguments uses shutil.which resolved path."""
+        import plistlib
+
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.os.getuid", return_value=501), \
+             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/python3"), \
+             mock.patch("install.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            install.install_launchd_agent("python3")
+
+        plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+        assert plist["ProgramArguments"][0] == "/opt/homebrew/bin/python3"
+
+    def test_warns_on_bootstrap_failure(self, tmp_path, capsys):
+        """Prints warning if launchctl bootstrap fails."""
+        with mock.patch("install.Path.home", return_value=tmp_path), \
+             mock.patch("install.os.getuid", return_value=501), \
+             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
+             mock.patch("install.subprocess.run") as mock_run:
+            # bootout succeeds, bootstrap fails
+            mock_run.side_effect = [
+                mock.Mock(returncode=0),
+                mock.Mock(returncode=1),
+            ]
+            install.install_launchd_agent("python3")
+
+        output = capsys.readouterr().out
+        assert "Warning: launchctl bootstrap failed" in output

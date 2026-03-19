@@ -16,10 +16,13 @@ Requirements: Python 3.9+
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+LAUNCHD_LABEL = "com.claude.memory-synthesis"
 
 
 def get_claude_dir() -> Path:
@@ -55,7 +58,7 @@ def remove_hooks(settings: dict) -> dict:
         "load_memory.py",
         "save_session.py",
         "pretooluse-allow-memory.sh",
-        "claude-memory-synthesis",  # SessionEnd hook for deferred synthesis
+        "memory-synthesis",  # SessionEnd hook: matches both systemctl and launchctl commands
     ]
 
     removed_count = 0
@@ -172,6 +175,24 @@ def remove_systemd_units() -> None:
         pass
 
 
+def remove_launchd_agent() -> None:
+    """Stop and remove launchd agent for deferred synthesis."""
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+
+    try:
+        uid = os.getuid()
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"],
+            capture_output=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    if plist_path.exists():
+        plist_path.unlink()
+        print(f"  Removed launchd agent: {LAUNCHD_LABEL}")
+
+
 def purge_memory_data() -> None:
     """Delete all memory system files (scripts, skills, hooks, data)."""
     claude_dir = get_claude_dir()
@@ -246,8 +267,12 @@ def print_cleanup_instructions() -> None:
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
     print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager,synthesis_cron,synthesis,devtools}.py")
-    print("  systemctl --user stop claude-memory-synthesis.timer")
-    print("  rm -f ~/.config/systemd/user/claude-memory-synthesis.{service,timer}")
+    if sys.platform == "darwin":
+        print(f"  launchctl bootout gui/$(id -u)/{LAUNCHD_LABEL}")
+        print(f"  rm -f ~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
+    else:
+        print("  systemctl --user stop claude-memory-synthesis.timer")
+        print("  rm -f ~/.config/systemd/user/claude-memory-synthesis.{service,timer}")
 
 
 def main() -> int:
@@ -285,8 +310,11 @@ def main() -> int:
     else:
         print("No settings.json found, skipping hook/permission removal.")
 
-    # Remove systemd units
-    remove_systemd_units()
+    # Remove platform-specific scheduler
+    if sys.platform == "darwin":
+        remove_launchd_agent()
+    else:
+        remove_systemd_units()
 
     # Purge data if requested
     if args.purge:
