@@ -253,6 +253,8 @@ def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
 
     Auto-generates id and content_hash if not set on the ChunkRow.
     Returns the chunk ID.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
     """
     chunk_id = chunk.id or _generate_id()
     content_hash = chunk.content_hash or _content_hash(chunk.content)
@@ -319,7 +321,10 @@ def query_chunks_by_source(
 def delete_chunks_by_source(
     conn: sqlite3.Connection, source_file: str
 ) -> int:
-    """Delete all chunks from a specific source file. Returns count deleted."""
+    """Delete all chunks from a specific source file. Returns count deleted.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
     cursor = conn.execute(
         "DELETE FROM chunks WHERE source_file = ?", (source_file,)
     )
@@ -348,7 +353,10 @@ def _row_to_node(row: tuple) -> NodeRow:
 
 
 def insert_node(conn: sqlite3.Connection, node: NodeRow) -> str:
-    """Insert a node row into the nodes table. Returns the node ID."""
+    """Insert a node row into the nodes table. Returns the node ID.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
     node_id = node.id or _generate_id()
     conn.execute(
         "INSERT INTO nodes "
@@ -388,7 +396,10 @@ def query_node_by_name_and_type(
 
 
 def update_node_access(conn: sqlite3.Connection, node_id: str) -> None:
-    """Increment access_count and set last_accessed to now (UTC ISO)."""
+    """Increment access_count and set last_accessed to now (UTC ISO).
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     conn.execute(
         "UPDATE nodes SET access_count = access_count + 1, "
@@ -398,7 +409,10 @@ def update_node_access(conn: sqlite3.Connection, node_id: str) -> None:
 
 
 def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
-    """Insert an edge row into the edges table. Returns the edge ID."""
+    """Insert an edge row into the edges table. Returns the edge ID.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
     edge_id = edge.id or _generate_id()
     conn.execute(
         "INSERT INTO edges "
