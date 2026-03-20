@@ -28,9 +28,16 @@ if str(script_dir) not in sys.path:
 from memory_utils import check_python_version, get_db_path  # noqa: E402
 from storage import _get_schema_version, close_db, get_db  # noqa: E402
 
+__all__ = [
+    "COLD_RATIO_THRESHOLD",
+    "HealthReport",
+    "health_report",
+    "health_alerts",
+    "format_report",
+]
+
 # Alert thresholds
 COLD_RATIO_THRESHOLD = 0.8  # Alert if 80%+ chunks are cold
-STALE_GRAPH_DAYS = 7  # Alert if no new edges in N days
 
 
 @dataclass

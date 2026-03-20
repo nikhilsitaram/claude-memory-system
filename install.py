@@ -251,7 +251,6 @@ def copy_templates(script_dir: Path) -> None:
             print("Created default memory settings at ~/.claude/memory/settings.json")
 
 
-
 def create_database(script_dir: Path) -> None:
     """Create or update memory.db and run markdown migration.
 

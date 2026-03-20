@@ -16,7 +16,9 @@ claude-memory-system/
 │   ├── synthesis.py            # Synthesis output parser, applier, state updater
 │   ├── project_manager.py      # Project lifecycle management library
 │   ├── devtools.py             # Dev diagnostics + mark-routed dedup migration
-│   └── synthesis_cron.py       # Deferred synthesis runner (systemd timer entry point)
+│   ├── synthesis_cron.py       # Deferred synthesis runner (systemd timer entry point)
+│   ├── storage.py              # SQLite storage layer (DB lifecycle, schema, CRUD, migration)
+│   └── health.py               # Memory health diagnostics (chunk/node/edge stats, alerts)
 ├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
 ├── systemd/                    # Systemd user units for deferred synthesis
 ├── tests/                      # Unit tests
