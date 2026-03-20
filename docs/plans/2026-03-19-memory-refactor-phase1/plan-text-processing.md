@@ -1,5 +1,5 @@
 ---
-status: In Development
+status: Complete
 ---
 
 # Text Processing Pipeline — Implementation Plan
@@ -355,18 +355,25 @@ near-duplicate detection. 16 tests."
 ---
 
 ## Phase B — Chunk Dataclass and Chunking Pipeline
-**Status:** Not Started | **Rationale:** Chunking depends on SimHash (Phase A) to populate the `simhash` field on every chunk. This phase builds the `Chunk` dataclass, LTM paragraph chunking, and daily entry chunking.
+**Status:** Complete (2026-03-19) | **Rationale:** Chunking depends on SimHash (Phase A) to populate the `simhash` field on every chunk. This phase builds the `Chunk` dataclass, LTM paragraph chunking, and daily entry chunking.
 
 ### Phase B Checklist
-- [ ] B1: Create `scripts/chunking.py` with Chunk dataclass and LTM paragraph chunking
-- [ ] B2: Add daily file entry-level chunking to `scripts/chunking.py`
-- [ ] B3: Create `tests/test_chunking.py` — LTM chunking tests
-- [ ] B4: Add daily chunking tests to `tests/test_chunking.py`
-- [ ] B5: Add integration test — full pipeline from real-format files to chunks with simhash
+- [x] B1: Create `scripts/chunking.py` with Chunk dataclass and LTM paragraph chunking
+- [x] B2: Add daily file entry-level chunking to `scripts/chunking.py`
+- [x] B3: Create `tests/test_chunking.py` — LTM chunking tests
+- [x] B4: Add daily chunking tests to `tests/test_chunking.py`
+- [x] B5: Add integration test — full pipeline from real-format files to chunks with simhash
 
 ### Phase B Completion Notes
-<!-- Written by dispatcher after all tasks complete.
-     Implementation review changes appended here by orchestrator. -->
+
+**Date:** 2026-03-19
+**Summary:** Created `scripts/chunking.py` with the `Chunk` frozen dataclass (10 fields: content, source_file, source_type, section, chunk_index, created_at, content_hash, simhash, scope, entry_type), `chunk_ltm_file()` (paragraph-level LTM chunking with configurable overlap via `DEFAULT_OVERLAP_RATIO=0.15`, capped at `MAX_OVERLAP_PARAGRAPHS=2`, section-boundary-respecting via `parse_markdown_sections()`), and `chunk_daily_file()` (entry-level daily chunking with date extraction from parameter/header/filename, handles `[scope/type]`, multi-scope `[scope1|scope2/type]`, `[routed][scope/type]`, and untagged entries). Created `tests/test_chunking.py` with 44 tests across `TestChunkDataclass`, `TestChunkLtmFile`, `TestChunkDailyFile`, and `TestChunkingIntegration`. All 757 project tests pass (no regressions).
+**Deviations:** None. All tasks implemented exactly as specified. B2 was already implemented within B1 (as noted in the plan); spec compliance verified inline.
+**Commit:** 245f1d6
+
+**Implementation review fixes (69889a7):**
+- Added `chunking.py` to `install.py` `link_scripts()` — deployed installations would have failed to import without this (same class of bug caught for `simhash.py` in Phase A)
+- Updated design doc field list to include `source_type` (10 fields, matching implementation and DB schema)
 
 ### Phase B Tasks
 

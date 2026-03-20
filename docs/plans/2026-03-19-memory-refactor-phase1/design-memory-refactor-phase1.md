@@ -148,7 +148,7 @@ CREATE INDEX idx_chunks_simhash ON chunks(simhash);
 **What it delivers:**
 - `scripts/chunking.py` — chunk LTM files by paragraph with overlap, chunk daily files by entry
 - `scripts/simhash.py` — SimHash fingerprinting (~20 lines) + Hamming distance comparison
-- Each chunk is a dataclass with: `content`, `source_file`, `section`, `chunk_index`, `created_at`, `content_hash`, `simhash`, `scope`, `entry_type`
+- Each chunk is a dataclass with: `content`, `source_file`, `section`, `chunk_index`, `created_at`, `content_hash`, `simhash`, `scope`, `entry_type`, `source_type`
 
 **Key decisions:**
 - LTM chunking: paragraph-level with 10-20% overlap, respecting `## Section` boundaries (uses existing `parse_markdown_sections()`)
