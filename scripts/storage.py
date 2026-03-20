@@ -12,6 +12,7 @@ Requirements: Python 3.9+
 """
 
 import hashlib
+import re
 import sqlite3
 import sys
 import uuid
@@ -20,17 +21,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# Add scripts directory to path for local imports
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from memory_utils import get_db_path  # noqa: E402
+from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
-# Schema version -- increment when schema changes require migration
 SCHEMA_VERSION = 1
 
-# Full DDL for initial schema creation
 SCHEMA_DDL = """\
 -- Graph layer
 CREATE TABLE IF NOT EXISTS nodes (
@@ -99,7 +97,6 @@ CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_chunks_simhash ON chunks(simhash);
 """
 
-# Optional: vec_chunks virtual table (requires sqlite-vec extension)
 VEC_CHUNKS_DDL = """\
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
     embedding float[384],
@@ -115,6 +112,7 @@ __all__ = [
     "ChunkRow",
     "NodeRow",
     "EdgeRow",
+    "MigrationStats",
     "ensure_db",
     "get_db",
     "close_db",
@@ -128,6 +126,7 @@ __all__ = [
     "query_node_by_name_and_type",
     "update_node_access",
     "insert_edge",
+    "migrate_markdown_to_db",
 ]
 
 
@@ -136,7 +135,7 @@ class ChunkRow:
     """Represents a row in the chunks table."""
     content: str
     source_file: str
-    source_type: str  # 'ltm', 'daily', 'triplet'
+    source_type: str
     scope: Optional[str] = None
     section: Optional[str] = None
     entry_type: Optional[str] = None
@@ -147,17 +146,17 @@ class ChunkRow:
     salience: float = 1.0
     access_count: int = 0
     last_accessed: Optional[str] = None
-    source_sessions: Optional[str] = None  # JSON array
+    source_sessions: Optional[str] = None
     evidence_count: int = 1
-    entities: Optional[str] = None  # JSON
-    id: Optional[str] = None  # Auto-generated if None
+    entities: Optional[str] = None
+    id: Optional[str] = None
 
 
 @dataclass
 class NodeRow:
     """Represents a row in the nodes table."""
     name: str
-    type: str  # project, tool, library, convention, person, file
+    type: str
     scope: Optional[str] = None
     description: Optional[str] = None
     access_count: int = 0
@@ -169,24 +168,33 @@ class NodeRow:
     source_sessions: Optional[str] = None
     evidence_count: int = 1
     consolidated: int = 0
-    id: Optional[str] = None  # Auto-generated if None
+    id: Optional[str] = None
 
 
 @dataclass
 class EdgeRow:
     """Represents a row in the edges table."""
-    source: str  # node ID
-    target: str  # node ID
-    type: str  # uses, prefers, depends_on, related_to, supersedes
+    source: str
+    target: str
+    type: str
     fact: Optional[str] = None
-    properties: Optional[str] = None  # JSON
+    properties: Optional[str] = None
     created_at: Optional[str] = None
     valid_from: Optional[str] = None
     valid_to: Optional[str] = None
     expired_at: Optional[str] = None
     weight: float = 1.0
     source_sessions: Optional[str] = None
-    id: Optional[str] = None  # Auto-generated if None
+    id: Optional[str] = None
+
+
+@dataclass
+class MigrationStats:
+    """Statistics from a markdown-to-DB migration run."""
+    ltm_files_processed: int = 0
+    daily_files_processed: int = 0
+    chunks_inserted: int = 0
+    chunks_skipped: int = 0
 
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
@@ -194,7 +202,7 @@ def _get_schema_version(conn: sqlite3.Connection) -> int:
 
 
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
-    pass  # v1 is the initial schema -- no migrations needed yet
+    pass
 
 
 def ensure_db() -> sqlite3.Connection:
@@ -238,10 +246,6 @@ def _generate_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-# ============================================================================
-# Chunk CRUD (A5)
-# ============================================================================
-
 def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
     """Insert a chunk row into the chunks table.
 
@@ -268,8 +272,6 @@ def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
     return chunk_id
 
 
-# Column list is the single source of truth for SELECT order.
-# _row_to_chunk maps by position -- keep these two in sync.
 _CHUNK_COLUMNS = (
     "id, content, source_file, source_type, section, scope, entry_type, "
     "chunk_index, created_at, content_hash, simhash, salience, access_count, "
@@ -322,12 +324,6 @@ def delete_chunks_by_source(
     return cursor.rowcount
 
 
-# ============================================================================
-# Node and Edge CRUD (A6)
-# ============================================================================
-
-# Column list is the single source of truth for SELECT order.
-# _row_to_node maps by position -- keep these two in sync.
 _NODE_COLUMNS = (
     "id, name, type, description, scope, access_count, last_accessed, "
     "salience, created_at, content_hash, simhash, source_sessions, "
@@ -415,3 +411,122 @@ def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
         ),
     )
     return edge_id
+
+
+_LTM_ENTRY_RE = re.compile(
+    r'^\s*-\s*\((\d{4}-\d{2}-\d{2})\)\s*\[([^\]]+)\]\s*(.+)'
+)
+
+
+def _parse_ltm_entries(content: str, source_file: str, scope: str) -> list[ChunkRow]:
+    """Parse an LTM markdown file into ChunkRow objects.
+    Each '- (date) [type] description' line becomes one chunk.
+    Section headers (## Key Actions, etc.) are tracked for the section field.
+    Lines without the dated entry pattern are skipped.
+    """
+    chunks = []
+    current_section = None
+    chunk_index = 0
+    for line in content.split('\n'):
+        if line.startswith('## '):
+            current_section = line.strip()
+            continue
+        match = _LTM_ENTRY_RE.match(line)
+        if match:
+            entry_date = match.group(1)
+            entry_type = match.group(2)
+            full_content = line.strip()
+            chunks.append(ChunkRow(
+                content=full_content, source_file=source_file,
+                source_type='ltm', section=current_section,
+                scope=scope, entry_type=entry_type,
+                chunk_index=chunk_index, created_at=entry_date,
+            ))
+            chunk_index += 1
+    return chunks
+
+
+def _parse_daily_entries(content: str, source_file: str) -> list[ChunkRow]:
+    """Parse a daily markdown file into ChunkRow objects.
+    Each '- [scope/type] description' line becomes one chunk.
+    Routed entries (prefixed with [routed]) are skipped.
+    """
+    chunks = []
+    current_section = None
+    chunk_index = 0
+    date_str = Path(source_file).stem if source_file else None
+    for line in content.split('\n'):
+        if line.startswith('## '):
+            current_section = line.strip()
+            continue
+        stripped = line.strip()
+        if not stripped.startswith('- '):
+            continue
+        if '[routed]' in stripped:
+            continue
+        tag_match = re.match(r'^\s*-\s*\[([^\]/]+)(?:/([^\]]+))?\]\s*(.+)', stripped)
+        if tag_match:
+            scope_part = tag_match.group(1).strip().lower()
+            entry_type = tag_match.group(2).strip() if tag_match.group(2) else None
+            if '|' in scope_part:
+                scope_part = scope_part.split('|')[0].strip()
+            chunks.append(ChunkRow(
+                content=stripped, source_file=source_file,
+                source_type='daily', section=current_section,
+                scope=scope_part, entry_type=entry_type,
+                chunk_index=chunk_index, created_at=date_str,
+            ))
+            chunk_index += 1
+    return chunks
+
+
+def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
+    """Migrate existing markdown memory files into the database.
+    Scans global LTM, project LTMs, and daily files.
+    Uses content_hash to skip chunks that already exist in the DB.
+    Idempotent -- safe to run multiple times.
+    """
+    stats = MigrationStats()
+    existing_hashes = {
+        row[0] for row in conn.execute(
+            'SELECT content_hash FROM chunks WHERE content_hash IS NOT NULL'
+        ).fetchall()
+    }
+
+    def _insert_chunks(chunks: list[ChunkRow]) -> None:
+        for chunk in chunks:
+            h = _content_hash(chunk.content)
+            if h in existing_hashes:
+                stats.chunks_skipped += 1
+                continue
+            chunk.content_hash = h
+            insert_chunk(conn, chunk)
+            existing_hashes.add(h)
+            stats.chunks_inserted += 1
+
+    global_file = get_memory_dir() / 'global-long-term-memory.md'
+    if global_file.exists():
+        content = global_file.read_text(encoding='utf-8')
+        chunks = _parse_ltm_entries(content, global_file.name, 'global')
+        _insert_chunks(chunks)
+        stats.ltm_files_processed += 1
+
+    project_dir = get_memory_dir() / 'project-memory'
+    if project_dir.exists():
+        for ltm_file in sorted(project_dir.glob('*-long-term-memory.md')):
+            content = ltm_file.read_text(encoding='utf-8')
+            scope = ltm_file.stem.replace('-long-term-memory', '')
+            chunks = _parse_ltm_entries(content, ltm_file.name, scope)
+            _insert_chunks(chunks)
+            stats.ltm_files_processed += 1
+
+    daily_dir = get_memory_dir() / 'daily'
+    if daily_dir.exists():
+        for daily_file in sorted(daily_dir.glob('*.md')):
+            content = daily_file.read_text(encoding='utf-8')
+            chunks = _parse_daily_entries(content, daily_file.name)
+            _insert_chunks(chunks)
+            stats.daily_files_processed += 1
+
+    conn.commit()
+    return stats

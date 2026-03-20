@@ -15,7 +15,7 @@ status: In Development
 ---
 
 ## Phase A -- Schema and Connection Layer
-**Status:** Complete | **Rationale:** All subsequent tasks depend on the DB file existing with the correct schema and connection helpers being available. This phase establishes the foundation that Phase B (migration, health, install integration) builds upon.
+**Status:** Complete (2026-03-19) | **Rationale:** All subsequent tasks depend on the DB file existing with the correct schema and connection helpers being available. This phase establishes the foundation that Phase B (migration, health, install integration) builds upon.
 
 ### Phase A Checklist
 - [x] A1: Integration test skeleton for storage module
@@ -1031,16 +1031,45 @@ All tests in `TestSchemaCreation`, `TestChunkCRUD`, `TestNodeCRUD`, and `TestEdg
 ---
 
 ## Phase B -- Migration, Health, and Install Integration
-**Status:** Not Started | **Rationale:** With the storage layer in place from Phase A, this phase populates the DB from existing markdown files, adds diagnostic queries, and wires everything into the installer. These tasks consume the Phase A API and can only run after it is complete.
+**Status:** Complete | **Rationale:** With the storage layer in place from Phase A, this phase populates the DB from existing markdown files, adds diagnostic queries, and wires everything into the installer. These tasks consume the Phase A API and can only run after it is complete.
 
 ### Phase B Checklist
-- [ ] B1: Markdown-to-DB migration pipeline
-- [ ] B2: Health diagnostics script
-- [ ] B3: Install.py integration
+- [x] B1: Markdown-to-DB migration pipeline
+- [x] B2: Health diagnostics script
+- [x] B3: Install.py integration
 
 ### Phase B Completion Notes
-<!-- Written by dispatcher after all tasks complete.
-     Implementation review changes appended here by orchestrator. -->
+
+**Completed:** 2026-03-19
+
+**Summary:** All 3 tasks (B1-B3) implemented. Migration pipeline parses LTM and daily markdown files into DB chunks with content-hash dedup. Health diagnostics script queries DB for chunk counts, salience distribution, and graph statistics. Install.py wires both into the installer flow.
+
+**B1 -- Migration (storage.py additions):**
+- `MigrationStats` dataclass: ltm_files_processed, daily_files_processed, chunks_inserted, chunks_skipped
+- `_LTM_ENTRY_RE`: compiled regex for `- (date) [type] description` lines
+- `_parse_ltm_entries(content, source_file, scope)` -> list[ChunkRow]: parses LTM files, tracks sections
+- `_parse_daily_entries(content, source_file)` -> list[ChunkRow]: parses daily files, skips routed, handles multi-scope
+- `migrate_markdown_to_db(conn)` -> MigrationStats: scans global LTM, project LTMs, daily files; content_hash dedup; idempotent
+- `__all__` extended with `"MigrationStats"`, `"migrate_markdown_to_db"`
+- Tests: 13 in `tests/test_migration.py`
+
+**B2 -- Health diagnostics (scripts/health.py):**
+- `HealthReport` dataclass: total_chunks, avg_salience, hot/warm/cold counts, graph_nodes, active/invalidated edges, db_size_bytes, ltm_chunks, daily_chunks, schema_version
+- `health_report(conn)` -> HealthReport: read-only DB queries
+- `health_alerts(report)` -> list[str]: empty DB alert, cold ratio alert (>=80%)
+- `format_report(report, alerts)` -> str: human-readable output
+- CLI: `--json` and `--alerts` flags
+- Tests: 10 in `tests/test_health.py`
+
+**B3 -- Install.py integration:**
+- `link_scripts()`: added `storage.py` and `health.py` to symlink list
+- `create_database(script_dir)`: non-fatal wrapper that calls ensure_db + migrate_markdown_to_db, prints stats
+- `main()`: calls create_database after copy_templates, before legacy cleanup
+- Tests: 3 new in `tests/test_install.py` (storage symlink, health symlink, import error handling)
+
+**Test results:** 230 tests pass across test_storage (21), test_migration (13), test_health (10), test_memory_utils (148), test_install (38).
+
+**Note:** B1 storage.py code was already present from a prior implementation attempt; tests were missing and were created fresh. B2 and B3 were implemented from scratch.
 
 ### Phase B Tasks
 
