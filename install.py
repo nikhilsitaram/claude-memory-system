@@ -150,6 +150,7 @@ def link_scripts(script_dir: Path) -> None:
         "synthesis.py",  # Zero-tool background synthesis
         "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
         "token_usage.py",  # Token usage calculation for /settings
+        "simhash.py",  # SimHash fingerprinting for near-duplicate detection
     ]
 
     for script_name in scripts_to_link:
