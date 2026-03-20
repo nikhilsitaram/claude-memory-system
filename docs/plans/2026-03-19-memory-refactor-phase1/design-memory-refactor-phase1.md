@@ -62,7 +62,7 @@ FastEmbed with `sentence-transformers/all-MiniLM-L6-v2`:
 
 **Key decisions:**
 - Schema includes forward-looking columns (provenance, simhash, salience) even though Phase 1 doesn't populate all of them. Avoids ALTER TABLE later.
-- `vec_chunks` virtual table created but left empty until Worktree 3 (vector-search) populates it.
+- `vec_chunks` DDL is defined as a constant (`VEC_CHUNKS_DDL`) but NOT created at install time -- the sqlite-vec extension is a Worktree 3 dependency. Worktree 3 (vector-search) will create and populate it.
 - WAL mode + `busy_timeout=5000` for concurrent reads from multiple Claude Code tabs.
 - Connection pooling not needed — each script opens/closes its own connection.
 
