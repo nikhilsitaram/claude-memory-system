@@ -51,6 +51,11 @@ status: In Development
 - A4/A5/A6 committed together (single commit) because test_storage.py imports all functions at module level -- no individual task could produce a green test run in isolation.
 - Fixed missing `datetime`/`timezone` and `re` imports that were in the plan spec but not in the A3 commit.
 
+**Implementation review fixes (orchestrator):**
+- Removed unused imports (`re`, `field`) from storage.py
+- Added 2 tests for `get_db()`: `test_get_db_raises_when_no_db`, `test_get_db_returns_connection` (21 tests now)
+- Deferred: `nodes(name, type)` uniqueness constraint — nodes are not created by B1 migration, only by future phases. Will add UNIQUE(name, type, scope) when node creation is implemented.
+
 ### Phase A Tasks
 
 #### A1: Integration test skeleton for storage module

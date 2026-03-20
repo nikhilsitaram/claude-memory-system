@@ -135,6 +135,21 @@ class TestSchemaCreation:
         assert row[0] == "test"
         close_db(conn2)
 
+    def test_get_db_raises_when_no_db(self, db_dir):
+        result = db_dir / "memory.db"
+        assert not result.exists()
+        with pytest.raises(FileNotFoundError):
+            get_db()
+
+    def test_get_db_returns_connection(self, db_dir):
+        conn1 = ensure_db()
+        close_db(conn1)
+        conn2 = get_db()
+        assert conn2.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn2.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        assert conn2.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        close_db(conn2)
+
 
 # ============================================================================
 # Chunk CRUD
