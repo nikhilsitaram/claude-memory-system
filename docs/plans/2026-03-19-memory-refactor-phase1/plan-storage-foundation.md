@@ -1,5 +1,5 @@
 ---
-status: In Development
+status: Complete
 ---
 
 # Storage Foundation Implementation Plan
@@ -1070,6 +1070,14 @@ All tests in `TestSchemaCreation`, `TestChunkCRUD`, `TestNodeCRUD`, and `TestEdg
 **Test results:** 230 tests pass across test_storage (21), test_migration (13), test_health (10), test_memory_utils (148), test_install (38).
 
 **Note:** B1 storage.py code was already present from a prior implementation attempt; tests were missing and were created fresh. B2 and B3 were implemented from scratch.
+
+**Implementation review fixes (orchestrator):**
+- Removed dead `STALE_GRAPH_DAYS` constant from health.py
+- Added `__all__` to health.py for consistency with storage.py
+- Added `_parse_ltm_entries`, `_parse_daily_entries` to storage.py `__all__`
+- Fixed extra blank line in install.py
+- Updated CLAUDE.md repo structure with storage.py and health.py
+- Deferred: test fixture deduplication into conftest.py (low priority)
 
 ### Phase B Tasks
 
