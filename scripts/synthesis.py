@@ -44,6 +44,7 @@ from memory_utils import (  # noqa: E402
 
 __all__ = [
     "DailyFile",
+    "MemoryOp",
     "MIN_ROUTE_KEYWORDS",
     "ProjectBlock",
     "ROUTE_CAP",
@@ -51,6 +52,7 @@ __all__ = [
     "SECTION_ORDER",
     "SynthesisResult",
     "TYPE_TO_SECTION",
+    "MEMORY_OPS_HEADER",
     "build_dailies_from_project_blocks",
     "extract_routes_from_project_blocks",
     "inject_scopes",
@@ -72,6 +74,7 @@ __all__ = [
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")  # Legacy format
 ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")  # Legacy format
 PROJECT_HEADER = re.compile(r"^===PROJECT:([^=]+)===$")
+MEMORY_OPS_HEADER = re.compile(r"^===MEMORY_OPS===$")
 END_MARKER = "===END==="
 
 # Routing quality gates
@@ -122,21 +125,36 @@ class ProjectBlock:
 
 
 @dataclass
+class MemoryOp:
+    """A single memory CRUD operation from LLM output."""
+
+    action: str
+    fact: str = ""
+    id: str | None = None
+    scope: str | None = None
+    section: str | None = None
+    entities: list | None = None
+    reason: str | None = None
+
+
+@dataclass
 class SynthesisResult:
     """Complete parsed synthesis output containing dailies, routes, and warnings."""
 
     dailies: list[DailyFile] = field(default_factory=list)
     routes: list[RouteEntry] = field(default_factory=list)
     project_blocks: list[ProjectBlock] = field(default_factory=list)
+    memory_ops: list[MemoryOp] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
 def _is_delimiter(line: str) -> bool:
-    """Check if a line is any known delimiter (daily, route, project, or end)."""
+    """Check if a line is any known delimiter (daily, route, project, memory_ops, or end)."""
     return bool(
         DAILY_HEADER.match(line)
         or ROUTE_HEADER.match(line)
         or PROJECT_HEADER.match(line)
+        or MEMORY_OPS_HEADER.match(line)
         or line == END_MARKER
     )
 
@@ -166,6 +184,39 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # Check for MEMORY_OPS block
+        if MEMORY_OPS_HEADER.match(line):
+            json_lines = []
+            i += 1
+            while i < len(lines):
+                stripped = lines[i].strip()
+                if _is_delimiter(stripped):
+                    break
+                json_lines.append(lines[i])
+                i += 1
+            json_text = "\n".join(json_lines).strip()
+            if json_text:
+                try:
+                    parsed = json.loads(json_text)
+                    raw_ops = parsed.get("ops", [])
+                    result.memory_ops = [
+                        MemoryOp(
+                            action=op.get("action", ""),
+                            fact=op.get("fact", ""),
+                            id=op.get("id"),
+                            scope=op.get("scope"),
+                            section=op.get("section"),
+                            entities=op.get("entities"),
+                            reason=op.get("reason"),
+                        )
+                        for op in raw_ops
+                    ]
+                except json.JSONDecodeError as e:
+                    result.warnings.append(
+                        f"Failed to parse MEMORY_OPS JSON: {e}"
+                    )
+            continue
 
         # Check for project header
         project_match = PROJECT_HEADER.match(line)

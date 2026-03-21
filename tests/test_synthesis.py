@@ -13,6 +13,7 @@ from synthesis import (
     SECTION_ORDER,  # noqa: F401
     TYPE_TO_SECTION,  # noqa: F401
     DailyFile,
+    MemoryOp,
     ProjectBlock,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
@@ -2363,3 +2364,97 @@ class TestApplyResultsProjectBlocks:
         for line in content.split("\n"):
             if "Normal entry" in line:
                 assert "[routed]" not in line
+
+
+# =============================================================================
+# C3: MEMORY_OPS parsing tests
+# =============================================================================
+
+
+class TestMemoryOpsParsing:
+    """Tests for ===MEMORY_OPS=== block parsing in synthesis output."""
+
+    def test_parses_valid_memory_ops_json(self):
+        """Parses MEMORY_OPS JSON block into SynthesisResult.memory_ops."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{"ops": [
+  {"action": "ADD", "fact": "project uses gRPC", "scope": "myproject", "section": "Key Decisions", "entities": ["gRPC"]},
+  {"action": "UPDATE", "id": "chunk_abc123", "fact": "API client has retry logic", "entities": ["API client"]},
+  {"action": "DELETE", "id": "chunk_def456", "reason": "Contradicted: no longer uses REST"},
+  {"action": "NOOP", "id": "chunk_ghi789", "reason": "Already captured"}
+]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 4
+        assert result.memory_ops[0].action == "ADD"
+        assert result.memory_ops[1].action == "UPDATE"
+        assert result.memory_ops[2].action == "DELETE"
+        assert result.memory_ops[3].action == "NOOP"
+
+    def test_project_blocks_still_parsed_alongside_memory_ops(self):
+        """PROJECT blocks are parsed normally when MEMORY_OPS is present."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "test", "scope": "myproject", "section": "Key Actions", "entities": []}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "myproject"
+
+    def test_missing_memory_ops_backward_compat(self):
+        """Output without MEMORY_OPS returns empty memory_ops list."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops == []
+
+    def test_malformed_json_produces_warning(self):
+        """Invalid JSON in MEMORY_OPS produces warning, rest of output still parsed."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{this is not valid json}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops == []
+        assert any("MEMORY_OPS" in w for w in result.warnings)
+        assert len(result.project_blocks) == 1
+
+    def test_memory_ops_with_missing_optional_fields(self):
+        """Ops with missing optional fields (id, reason, entities) still parse."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "simple fact"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 1
+        assert result.memory_ops[0].id is None
+        assert result.memory_ops[0].entities is None
+
+    def test_memory_ops_before_project_blocks(self):
+        """MEMORY_OPS can appear before PROJECT blocks."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "test", "scope": "proj", "section": "Key Actions", "entities": []}]}
+===PROJECT:proj===
+- [implement] Something
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 1
+        assert len(result.project_blocks) == 1
+
+    def test_memory_op_fields_mapped_correctly(self):
+        """All MemoryOp fields are populated from JSON."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "uses gRPC", "scope": "proj", "section": "Key Decisions", "entities": ["gRPC", "proj"], "reason": "new info"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        op = result.memory_ops[0]
+        assert op.action == "ADD"
+        assert op.fact == "uses gRPC"
+        assert op.scope == "proj"
+        assert op.section == "Key Decisions"
+        assert op.entities == ["gRPC", "proj"]
+        assert op.reason == "new info"
