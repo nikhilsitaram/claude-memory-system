@@ -16,15 +16,23 @@ from decay import (  # noqa: I001
     DEFAULT_AGE_DAYS,
     DEFAULT_ARCHIVE_RETENTION_DAYS,
     DEFAULT_PROJECT_WORKING_DAYS,
+    HOT_LAMBDA,
+    WARM_LAMBDA,
+    COLD_LAMBDA,
+    HOT_DAYS_THRESHOLD,
+    ARCHIVE_SALIENCE_THRESHOLD,
     append_to_archive,
     build_project_work_days_map,
+    days_since,
     decay_file,
+    decay_salience,
     is_decay_eligible,
     is_protected_section,
     main,
     parse_learning_date,
     parse_learnings,
     parse_sections,
+    pick_tier,
     purge_old_archives,
     should_decay_entry,
 )
@@ -536,6 +544,125 @@ class TestMainCallsRebuild:
             main()
         mock_rebuild.assert_called_once()
         mock_run.assert_called_once()
+
+
+# =============================================================================
+# B4: Tiered Salience Decay Tests
+# =============================================================================
+
+from math import exp
+
+
+class TestPickTier:
+    """Tests for pick_tier() tier classification."""
+
+    def test_hot_tier_recent_high_access(self):
+        """Recent (< HOT_DAYS_THRESHOLD) + access_count > 5 = hot."""
+        tier, lam = pick_tier(dt_days=2.0, access_count=10, salience=0.5)
+        assert tier == "hot"
+        assert lam == HOT_LAMBDA
+
+    def test_hot_tier_recent_high_salience(self):
+        """Recent + salience > 0.7 = hot."""
+        tier, lam = pick_tier(dt_days=3.0, access_count=1, salience=0.8)
+        assert tier == "hot"
+        assert lam == HOT_LAMBDA
+
+    def test_warm_tier_recent_low_access(self):
+        """Recent but low access and salience 0.4-0.7 = warm."""
+        tier, lam = pick_tier(dt_days=4.0, access_count=2, salience=0.5)
+        assert tier == "warm"
+        assert lam == WARM_LAMBDA
+
+    def test_warm_tier_old_moderate_salience(self):
+        """Old (>= HOT_DAYS_THRESHOLD) but salience > 0.4 = warm."""
+        tier, lam = pick_tier(dt_days=10.0, access_count=3, salience=0.6)
+        assert tier == "warm"
+        assert lam == WARM_LAMBDA
+
+    def test_cold_tier_old_low_salience(self):
+        """Old + low salience + low access = cold."""
+        tier, lam = pick_tier(dt_days=20.0, access_count=1, salience=0.2)
+        assert tier == "cold"
+        assert lam == COLD_LAMBDA
+
+
+class TestDecaySalience:
+    """Tests for decay_salience() exponential decay math."""
+
+    def test_hot_decay_preserves_salience(self):
+        """Hot tier: lambda=0.005, salience barely decreases over 5 days."""
+        result = decay_salience(current_salience=0.9, dt_days=5.0, lam=HOT_LAMBDA)
+        expected = 0.9 * exp(-HOT_LAMBDA * (5.0 / (0.9 + 0.1)))
+        assert abs(result - expected) < 1e-9
+        assert result > 0.87
+
+    def test_cold_decay_drops_fast(self):
+        """Cold tier: lambda=0.05, salience drops significantly over 20 days."""
+        result = decay_salience(current_salience=0.3, dt_days=20.0, lam=COLD_LAMBDA)
+        expected = 0.3 * exp(-COLD_LAMBDA * (20.0 / (0.3 + 0.1)))
+        assert abs(result - expected) < 1e-9
+        assert result < ARCHIVE_SALIENCE_THRESHOLD
+
+    def test_death_spiral_for_neglected_memories(self):
+        """Low-salience chunks decay faster than high-salience ones."""
+        high = decay_salience(current_salience=0.8, dt_days=15.0, lam=COLD_LAMBDA)
+        low = decay_salience(current_salience=0.1, dt_days=15.0, lam=COLD_LAMBDA)
+        assert low < high
+
+    def test_salience_clamped_to_0_1(self):
+        """Result is always in [0.0, 1.0]."""
+        result = decay_salience(current_salience=0.0, dt_days=100.0, lam=COLD_LAMBDA)
+        assert result == 0.0
+        result2 = decay_salience(current_salience=1.0, dt_days=0.0, lam=HOT_LAMBDA)
+        assert 0.0 <= result2 <= 1.0
+
+
+class TestArchiveThreshold:
+    """Tests for salience-based archive decisions."""
+
+    def test_below_threshold_archives(self):
+        """Chunks with salience < ARCHIVE_SALIENCE_THRESHOLD should be archived."""
+        assert ARCHIVE_SALIENCE_THRESHOLD > 0.0
+        salience = ARCHIVE_SALIENCE_THRESHOLD - 0.001
+        assert salience < ARCHIVE_SALIENCE_THRESHOLD
+
+    def test_above_threshold_kept(self):
+        """Chunks with salience >= ARCHIVE_SALIENCE_THRESHOLD should be kept."""
+        salience = ARCHIVE_SALIENCE_THRESHOLD + 0.001
+        assert salience >= ARCHIVE_SALIENCE_THRESHOLD
+
+    def test_protected_sections_never_archived(self):
+        """Auto-pinned sections bypass salience check."""
+        from decay import AUTO_PINNED_SECTIONS
+        for section in AUTO_PINNED_SECTIONS:
+            assert is_protected_section(section)
+
+
+class TestDaysSince:
+    """Tests for days_since() helper."""
+
+    def test_returns_999_for_none(self):
+        """None last_accessed treated as very old."""
+        result = days_since(None)
+        assert result == 999.0
+
+    def test_returns_correct_days(self):
+        """Returns correct days from ISO timestamp."""
+        from datetime import date as date_cls
+        ts = "2026-03-16T12:00:00Z"
+        today = date_cls(2026, 3, 21)
+        result = days_since(ts, today=today)
+        assert result == 5.0
+
+    def test_returns_0_for_today(self):
+        """Today's timestamp returns 0.0."""
+        from datetime import date as date_cls
+        import datetime as dt_module
+        today = date_cls(2026, 3, 21)
+        ts = "2026-03-21T00:00:00Z"
+        result = days_since(ts, today=today)
+        assert result == 0.0
 
 
 if __name__ == "__main__":
