@@ -343,6 +343,7 @@ def _build_preextracted_prompt(
     extracted_files: dict[str, str],
     synthesis_instructions: str,
     embedded_files: dict | None = None,
+    vector_memories: list | None = None,
 ) -> str:
     """Build synthesis prompt with embedded content and structured output format.
 
@@ -354,6 +355,9 @@ def _build_preextracted_prompt(
             - "transcripts": dict[date, content] - transcript text per date
             - "global_ltm": str - global LTM file content
             - "project_ltms": dict[project, content] - project LTM content
+        vector_memories: Optional list of dicts with 'chunk_id' and 'content' from
+            vector search. When provided, replaces full LTM embedding with targeted
+            Existing Memories section using chunk IDs for CRUD reference.
     """
     if embedded_files is None:
         embedded_files = {}
@@ -379,13 +383,18 @@ def _build_preextracted_prompt(
     transcript_block = "\n\n".join(transcript_sections)
 
     # Build LTM sections for dedup context
-    ltm_sections = []
-    if global_ltm:
-        ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
-    for project, content in sorted(project_ltms.items()):
-        if content:
-            ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
-    ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
+    # When vector_memories is provided, use targeted retrieval instead of full LTM
+    if vector_memories:
+        memory_lines = [f"[{m['chunk_id']}] {m['content']}" for m in vector_memories]
+        ltm_block = "## Existing Memories (reference by [chunk_id] in MEMORY_OPS)\n\n" + "\n".join(memory_lines)
+    else:
+        ltm_sections = []
+        if global_ltm:
+            ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
+        for project, content in sorted(project_ltms.items()):
+            if content:
+                ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
+        ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
 
     # Build existing daily merge context (for incremental synthesis)
     existing_dailies = embedded_files.get("existing_dailies", {})

@@ -7,6 +7,8 @@ from synthesis_cron import (
     _clear_eager_timestamp,
     _log_error,
     build_claude_command,
+    extract_topics,
+    retrieve_existing_memories,
     run_synthesis,
     should_run_deferred_synthesis,
 )
@@ -503,3 +505,77 @@ class TestLogError:
             _log_error("test")
         content = error_log.read_text()
         assert content.startswith("[2026-")
+
+
+# ============================================================================
+# C2: Topic extraction and pre-retrieval
+# ============================================================================
+
+
+class TestTopicExtraction:
+    """Tests for algorithmic topic extraction from transcripts."""
+
+    def test_extracts_key_terms_from_transcript(self):
+        """Extracts meaningful keywords/phrases from transcript text."""
+        transcript = "We migrated the API from REST to gRPC for performance and latency"
+        topics = extract_topics(transcript)
+        lower_topics = [t.lower() for t in topics]
+        assert "grpc" in lower_topics or "gRPC" in topics
+        assert "rest" in lower_topics or "REST" in topics
+
+    def test_filters_stopwords(self):
+        """Common words (the, is, a, we, etc.) are excluded."""
+        topics = extract_topics("The user is a developer who writes code")
+        lower_topics = [t.lower() for t in topics]
+        assert "the" not in lower_topics
+        assert "is" not in lower_topics
+
+    def test_empty_transcript_returns_empty(self):
+        """Empty or whitespace input returns empty list."""
+        assert extract_topics("") == []
+        assert extract_topics("   ") == []
+
+    def test_limits_topic_count(self):
+        """Returns at most N topics (default 20)."""
+        long_text = " ".join(f"unique_word_{i}" for i in range(100))
+        topics = extract_topics(long_text)
+        assert len(topics) <= 20
+
+    def test_custom_max_topics(self):
+        """Respects custom max_topics parameter."""
+        long_text = " ".join(f"word_{i}" for i in range(50))
+        topics = extract_topics(long_text, max_topics=5)
+        assert len(topics) <= 5
+
+    def test_short_words_filtered(self):
+        """Words of length <= 2 are excluded."""
+        topics = extract_topics("go to it in my at")
+        assert all(len(t) > 2 for t in topics)
+
+
+class TestPreRetrievalContext:
+    """Tests for vector-retrieved memory context in synthesis prompts."""
+
+    def test_retrieve_existing_memories_fallback_when_import_error(self):
+        """When embeddings module unavailable, returns empty list."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "embeddings":
+                raise ImportError("no module")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            result = retrieve_existing_memories("some transcript text")
+        assert result == []
+
+    def test_retrieve_existing_memories_empty_transcript(self):
+        """Empty transcript returns empty list without calling vector search."""
+        result = retrieve_existing_memories("")
+        assert result == []
+
+    def test_retrieve_existing_memories_whitespace_transcript(self):
+        """Whitespace-only transcript returns empty list."""
+        result = retrieve_existing_memories("   ")
+        assert result == []
