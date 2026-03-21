@@ -44,19 +44,21 @@ except Exception:
     pass  # Non-critical
 ```
 
+`_reindex_after_synthesis()` calls `reindex_all(conn)` — simplest approach for Phase 1 since the memory corpus is small (hundreds of chunks) and synthesis may modify files unpredictably. Future phases can optimize to incremental reindex if needed.
+
 ## Key Decisions
 
 1. **FastEmbed with `sentence-transformers/all-MiniLM-L6-v2`** — 384 dims, CPU-only, ~50ms/embedding, no API key needed.
 
-2. **sqlite-vec for vector storage** — Loaded as extension at connection time. `VEC_CHUNKS_DDL` constant already exists in `storage.py`; this module creates the virtual table on first use.
+2. **sqlite-vec for vector storage** — Loaded via `import sqlite_vec; sqlite_vec.load(conn)` (the `sqlite-vec` Python package provides `load()` which handles extension loading internally). `VEC_CHUNKS_DDL` constant already exists in `storage.py`; this module creates the virtual table on first use. If `import sqlite_vec` fails, `ensure_vec_table()` returns `False`.
 
 3. **Graceful degradation** — If fastembed or sqlite-vec aren't installed:
-   - `embed_chunks()` returns empty list
+   - `embed_batch()` returns empty list
    - `search_similar()` returns empty list
    - `reindex_changed_files()` does nothing
    - No exceptions propagated
 
-4. **Content hash skip** — Before embedding, check if `vec_chunks` already has an entry with matching `chunk_id`. If the chunk's `content_hash` hasn't changed, skip re-embedding.
+4. **Content hash skip** — Before embedding, check if the chunk's `id` already exists in `vec_chunks` AND the corresponding row in `chunks` has the same `content_hash`. If both hold, skip re-embedding. (Note: `vec_chunks` has no `content_hash` column — the check JOINs to the `chunks` table.)
 
 5. **Rebuild-on-write, not rebuild-on-read** — Embedding happens after synthesis writes files, not during SessionStart. Keeps startup fast.
 
@@ -68,6 +70,7 @@ except Exception:
        recency = exp(-0.05 * days_since(chunk.last_accessed))
        return 0.50 * boosted + 0.25 * recency + 0.25 * chunk.salience
    ```
+   **Phase 1 fallbacks:** Until Phase 2 populates `last_accessed` and `salience`, fallback values are used: `last_accessed` defaults to `created_at` (or current time if both NULL), and `salience` defaults to `1.0`. Phase 1 scoring is effectively `0.50 * vec_boosted + 0.25 * recency_from_creation + 0.25 * 1.0`.
 
 ## Public API
 
@@ -76,10 +79,11 @@ except Exception:
 | `ensure_vec_table` | `(conn) -> bool` | Create `vec_chunks` if sqlite-vec available; returns success |
 | `embed_text` | `(text) -> list[float]` | Single text → 384-dim vector |
 | `embed_batch` | `(texts) -> list[list[float]]` | Batch embedding |
-| `index_chunks` | `(conn, chunks: list[ChunkRow])` | Embed + insert into vec_chunks, skip unchanged |
+| `index_chunks` | `(conn, chunk_ids: list[str])` | Query `chunks` table by IDs, embed content, insert into vec_chunks. Accepts chunk IDs (not dataclass instances) — queries the DB internally, avoiding Chunk/ChunkRow type boundary issues. |
+| `index_chunks_by_source` | `(conn, source_files: list[str])` | Query `chunks` by `source_file`, embed + index. Convenience wrapper for reindex flows. |
 | `delete_vec_chunks` | `(conn, chunk_ids: list[str])` | Remove vectors for deleted chunks |
-| `search_similar` | `(conn, query, top_k=10, scope=None) -> list[ScoredChunk]` | Embed query → vec search → score → rank |
-| `reindex_changed_files` | `(conn, changed_files: list[str])` | Delete old vectors → re-query chunks → re-embed |
+| `search_similar` | `(conn, query, top_k=10, scope=None) -> list[ScoredChunk]` | Embed query → vec search → score → rank. Scope filtering: fetches `top_k * 3` candidates from `vec_chunks`, JOINs to `chunks` for metadata, filters by scope if specified, returns top `top_k` after scoring. |
+| `reindex_changed_files` | `(conn, changed_files: list[str])` | Delete old vectors for files → call `index_chunks_by_source` |
 | `reindex_all` | `(conn)` | Full re-index of all chunks in DB |
 
 **Constants:**
