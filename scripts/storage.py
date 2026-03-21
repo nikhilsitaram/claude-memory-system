@@ -133,6 +133,13 @@ __all__ = [
     "update_chunk_salience",
     "update_node_salience",
     "query_chunks_with_salience",
+    "invalidate_edge",
+    "update_chunk_content",
+    "query_chunks_for_retrieval",
+    "query_chunk_by_id",
+    "query_current_edges",
+    "query_edges_at_date",
+    "query_edges_for_node",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
@@ -518,6 +525,50 @@ def batch_update_access(
     return cursor.rowcount
 
 
+def invalidate_edge(
+    conn: sqlite3.Connection,
+    edge_id: str,
+    valid_to: str,
+    expired_at: str,
+) -> None:
+    """Set valid_to and expired_at on an edge (bi-temporal invalidation).
+
+    Used when the LLM detects a contradiction -- the old fact is not deleted
+    but marked as no longer valid, preserving historical context.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    conn.execute(
+        "UPDATE edges SET valid_to = ?, expired_at = ? WHERE id = ?",
+        (valid_to, expired_at, edge_id),
+    )
+
+
+def update_chunk_content(
+    conn: sqlite3.Connection,
+    chunk_id: str,
+    new_content: str,
+    new_entities: Optional[str] = None,
+) -> None:
+    """Update chunk content, content_hash, and optionally entities.
+
+    Recalculates content_hash from the new content.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    new_hash = _content_hash(new_content)
+    if new_entities is not None:
+        conn.execute(
+            "UPDATE chunks SET content = ?, content_hash = ?, entities = ? WHERE id = ?",
+            (new_content, new_hash, new_entities, chunk_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE chunks SET content = ?, content_hash = ? WHERE id = ?",
+            (new_content, new_hash, chunk_id),
+        )
+
+
 def update_chunk_salience(
     conn: sqlite3.Connection, chunk_id: str, new_salience: float
 ) -> None:
@@ -565,6 +616,92 @@ def query_chunks_with_salience(
             f"SELECT {_CHUNK_COLUMNS} FROM chunks"
         ).fetchall()
     return [_row_to_chunk(r) for r in rows]
+
+
+def query_chunks_for_retrieval(
+    conn: sqlite3.Connection,
+    scope: Optional[str] = None,
+    min_salience: float = 0.05,
+) -> list:
+    """Query active chunks suitable for vector search pre-retrieval.
+
+    Excludes chunks below min_salience (effectively archived).
+    Returns chunks with all fields including id (needed for CRUD references).
+    """
+    if scope:
+        rows = conn.execute(
+            f"SELECT {_CHUNK_COLUMNS} FROM chunks "
+            f"WHERE scope = ? AND salience >= ?",
+            (scope, min_salience),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE salience >= ?",
+            (min_salience,),
+        ).fetchall()
+    return [_row_to_chunk(r) for r in rows]
+
+
+def query_chunk_by_id(
+    conn: sqlite3.Connection, chunk_id: str
+) -> Optional[ChunkRow]:
+    """Query a single chunk by ID. Returns None if not found."""
+    row = conn.execute(
+        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE id = ?", (chunk_id,)
+    ).fetchone()
+    return _row_to_chunk(row) if row else None
+
+
+_EDGE_COLUMNS = (
+    "id, source, target, type, fact, properties, created_at, "
+    "valid_from, valid_to, expired_at, weight, source_sessions"
+)
+
+
+def _row_to_edge(row: tuple) -> EdgeRow:
+    """Convert a raw SQLite row tuple to an EdgeRow dataclass."""
+    return EdgeRow(
+        id=row[0], source=row[1], target=row[2], type=row[3],
+        fact=row[4], properties=row[5], created_at=row[6],
+        valid_from=row[7], valid_to=row[8], expired_at=row[9],
+        weight=row[10], source_sessions=row[11],
+    )
+
+
+def query_current_edges(conn: sqlite3.Connection) -> list:
+    """Query all currently valid edges (valid_to IS NULL)."""
+    rows = conn.execute(
+        f"SELECT {_EDGE_COLUMNS} FROM edges WHERE valid_to IS NULL"
+    ).fetchall()
+    return [_row_to_edge(r) for r in rows]
+
+
+def query_edges_at_date(
+    conn: sqlite3.Connection, date_str: str
+) -> list:
+    """Query edges that were valid at a specific date.
+
+    Returns edges where valid_from <= date AND (valid_to IS NULL OR valid_to > date).
+    """
+    rows = conn.execute(
+        f"SELECT {_EDGE_COLUMNS} FROM edges "
+        f"WHERE (valid_from IS NULL OR valid_from <= ?) "
+        f"AND (valid_to IS NULL OR valid_to > ?)",
+        (date_str, date_str),
+    ).fetchall()
+    return [_row_to_edge(r) for r in rows]
+
+
+def query_edges_for_node(
+    conn: sqlite3.Connection, node_id: str
+) -> list:
+    """Query all edges (valid and invalid) connected to a node."""
+    rows = conn.execute(
+        f"SELECT {_EDGE_COLUMNS} FROM edges "
+        f"WHERE source = ? OR target = ?",
+        (node_id, node_id),
+    ).fetchall()
+    return [_row_to_edge(r) for r in rows]
 
 
 _LTM_ENTRY_RE = re.compile(
