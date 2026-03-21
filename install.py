@@ -155,6 +155,7 @@ def link_scripts(script_dir: Path) -> None:
         "simhash.py",  # SimHash fingerprinting for near-duplicate detection
         "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
+        "backfill.py",  # One-time entity re-extraction for existing chunks
     ]
 
     for script_name in scripts_to_link:
