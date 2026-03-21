@@ -213,6 +213,11 @@ class TestGracefulDegradation:
         with mock.patch("embeddings.HAS_FASTEMBED", False):
             reindex_all(db)
 
+    def test_search_similar_no_sqlite_vec(self, db):
+        with mock.patch("embeddings.HAS_SQLITE_VEC", False):
+            results = search_similar(db, "test query")
+            assert results == []
+
 
 class TestIndexChunks:
     def test_index_chunks_inserts_vectors(self, db_with_vec, mock_embedder, sample_chunks):

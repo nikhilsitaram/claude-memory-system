@@ -674,6 +674,17 @@ class TestCreateDatabase:
             install.link_scripts(repo_dir)
         assert (tmp_path / ".claude" / "scripts" / "health.py").exists()
 
+    def test_link_scripts_includes_embeddings(self, tmp_path):
+        """Verify embeddings.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "embeddings.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "embeddings.py").exists()
+
     def test_create_database_creates_db_and_migrates(self, tmp_path):
         """Verify create_database creates memory.db and runs migration."""
         mem_dir = tmp_path / ".claude" / "memory"
