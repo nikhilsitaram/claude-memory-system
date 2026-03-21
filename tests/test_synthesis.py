@@ -2429,6 +2429,43 @@ class TestApplyCrudOps:
         content = ltm_file.read_text()
         assert "gRPC for internal comms" in content
 
+    def test_add_with_design_type_produces_design_tag(self, tmp_path):
+        """ADD with type='design' should produce [design] in markdown, not [implement]."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "JWT over sessions for statelessness", "scope": "global", "section": "Key Decisions", "type": "design", "entities": ["JWT"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+
+        content = ltm_file.read_text()
+        assert "[design] JWT over sessions" in content
+        assert "[implement]" not in content or "JWT" not in content.split("[implement]")[-1]
+
+    def test_add_with_memoryop_type_produces_correct_tag(self, tmp_path):
+        """ADD via MemoryOp dataclass with type='design' should produce [design] tag."""
+        from unittest.mock import patch
+        from synthesis import MemoryOp, apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [MemoryOp(action="ADD", fact="chose gRPC over REST", scope="global", section="Key Decisions", type="design", entities=["gRPC", "REST"])]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+
+        content = ltm_file.read_text()
+        assert "- (2026-03-21) [design] chose gRPC over REST" in content
+
     def test_update_modifies_chunk_and_markdown_line(self, tmp_path):
         """UPDATE: modifies DB chunk content and updates markdown line."""
         from unittest.mock import patch
@@ -2961,7 +2998,7 @@ class TestMemoryOpsParsing:
     def test_memory_op_fields_mapped_correctly(self):
         """All MemoryOp fields are populated from JSON."""
         text = '''===MEMORY_OPS===
-{"ops": [{"action": "ADD", "fact": "uses gRPC", "scope": "proj", "section": "Key Decisions", "entities": ["gRPC", "proj"], "reason": "new info"}]}
+{"ops": [{"action": "ADD", "fact": "uses gRPC", "scope": "proj", "section": "Key Decisions", "type": "design", "entities": ["gRPC", "proj"], "reason": "new info"}]}
 ===END==='''
         result = parse_synthesis_output(text)
         op = result.memory_ops[0]
@@ -2969,5 +3006,14 @@ class TestMemoryOpsParsing:
         assert op.fact == "uses gRPC"
         assert op.scope == "proj"
         assert op.section == "Key Decisions"
+        assert op.type == "design"
         assert op.entities == ["gRPC", "proj"]
         assert op.reason == "new info"
+
+    def test_memory_op_type_defaults_to_none(self):
+        """MemoryOp.type is None when not provided in JSON."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "simple fact"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].type is None

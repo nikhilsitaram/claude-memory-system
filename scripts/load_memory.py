@@ -510,6 +510,7 @@ def _build_synthesis_prompt(
     pending_dates: list[str],
     extracted_files: dict[str, str],
     embedded_files: dict | None = None,
+    vector_memories: list | None = None,
 ) -> str:
     """
     Build the embedded synthesis prompt for the subagent.
@@ -521,12 +522,15 @@ def _build_synthesis_prompt(
         pending_dates: List of pending date strings (YYYY-MM-DD)
         extracted_files: Dict mapping date -> file path (pre-extracted)
         embedded_files: Pre-read content to embed inline (transcripts, LTM content)
+        vector_memories: Optional list of dicts with 'chunk_id' and 'content'
+            from vector search for targeted dedup context.
     """
     project_names_str = _get_project_names_str()
     synthesis_instructions = _build_synthesis_instructions(project_names_str)
 
     return _build_preextracted_prompt(
-        pending_dates, extracted_files, synthesis_instructions, embedded_files
+        pending_dates, extracted_files, synthesis_instructions, embedded_files,
+        vector_memories=vector_memories,
     )
 
 
@@ -608,6 +612,21 @@ def _build_embedded_files(
                     pass
     return embedded
 
+
+def _retrieve_vector_memories(transcript_text: str) -> list | None:
+    """Retrieve existing memories relevant to transcript via vector search.
+
+    Returns list of dicts with 'chunk_id' and 'content', or None if
+    embeddings are unavailable or transcript is empty.
+    """
+    if not transcript_text or not transcript_text.strip():
+        return None
+    try:
+        from synthesis_cron import retrieve_existing_memories
+        memories = retrieve_existing_memories(transcript_text)
+        return memories if memories else None
+    except (ImportError, Exception):
+        return None
 
 
 def pre_extract_transcripts_incremental(
@@ -704,7 +723,9 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
             daily_data=single_date_data,
         )
 
-        prompt = _build_synthesis_prompt([date], single_date_files, embedded)
+        vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
+
+        prompt = _build_synthesis_prompt([date], single_date_files, embedded, vector_memories=vector_memories)
 
         prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"
         Path(prompt_path).write_text(prompt, encoding="utf-8")
@@ -885,8 +906,10 @@ def main() -> None:
                     daily_data=single_date_data,
                 )
 
+                vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
+
                 synth_prompt = _build_synthesis_prompt(
-                    [date], single_date_files, embedded
+                    [date], single_date_files, embedded, vector_memories=vector_memories
                 )
 
                 prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"

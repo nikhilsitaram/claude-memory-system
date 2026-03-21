@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from synthesis_cron import (
+    MAX_TOPICS,
     _clear_eager_timestamp,
     _log_error,
     build_claude_command,
@@ -536,10 +537,10 @@ class TestTopicExtraction:
         assert extract_topics("   ") == []
 
     def test_limits_topic_count(self):
-        """Returns at most N topics (default 20)."""
+        """Returns at most MAX_TOPICS topics."""
         long_text = " ".join(f"unique_word_{i}" for i in range(100))
         topics = extract_topics(long_text)
-        assert len(topics) <= 20
+        assert len(topics) <= MAX_TOPICS
 
     def test_custom_max_topics(self):
         """Respects custom max_topics parameter."""

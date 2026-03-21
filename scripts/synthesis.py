@@ -141,6 +141,7 @@ class MemoryOp:
     id: str | None = None
     scope: str | None = None
     section: str | None = None
+    type: str | None = None
     entities: list | None = None
     reason: str | None = None
 
@@ -215,6 +216,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
                             id=op.get("id"),
                             scope=op.get("scope"),
                             section=op.get("section"),
+                            type=op.get("type"),
                             entities=op.get("entities"),
                             reason=op.get("reason"),
                         )
@@ -929,7 +931,7 @@ def _archive_markdown_line(
 
 
 def _apply_add(conn, op: dict, session_date: str, ltm_dir: Path, global_file: Path) -> list:
-    """Handle ADD: insert chunk+node in DB, append to LTM markdown."""
+    """Handle ADD: insert chunk in DB, append to LTM markdown."""
     warnings = []
     fact = op.get("fact", "")
     scope = op.get("scope") or "global"
@@ -1116,6 +1118,7 @@ def apply_memory_ops(
                     "id": op.id,
                     "scope": op.scope,
                     "section": op.section,
+                    "type": op.type,
                     "entities": op.entities,
                     "reason": op.reason,
                 }
