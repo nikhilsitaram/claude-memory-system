@@ -31,9 +31,13 @@ from storage import (
     insert_node,
     query_chunks_by_scope,
     query_chunks_by_source,
+    query_chunks_with_salience,
     query_node_by_name_and_type,
     query_nodes_by_scope,
     update_node_access,
+    batch_update_access,
+    update_chunk_salience,
+    update_node_salience,
 )
 
 
@@ -362,3 +366,153 @@ class TestEdgeCRUD:
             "SELECT source_sessions FROM edges WHERE source=?", (src.id,)
         ).fetchone()
         assert "2026-03-01" in row[0]
+
+
+# ============================================================================
+# B1: Access tracking and salience update helpers
+# ============================================================================
+
+
+class TestBatchUpdateAccess:
+    """Tests for batch_update_access() helper."""
+
+    def test_increments_access_count_and_updates_timestamp(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            c1 = ChunkRow(content="A", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            c2 = ChunkRow(content="B", source_file="f.md", source_type="ltm", scope="global", chunk_index=1, created_at="2026-01-01")
+            c3 = ChunkRow(content="C", source_file="f.md", source_type="ltm", scope="global", chunk_index=2, created_at="2026-01-01")
+            id1 = insert_chunk(conn, c1)
+            id2 = insert_chunk(conn, c2)
+            id3 = insert_chunk(conn, c3)
+            conn.commit()
+            ts = "2026-03-21T10:00:00Z"
+            count = batch_update_access(conn, [id1, id2], timestamp=ts)
+            conn.commit()
+            assert count == 2
+            rows = {r.id: r for r in query_chunks_with_salience(conn)}
+            assert rows[id1].access_count == 1
+            assert rows[id1].last_accessed == ts
+            assert rows[id2].access_count == 1
+            assert rows[id3].access_count == 0
+            assert rows[id3].last_accessed is None
+            close_db(conn)
+
+    def test_empty_batch_is_noop(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            count = batch_update_access(conn, [])
+            assert count == 0
+            close_db(conn)
+
+    def test_missing_id_is_silently_skipped(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            count = batch_update_access(conn, ["nonexistent-id"], timestamp="2026-03-21T10:00:00Z")
+            conn.commit()
+            assert count == 0
+            close_db(conn)
+
+
+class TestUpdateChunkSalience:
+    """Tests for update_chunk_salience() helper."""
+
+    def test_updates_salience_value(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            update_chunk_salience(conn, cid, 0.42)
+            conn.commit()
+            rows = query_chunks_with_salience(conn)
+            assert abs(rows[0].salience - 0.42) < 1e-9
+            close_db(conn)
+
+    def test_clamps_salience_to_0_1(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="test clamp", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            update_chunk_salience(conn, cid, 1.5)
+            conn.commit()
+            rows = query_chunks_with_salience(conn)
+            assert rows[0].salience == 1.0
+            update_chunk_salience(conn, cid, -0.5)
+            conn.commit()
+            rows = query_chunks_with_salience(conn)
+            assert rows[0].salience == 0.0
+            close_db(conn)
+
+    def test_missing_chunk_id_is_noop(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            update_chunk_salience(conn, "nonexistent", 0.5)
+            conn.commit()
+            close_db(conn)
+
+
+class TestUpdateNodeSalience:
+    """Tests for update_node_salience() helper."""
+
+    def test_updates_node_salience(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            node = NodeRow(name="test-node", type="tool", scope="global", created_at="2026-01-01")
+            nid = insert_node(conn, node)
+            conn.commit()
+            update_node_salience(conn, nid, 0.75)
+            conn.commit()
+            row = conn.execute("SELECT salience FROM nodes WHERE id=?", (nid,)).fetchone()
+            assert abs(row[0] - 0.75) < 1e-9
+            close_db(conn)
+
+    def test_clamps_node_salience(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            node = NodeRow(name="clamp-node", type="tool", scope="global", created_at="2026-01-01")
+            nid = insert_node(conn, node)
+            conn.commit()
+            update_node_salience(conn, nid, 2.0)
+            conn.commit()
+            row = conn.execute("SELECT salience FROM nodes WHERE id=?", (nid,)).fetchone()
+            assert row[0] == 1.0
+            close_db(conn)
+
+
+class TestQueryChunksWithSalience:
+    """Tests for query_chunks_with_salience() helper."""
+
+    def test_returns_chunks_with_access_metadata(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="salience test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.9, access_count=3)
+            insert_chunk(conn, chunk)
+            conn.commit()
+            results = query_chunks_with_salience(conn)
+            assert len(results) == 1
+            assert abs(results[0].salience - 0.9) < 1e-9
+            assert results[0].access_count == 3
+            close_db(conn)
+
+    def test_filters_by_scope_when_provided(self, tmp_path):
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            insert_chunk(conn, ChunkRow(content="global entry", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01"))
+            insert_chunk(conn, ChunkRow(content="project entry", source_file="p.md", source_type="ltm", scope="my-project", chunk_index=0, created_at="2026-01-01"))
+            conn.commit()
+            results = query_chunks_with_salience(conn, scope="global")
+            assert len(results) == 1
+            assert results[0].scope == "global"
+            close_db(conn)
