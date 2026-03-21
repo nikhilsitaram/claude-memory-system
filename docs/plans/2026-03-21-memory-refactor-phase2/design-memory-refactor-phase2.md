@@ -22,11 +22,11 @@ Make the write path intelligent: the synthesis LLM makes informed ADD/UPDATE/DEL
 
 1. Synthesis produces explicit CRUD decisions (ADD/UPDATE/DELETE/NOOP) for each extracted fact, using vector-retrieved existing memories as context — all within the existing single synthesis LLM call (no additional LLM calls)
 2. Contradicted memories get bi-temporal invalidation (`valid_to` set) rather than silent deletion, preserving historical context
-3. Frequently-accessed memories decay slower (hot tier, λ=0.005) than untouched ones (cold tier, λ=0.05)
-4. `load_memory.py` tracks access counts and timestamps on served chunks/nodes in `memory.db`
+3. Memories served more often decay slower than memories never accessed (tiered hot/warm/cold rates)
+4. Memory access frequency is tracked: each time memories are served at SessionStart, their access count and last-accessed timestamp are updated in the DB
 5. Chunks have populated `entities` JSON with LLM-extracted structured data (project names, libraries, concepts, people, URLs, dates) — extracted as part of the synthesis CRUD output
 6. A one-time backfill command (`scripts/backfill.py`) re-extracts entities for all existing chunks using Sonnet, idempotent and safe to re-run
-7. All existing 816 tests pass; new tests cover each worktree's functionality
+7. No regressions in existing tests. Each new public function has at least one unit test covering its happy path and primary error condition
 
 ## Non-Goals
 
@@ -51,6 +51,8 @@ Phase 2 has two independent worktrees that develop in parallel, plus a backfill 
 ### Pre-Requisite: Branch Reconciliation
 
 Before starting Phase 2 worktrees, the `memory-system-refactor` branch must incorporate the vector search work (currently on `main` via squash merge `80c9444`). Vector search (`scripts/embeddings.py`) is a direct dependency for the intelligent-synthesis worktree's pre-retrieval step. The vector search commits should be brought onto `memory-system-refactor` and rolled back from `main`.
+
+**Verification gate:** Before starting the intelligent-synthesis worktree, confirm `scripts/embeddings.py` exists on-branch and `python -c "import embeddings"` succeeds from the scripts directory.
 
 ## Worktree 1: `salience-decay` (#50)
 
@@ -108,9 +110,11 @@ def decay_salience(chunk):
 
 | Decision | Choice | Why |
 |----------|--------|-----|
-| Reinforcement eta | 0.18 | OpenMemory's tuned value; diminishing returns prevents runaway salience |
+| Reinforcement eta | 0.18 | OpenMemory's tuned value (see [openmemory/mcp](https://github.com/mem0ai/mem0/tree/main/openmemory)); diminishing returns formula `0.18 * (1 - current)` converges toward 1.0 without overshooting |
 | Archive threshold | 0.05 | Low enough that only truly forgotten memories are archived |
 | Hot tier boundary | 6 days, access_count>5 or salience>0.7 | Matches typical work-week access patterns |
+| Decay lambdas | 0.005 / 0.02 / 0.05 | At λ=0.05 (cold), untouched memory decays to ~37% salience in 20 days. At λ=0.005 (hot), same period yields ~90%. From OpenMemory's tiered decay model. |
+| Salience-dependent rate | `dt / (salience + 0.1)` divisor | Intentional "death spiral" for neglected memories: low-salience chunks decay faster, accelerating archival once a memory falls out of use. A chunk at salience=0.1 decays ~5x faster than one at salience=0.9. This is desired — once a memory is cold and unaccessed, it should archive quickly rather than linger. |
 | Concurrency model | BEGIN IMMEDIATE + retry | WAL mode handles concurrent reads; IMMEDIATE prevents write conflicts |
 
 ### Files Modified
@@ -142,16 +146,17 @@ transcripts + vector-retrieved existing memories → LLM → daily summaries + C
 
 ### Step-by-Step Flow
 
-**1. Pre-retrieval** (new step in `synthesis_cron.py`):
+**1. Pre-retrieval** (new step, called from `write_synthesis_prompt()` in `load_memory.py`):
 Before the synthesis LLM call, retrieve existing memories relevant to the transcript content:
 - Extract key topics/terms from transcripts (algorithmic, not LLM)
 - Vector-search `vec_chunks` for top-K similar existing memories per topic
 - Format retrieved memories with their chunk IDs as context for the LLM
+- **Integration point:** Pre-retrieval runs inside a new helper called from `write_synthesis_prompt()`, after transcript extraction and before prompt construction. The vector-retrieved memories are added to the prompt as a new `## Existing Memories` section, formatted by `_build_preextracted_prompt()`. This **replaces** the current `_build_embedded_files()` approach of embedding full LTM content for dedup context — vector-retrieved candidates are more targeted and use fewer tokens.
 
 **2. Enhanced synthesis prompt**:
 The LLM receives:
 - Session transcripts (existing, unchanged)
-- Existing relevant memories with their IDs (new context section)
+- Vector-retrieved existing memories with their chunk IDs (replaces full LTM embedding)
 - Instructions to produce daily summaries AND memory CRUD decisions with entity extraction
 
 **3. New output format** (extends existing `===PROJECT:X===`):
@@ -170,10 +175,15 @@ The LLM receives:
 ```
 
 **4. Apply pipeline** (modified `apply_results()` in `synthesis.py`):
+
+`===MEMORY_OPS===` is a new top-level delimiter, parsed alongside `===PROJECT:===` and `===END===` in `parse_synthesis_output()`. The `SynthesisResult` dataclass gains a new `memory_ops: list[dict]` field.
+
 - **ADD**: Insert new chunk + node into DB, append entry to LTM markdown file
 - **UPDATE**: Modify existing chunk content + metadata in DB, update corresponding line in markdown
 - **DELETE**: Set `valid_to` on related edges (bi-temporal invalidation), reduce salience to 0, archive entry from markdown (move to `## Archived` section)
 - **NOOP**: Skip; optionally increment `evidence_count` to track corroboration
+
+**Chunk-to-markdown resolution:** For UPDATE and DELETE operations, the apply pipeline must locate the corresponding line in the markdown file. Strategy: re-parse the target markdown file using `_parse_ltm_entries()` and match by `content_hash` (SHA-256 prefix stored on the chunk). This is reliable because content hashes are computed at migration time and updated on writes. If no hash match is found (e.g., manual edit), fall back to substring matching on the fact text. If both fail, log a warning and apply the DB change only (markdown will be reconciled at next synthesis).
 
 **5. Bi-temporal edges** (#54):
 When the LLM issues a DELETE (contradiction detected):
@@ -203,16 +213,19 @@ Each CRUD operation includes an `entities` array — LLM-extracted (not regex). 
 | #54 coupling | With #52 | Fact extraction creates edges; contradiction detection invalidates them — one pipeline |
 | Pre-retrieval method | Vector search | SimHash only catches near-dupes; vector search finds semantic equivalents |
 | Output format | JSON in `===MEMORY_OPS===` block | Structured, parseable, coexists with existing `===PROJECT===` format |
-| DELETE behavior | Bi-temporal invalidation | Preserves history; enables "what changed?" queries |
+| DELETE behavior | Bi-temporal invalidation | Preserves history; enables Phase 3's "what was true on date X?" retrieval queries. Alternative considered: overwrite + audit log — rejected because audit logs cannot answer temporal queries without full state reconstruction |
 
 ### Files Modified
 
 - `scripts/synthesis_cron.py` — add pre-retrieval step (vector search existing memories before LLM call)
 - `scripts/synthesis.py` — parse `===MEMORY_OPS===` block, implement CRUD apply logic, bi-temporal edge handling
 - `scripts/storage.py` — add `invalidate_edge()`, `update_chunk_content()`, `query_chunks_for_retrieval()` helpers
-- `scripts/load_memory.py` — update `write_synthesis_prompt()` to include retrieved existing memories as context
+- `scripts/load_memory.py` — update `write_synthesis_prompt()` to replace `_build_embedded_files()` with vector-retrieved memory context
+- `scripts/embeddings.py` — dependency, must exist on-branch (see Branch Reconciliation pre-requisite)
+- `scripts/backfill.py` — one-time entity re-extraction for existing chunks (new file)
 - `tests/test_synthesis.py` — new tests for CRUD parsing, apply logic, bi-temporal edges
 - `tests/test_storage.py` — new tests for new CRUD helpers
+- `tests/test_backfill.py` — idempotent re-extraction, progress tracking
 
 ## Backfill Script (`scripts/backfill.py`)
 
