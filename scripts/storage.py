@@ -27,7 +27,7 @@ if str(script_dir) not in sys.path:
 
 from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_DDL = """\
 -- Graph layer
@@ -117,6 +117,7 @@ __all__ = [
     "get_db",
     "close_db",
     "_get_schema_version",
+    "_migrate_salience_data",
     "insert_chunk",
     "query_chunks_by_scope",
     "query_chunks_by_source",
@@ -126,6 +127,12 @@ __all__ = [
     "query_node_by_name_and_type",
     "update_node_access",
     "insert_edge",
+    "NeighborInfo",
+    "query_neighbor_nodes",
+    "batch_update_access",
+    "update_chunk_salience",
+    "update_node_salience",
+    "query_chunks_with_salience",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
@@ -203,8 +210,28 @@ def _get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 
+def _migrate_salience_data(conn: sqlite3.Connection) -> None:
+    """One-time data migration: set last_accessed = created_at where NULL.
+
+    Bootstraps the salience tracking system for existing chunks and nodes.
+    Existing rows start with salience=1.0 (schema default) and
+    access_count=0 (schema default). This backfills last_accessed from
+    created_at so decay tiers start with a meaningful recency baseline.
+    Idempotent: WHERE last_accessed IS NULL ensures repeated runs are safe.
+    """
+    conn.execute(
+        "UPDATE chunks SET last_accessed = created_at "
+        "WHERE last_accessed IS NULL AND created_at IS NOT NULL"
+    )
+    conn.execute(
+        "UPDATE nodes SET last_accessed = created_at "
+        "WHERE last_accessed IS NULL AND created_at IS NOT NULL"
+    )
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
-    pass
+    if current_version < 2:
+        _migrate_salience_data(conn)
 
 
 def ensure_db() -> sqlite3.Connection:
@@ -427,6 +454,117 @@ def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
         ),
     )
     return edge_id
+
+
+@dataclass
+class NeighborInfo:
+    """A neighbor node with the connecting edge weight."""
+    node_id: str
+    salience: float
+    edge_weight: float
+
+
+def query_neighbor_nodes(
+    conn: sqlite3.Connection, node_id: str
+) -> list:
+    """Query direct graph neighbors of a node via valid edges.
+
+    Looks up both directions (node as source or target).
+    Excludes expired edges (valid_to IS NOT NULL).
+
+    Returns:
+        List of NeighborInfo with node_id, current salience, and edge weight.
+    """
+    rows = conn.execute(
+        """
+        SELECT n.id, n.salience, e.weight
+        FROM edges e
+        JOIN nodes n ON n.id = CASE WHEN e.source = ? THEN e.target ELSE e.source END
+        WHERE (e.source = ? OR e.target = ?)
+          AND e.valid_to IS NULL
+        """,
+        (node_id, node_id, node_id),
+    ).fetchall()
+    return [NeighborInfo(node_id=r[0], salience=r[1], edge_weight=r[2]) for r in rows]
+
+
+def batch_update_access(
+    conn: sqlite3.Connection,
+    chunk_ids: list,
+    timestamp: Optional[str] = None,
+) -> int:
+    """Batch-increment access_count and update last_accessed for given chunk IDs.
+
+    Args:
+        conn: Database connection.
+        chunk_ids: List of chunk IDs to update.
+        timestamp: ISO timestamp for last_accessed. Defaults to UTC now.
+
+    Returns:
+        Number of rows updated.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    if not chunk_ids:
+        return 0
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    placeholders = ",".join("?" for _ in chunk_ids)
+    cursor = conn.execute(
+        f"UPDATE chunks SET access_count = access_count + 1, "
+        f"last_accessed = ? WHERE id IN ({placeholders})",
+        [timestamp] + list(chunk_ids),
+    )
+    return cursor.rowcount
+
+
+def update_chunk_salience(
+    conn: sqlite3.Connection, chunk_id: str, new_salience: float
+) -> None:
+    """Update salience for a specific chunk, clamped to [0.0, 1.0].
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    clamped = max(0.0, min(1.0, new_salience))
+    conn.execute(
+        "UPDATE chunks SET salience = ? WHERE id = ?", (clamped, chunk_id)
+    )
+
+
+def update_node_salience(
+    conn: sqlite3.Connection, node_id: str, new_salience: float
+) -> None:
+    """Update salience for a specific node, clamped to [0.0, 1.0].
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    clamped = max(0.0, min(1.0, new_salience))
+    conn.execute(
+        "UPDATE nodes SET salience = ? WHERE id = ?", (clamped, node_id)
+    )
+
+
+def query_chunks_with_salience(
+    conn: sqlite3.Connection, scope: Optional[str] = None
+) -> list:
+    """Query chunks including access metadata (access_count, last_accessed, salience).
+
+    Args:
+        conn: Database connection.
+        scope: Optional scope filter. If None, returns all chunks.
+
+    Returns:
+        List of ChunkRow instances with all fields populated.
+    """
+    if scope:
+        rows = conn.execute(
+            f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE scope = ?", (scope,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {_CHUNK_COLUMNS} FROM chunks"
+        ).fetchall()
+    return [_row_to_chunk(r) for r in rows]
 
 
 _LTM_ENTRY_RE = re.compile(

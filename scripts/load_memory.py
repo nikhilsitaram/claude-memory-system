@@ -18,7 +18,9 @@ Requirements: Python 3.9+
 
 import json
 import os
+import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -665,6 +667,105 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
         Path(prompt_path).write_text(prompt, encoding="utf-8")
 
         print(f"prompt_file={prompt_path}")
+
+
+# Constants for access tracking
+REINFORCEMENT_ETA = 0.18  # Reinforcement rate (diminishing returns formula)
+MAX_BUSY_RETRIES = 3
+BUSY_RETRY_DELAY = 0.1  # seconds
+
+
+def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
+    """Execute access tracking with BEGIN IMMEDIATE and retry on SQLITE_BUSY."""
+    from storage import (
+        batch_update_access,
+        update_chunk_salience,
+        update_node_salience,
+        query_neighbor_nodes,
+    )
+
+    for attempt in range(MAX_BUSY_RETRIES):
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            break
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < MAX_BUSY_RETRIES - 1:
+                time.sleep(BUSY_RETRY_DELAY)
+                continue
+            raise
+
+    try:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        batch_update_access(conn, chunk_ids, timestamp=now)
+
+        for cid in chunk_ids:
+            row = conn.execute(
+                "SELECT salience FROM chunks WHERE id = ?", (cid,)
+            ).fetchone()
+            if row:
+                current = row[0] if row[0] is not None else 1.0
+                new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+                update_chunk_salience(conn, cid, new_salience)
+
+        for nid in (node_ids or []):
+            row = conn.execute(
+                "SELECT salience FROM nodes WHERE id = ?", (nid,)
+            ).fetchone()
+            if row:
+                current = row[0] if row[0] is not None else 1.0
+                new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+                update_node_salience(conn, nid, new_salience)
+
+            # Associative reinforcement: boost graph neighbors
+            accessed_row = conn.execute(
+                "SELECT salience FROM nodes WHERE id = ?", (nid,)
+            ).fetchone()
+            if not accessed_row:
+                continue
+            accessed_salience = accessed_row[0] if accessed_row[0] is not None else 1.0
+
+            neighbors = query_neighbor_nodes(conn, nid)
+            for neighbor in neighbors:
+                boost = REINFORCEMENT_ETA * neighbor.edge_weight * accessed_salience
+                new_neighbor_salience = min(1.0, neighbor.salience + boost)
+                update_node_salience(conn, neighbor.node_id, new_neighbor_salience)
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
+    """Record access for served chunks/nodes in the DB.
+
+    Best-effort: failures are logged to stderr but do not block SessionStart.
+    Uses BEGIN IMMEDIATE to prevent write conflicts with concurrent sessions.
+
+    Args:
+        chunk_ids: List of chunk IDs that were served this session.
+        node_ids: Optional list of node IDs that were served.
+    """
+    if not chunk_ids and not node_ids:
+        return
+
+    try:
+        from storage import get_db, close_db
+    except ImportError:
+        return
+
+    conn = None
+    try:
+        conn = get_db()
+        _execute_with_retry(conn, chunk_ids, node_ids or [])
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
+    finally:
+        if conn:
+            close_db(conn)
 
 
 def main() -> None:
