@@ -37,6 +37,10 @@ from decay import (  # noqa: I001
     should_decay_entry,
 )
 from memory_utils import rebuild_projects_index_quiet
+import sys as _sys
+_SCRIPTS_DIR = str(__import__("pathlib").Path(__file__).parent.parent / "scripts")
+if _SCRIPTS_DIR not in _sys.path:
+    _sys.path.insert(0, _SCRIPTS_DIR)
 
 # =============================================================================
 # Date Parsing Tests
@@ -663,6 +667,86 @@ class TestDaysSince:
         ts = "2026-03-21T00:00:00Z"
         result = days_since(ts, today=today)
         assert result == 0.0
+
+
+# =============================================================================
+# B5: Integration test — load memory -> access tracking -> decay -> archive
+# =============================================================================
+
+
+class TestSalienceDecayIntegration:
+    """End-to-end test: load memory -> access tracking -> decay -> archive."""
+
+    def test_full_lifecycle(self, tmp_path):
+        """Integration: serve memory, track access, run decay, verify salience ordering.
+
+        Flow:
+        1. Create LTM file with 3 entries (recent, moderate, old)
+        2. Migrate to DB (populate chunks)
+        3. Track access for 2 of 3 chunks (simulating SessionStart serving them)
+        4. Apply tiered decay using pick_tier + decay_salience directly
+        5. Verify: accessed entries have higher salience than unaccessed old entry
+        6. Verify: cold old entry decays below archive threshold
+        """
+        from unittest import mock
+        from storage import ensure_db, close_db, migrate_markdown_to_db, query_chunks_with_salience, update_chunk_salience
+
+        db_path = tmp_path / "memory.db"
+
+        ltm_content = """\
+## Key Learnings
+- (2026-03-20) [pattern] Recent entry one day ago
+- (2026-03-10) [pattern] Moderate entry eleven days ago
+- (2026-02-20) [pattern] Old entry twenty-nine days ago
+"""
+        ltm_file = tmp_path / "global-long-term-memory.md"
+        ltm_file.write_text(ltm_content, encoding="utf-8")
+
+        with mock.patch("storage.get_db_path", return_value=db_path), \
+             mock.patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+            stats = migrate_markdown_to_db(conn)
+            assert stats.chunks_inserted == 3
+            chunks_list = query_chunks_with_salience(conn)
+            chunks = {c.content: c for c in chunks_list}
+            close_db(conn)
+
+        recent_id = [c.id for c in chunks.values() if "Recent" in c.content][0]
+        moderate_id = [c.id for c in chunks.values() if "Moderate" in c.content][0]
+        old_id = [c.id for c in chunks.values() if "Old" in c.content][0]
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            from load_memory import track_memory_access
+            track_memory_access([recent_id, moderate_id])
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn2 = ensure_db()
+            after_access = {c.id: c for c in query_chunks_with_salience(conn2)}
+
+            from datetime import date as date_cls
+            today = date_cls(2026, 3, 21)
+
+            for c in after_access.values():
+                dt = days_since(c.last_accessed, today=today)
+                tier_name, lam = pick_tier(dt, c.access_count, c.salience)
+                new_sal = decay_salience(c.salience, dt, lam)
+                update_chunk_salience(conn2, c.id, new_sal)
+            conn2.commit()
+
+            final = {c.id: c for c in query_chunks_with_salience(conn2)}
+            close_db(conn2)
+
+        recent_final = final[recent_id]
+        moderate_final = final[moderate_id]
+        old_final = final[old_id]
+
+        assert recent_final.access_count == 1
+        assert old_final.access_count == 0
+
+        assert recent_final.salience > old_final.salience
+        assert moderate_final.salience > old_final.salience
+
+        assert old_final.salience < ARCHIVE_SALIENCE_THRESHOLD
 
 
 if __name__ == "__main__":

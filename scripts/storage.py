@@ -27,7 +27,7 @@ if str(script_dir) not in sys.path:
 
 from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_DDL = """\
 -- Graph layer
@@ -117,6 +117,7 @@ __all__ = [
     "get_db",
     "close_db",
     "_get_schema_version",
+    "_migrate_salience_data",
     "insert_chunk",
     "query_chunks_by_scope",
     "query_chunks_by_source",
@@ -209,8 +210,28 @@ def _get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 
+def _migrate_salience_data(conn: sqlite3.Connection) -> None:
+    """One-time data migration: set last_accessed = created_at where NULL.
+
+    Bootstraps the salience tracking system for existing chunks and nodes.
+    Existing rows start with salience=1.0 (schema default) and
+    access_count=0 (schema default). This backfills last_accessed from
+    created_at so decay tiers start with a meaningful recency baseline.
+    Idempotent: WHERE last_accessed IS NULL ensures repeated runs are safe.
+    """
+    conn.execute(
+        "UPDATE chunks SET last_accessed = created_at "
+        "WHERE last_accessed IS NULL AND created_at IS NOT NULL"
+    )
+    conn.execute(
+        "UPDATE nodes SET last_accessed = created_at "
+        "WHERE last_accessed IS NULL AND created_at IS NOT NULL"
+    )
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
-    pass
+    if current_version < 2:
+        _migrate_salience_data(conn)
 
 
 def ensure_db() -> sqlite3.Connection:

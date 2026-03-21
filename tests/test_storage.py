@@ -39,6 +39,7 @@ from storage import (
     batch_update_access,
     update_chunk_salience,
     update_node_salience,
+    _migrate_salience_data,
 )
 
 
@@ -567,4 +568,87 @@ class TestQueryChunksWithSalience:
             results = query_chunks_with_salience(conn, scope="global")
             assert len(results) == 1
             assert results[0].scope == "global"
+            close_db(conn)
+
+
+# ============================================================================
+# B5: Salience data migration tests
+# ============================================================================
+
+
+class TestSalienceDataMigration:
+    """Tests for one-time data migration setting last_accessed on existing chunks."""
+
+    def test_existing_chunks_get_last_accessed_from_created_at(self, tmp_path):
+        """Chunks with NULL last_accessed get last_accessed = created_at."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.execute(
+                "INSERT INTO chunks (id, content, source_file, source_type, created_at, salience, access_count) "
+                "VALUES ('c1', 'test', 'f.md', 'ltm', '2026-01-15', 1.0, 0)"
+            )
+            conn.commit()
+            _migrate_salience_data(conn)
+            conn.commit()
+            row = conn.execute("SELECT last_accessed FROM chunks WHERE id='c1'").fetchone()
+            assert row[0] == "2026-01-15"
+            close_db(conn)
+
+    def test_chunks_with_last_accessed_unchanged(self, tmp_path):
+        """Chunks that already have last_accessed are not modified."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.execute(
+                "INSERT INTO chunks (id, content, source_file, source_type, created_at, last_accessed, salience, access_count) "
+                "VALUES ('c2', 'test', 'f.md', 'ltm', '2026-01-15', '2026-03-01', 1.0, 0)"
+            )
+            conn.commit()
+            _migrate_salience_data(conn)
+            conn.commit()
+            row = conn.execute("SELECT last_accessed FROM chunks WHERE id='c2'").fetchone()
+            assert row[0] == "2026-03-01"
+            close_db(conn)
+
+    def test_migration_is_idempotent(self, tmp_path):
+        """Running migration twice produces same result."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.execute(
+                "INSERT INTO chunks (id, content, source_file, source_type, created_at, salience, access_count) "
+                "VALUES ('c3', 'test', 'f.md', 'ltm', '2026-02-10', 1.0, 0)"
+            )
+            conn.commit()
+            _migrate_salience_data(conn)
+            conn.commit()
+            _migrate_salience_data(conn)
+            conn.commit()
+            row = conn.execute("SELECT last_accessed FROM chunks WHERE id='c3'").fetchone()
+            assert row[0] == "2026-02-10"
+            close_db(conn)
+
+    def test_salience_defaults_preserved(self, tmp_path):
+        """Existing chunks keep salience=1.0 (schema default)."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="defaults test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            insert_chunk(conn, chunk)
+            conn.commit()
+            _migrate_salience_data(conn)
+            conn.commit()
+            results = query_chunks_with_salience(conn)
+            assert results[0].salience == 1.0
+            close_db(conn)
+
+    def test_schema_version_bumped_to_2(self, tmp_path):
+        """ensure_db() sets SCHEMA_VERSION=2 after migration."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert version == SCHEMA_VERSION
+            assert SCHEMA_VERSION == 2
             close_db(conn)
