@@ -9,7 +9,7 @@
     {
       "letter": "A",
       "name": "Branch Reconciliation",
-      "status": "Not Started",
+      "status": "Complete",
       "depends_on": [],
       "rationale": "Vector search (scripts/embeddings.py) on main must be on this branch before intelligent-synthesis can use it for pre-retrieval. This is a blocking prerequisite for Phase C.",
       "tasks": [
@@ -140,7 +140,7 @@
             "test": ["tests/test_storage.py"]
           },
           "verification": "python3 -m pytest tests/test_storage.py -v -k 'invalidate or update_chunk_content or query_chunks_for_retrieval'",
-          "done_when": "storage.py exports: invalidate_edge(conn, edge_id, valid_to, expired_at) sets valid_to and expired_at on an edge; update_chunk_content(conn, chunk_id, new_content, new_entities) updates content/content_hash/entities on a chunk; update_chunk_salience(conn, chunk_id, new_salience) clamps and sets salience; query_chunks_for_retrieval(conn, scope) returns active chunks with their IDs for vector search context; query_chunk_by_id(conn, chunk_id) for individual lookup. Tests cover: edge invalidation with timestamps, chunk content update, salience clamping, retrieval query filtering."
+          "done_when": "storage.py exports: invalidate_edge(conn, edge_id, valid_to, expired_at) sets valid_to and expired_at on an edge; update_chunk_content(conn, chunk_id, new_content, new_entities) updates content/content_hash/entities on a chunk; update_chunk_salience(conn, chunk_id, new_salience) clamps and sets salience; query_chunks_for_retrieval(conn, scope) returns active chunks with their IDs for vector search context; query_chunk_by_id(conn, chunk_id) for individual lookup; query_nodes_by_scope(conn, scope) verified present (exists from Phase 1, needed by C5). Tests cover: edge invalidation with timestamps, chunk content update, salience clamping, retrieval query filtering."
         },
         {
           "id": "C2",
@@ -166,7 +166,7 @@
             "test": ["tests/test_synthesis.py"]
           },
           "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'memory_ops'",
-          "done_when": "parse_synthesis_output() recognizes ===MEMORY_OPS=== as a new top-level delimiter alongside ===PROJECT:=== and ===END===. Parses the JSON ops array into SynthesisResult.memory_ops (new field: list[dict]). Each op has action (ADD/UPDATE/DELETE/NOOP), optional id, fact, scope, section, entities, reason. Tests cover: valid JSON parsing, mixed PROJECT+MEMORY_OPS output, malformed JSON warning, missing MEMORY_OPS (backward compat returns empty list)."
+          "done_when": "parse_synthesis_output() recognizes ===MEMORY_OPS=== as a new top-level delimiter alongside ===PROJECT:=== and ===END===. Parses the JSON ops array into SynthesisResult.memory_ops (new field: list[MemoryOp]). MemoryOp is a dataclass with action, fact, id, scope, section, entities, reason fields. Tests cover: valid JSON parsing, mixed PROJECT+MEMORY_OPS output, malformed JSON warning, missing MEMORY_OPS (backward compat returns empty list)."
         },
         {
           "id": "C4",
@@ -192,7 +192,7 @@
             "test": ["tests/test_synthesis.py"]
           },
           "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'bitemporal'",
-          "done_when": "When LLM issues DELETE (contradiction): old edge gets valid_to=session_date, expired_at=now(); new fact creates fresh edge with valid_from=session_date. Both remain in DB. query_current_edges(conn) filters by valid_to IS NULL. query_edges_at_date(conn, date) uses valid_from <= date AND (valid_to IS NULL OR valid_to > date). Tests verify: old edge invalidation, new edge creation, temporal query correctness."
+          "done_when": "When LLM issues DELETE (contradiction): old edge gets valid_to=session_date, expired_at=now(); new fact creates fresh edge with valid_from=session_date. Both remain in DB. query_current_edges(conn) filters by valid_to IS NULL. query_edges_at_date(conn, date) uses valid_from <= date AND (valid_to IS NULL OR valid_to > date). Edge invalidation is scoped to the specific deleted chunk's entities (not all edges in scope). Tests verify: old edge invalidation, new edge creation, temporal query correctness, DELETE with no edges is safe, only chunk-related edges are invalidated."
         },
         {
           "id": "C6",

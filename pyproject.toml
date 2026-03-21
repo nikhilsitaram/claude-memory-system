@@ -1,13 +1,16 @@
 [project]
 name = "claude-memory-system"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.9"
 dependencies = [
-    "sqlite-vec>=0.1.7",
     "Pygments>=2.19",
 ]
 
 [project.optional-dependencies]
+vector = [
+    "sqlite-vec>=0.1.7",
+    "fastembed>=0.4.0",
+]
 dev = [
     "pytest>=9.0",
 ]

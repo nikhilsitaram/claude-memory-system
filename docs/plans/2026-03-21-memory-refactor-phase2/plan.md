@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Progress
 ---
 
 # Make the memory write path intelligent: salience-based decay replaces binary age thresholds, LLM-driven CRUD decisions replace keyword dedup, and entity metadata enables filtered retrieval. Implementation Plan
@@ -13,10 +13,10 @@ status: Not Yet Started
 ---
 
 ## Phase A — Branch Reconciliation
-**Status:** Not Started | **Rationale:** Vector search (scripts/embeddings.py) on main must be on this branch before intelligent-synthesis can use it for pre-retrieval. This is a blocking prerequisite for Phase C.
+**Status:** Complete | **Rationale:** Vector search (scripts/embeddings.py) on main must be on this branch before intelligent-synthesis can use it for pre-retrieval. This is a blocking prerequisite for Phase C.
 
-- [ ] A1: Cherry-pick vector search onto memory-system-refactor — *scripts/embeddings.py exists on memory-system-refactor branch, imports cleanly, and all existing tests pass (816 baseline)*
-- [ ] A2: Verify test baseline on reconciled branch — *All 816+ tests pass on the reconciled branch with no regressions*
+- [x] A1: Cherry-pick vector search onto memory-system-refactor — *Already on branch via PR #72 (783f437)*
+- [x] A2: Verify test baseline on reconciled branch — *833 passed, 12 skipped*
 
 ## Phase B — Salience Decay
 **Status:** Not Started | **Rationale:** Access tracking and tiered decay are self-contained changes to load_memory.py, decay.py, and storage.py. No dependency on the synthesis pipeline changes in Phase C. Delivers issue #50.
