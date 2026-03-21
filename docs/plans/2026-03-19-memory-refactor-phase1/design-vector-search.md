@@ -17,7 +17,7 @@ Deliver a CPU-only embedding + vector search module (`scripts/embeddings.py`) th
 1. `search_similar(conn, "how does the chunking pipeline work")` returns relevant chunks ranked by composite score
 2. After synthesis writes new daily/LTM files, `reindex_changed_files()` embeds only changed chunks (content hash skip)
 3. If fastembed or sqlite-vec is not installed, all vector operations are silent no-ops — existing markdown system unaffected
-4. `run_post_processing()` in synthesis.py calls re-indexing automatically after decay
+4. After synthesis completes, any newly written or modified memory chunks are embedded and searchable without manual intervention
 
 ## Architecture
 
@@ -84,7 +84,7 @@ except Exception:
 | `delete_vec_chunks` | `(conn, chunk_ids: list[str])` | Remove vectors for deleted chunks |
 | `search_similar` | `(conn, query, top_k=10, scope=None) -> list[ScoredChunk]` | Embed query → vec search → score → rank. Scope filtering: fetches `top_k * 3` candidates from `vec_chunks`, JOINs to `chunks` for metadata, filters by scope if specified, returns top `top_k` after scoring. |
 | `reindex_changed_files` | `(conn, changed_files: list[str])` | Delete old vectors for files → call `index_chunks_by_source` |
-| `reindex_all` | `(conn)` | Full re-index of all chunks in DB |
+| `reindex_all` | `(conn)` | Full re-index of all chunks in DB. This is the only function called by the Phase 1 synthesis integration. `reindex_changed_files` and `index_chunks_by_source` are exposed for future Phase 2/3 callers and CLI use. |
 
 **Constants:**
 - `EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"`
