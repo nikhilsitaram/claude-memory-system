@@ -999,11 +999,16 @@ def _apply_update(conn, op: dict, ltm_dir: Path, global_file: Path) -> list:
 
 
 def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file: Path) -> list:
-    """Handle DELETE: set salience=0, archive in markdown.
+    """Handle DELETE: bi-temporal edge invalidation, salience=0, archive in markdown.
 
-    Bi-temporal edge invalidation is handled in C5 (_apply_delete_with_edges).
-    For C4, this implementation handles the chunk+markdown portion.
+    When a contradiction is detected:
+    1. Find entity nodes associated with this chunk (via entities JSON)
+    2. Invalidate all current edges connected to those nodes
+    3. Set chunk salience to 0
+    4. Archive the markdown line
     """
+    from datetime import datetime, timezone
+
     warnings = []
     chunk_id = op.get("id")
 
@@ -1011,7 +1016,13 @@ def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file:
         warnings.append("DELETE: missing chunk id")
         return warnings
 
-    from storage import query_chunk_by_id, update_chunk_salience
+    from storage import (
+        invalidate_edge,
+        query_chunk_by_id,
+        query_edges_for_node,
+        query_node_by_name_and_type,
+        update_chunk_salience,
+    )
 
     from memory_utils import project_name_to_filename as _ptf
 
@@ -1020,6 +1031,31 @@ def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file:
         warnings.append(f"DELETE: chunk {chunk_id} not found in DB")
         return warnings
 
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Find and invalidate edges connected to this chunk's entity nodes.
+    # Only invalidate edges connected to nodes matching the chunk's entities —
+    # not all edges in the scope (that would over-invalidate).
+    chunk_entities = []
+    if existing.entities:
+        try:
+            chunk_entities = json.loads(existing.entities)
+        except (ValueError, TypeError):
+            pass
+
+    related_node_ids = set()
+    for entity_name in chunk_entities:
+        node = query_node_by_name_and_type(conn, entity_name, "entity")
+        if node:
+            related_node_ids.add(node.id)
+
+    for node_id in related_node_ids:
+        edges = query_edges_for_node(conn, node_id)
+        for edge in edges:
+            if edge.valid_to is None:
+                invalidate_edge(conn, edge.id, valid_to=session_date, expired_at=now_iso)
+
+    # Set chunk salience to 0
     update_chunk_salience(conn, chunk_id, 0.0)
 
     scope = existing.scope or "global"

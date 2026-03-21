@@ -2593,6 +2593,164 @@ class TestApplyCrudOps:
 
 
 # =============================================================================
+# C5: Bi-temporal edge handling tests
+# =============================================================================
+
+
+class TestBitemporalEdges:
+    """Tests for bi-temporal edge invalidation on DELETE operations."""
+
+    def _setup_db(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, insert_node, insert_edge, ChunkRow, NodeRow, EdgeRow, query_node_by_name_and_type
+        import json
+
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            insert_node(conn, NodeRow(name="gRPC", type="entity", scope="global", created_at="2026-01-01"))
+            insert_node(conn, NodeRow(name="REST", type="entity", scope="global", created_at="2026-01-01"))
+            src = query_node_by_name_and_type(conn, "gRPC", "entity")
+            tgt = query_node_by_name_and_type(conn, "REST", "entity")
+            edge_id = insert_edge(conn, EdgeRow(source=src.id, target=tgt.id, type="replaces", created_at="2026-01-01"))
+            chunk = ChunkRow(
+                content="project uses gRPC instead of REST",
+                source_file="global-long-term-memory.md",
+                source_type="ltm",
+                scope="global",
+                chunk_index=0,
+                created_at="2026-01-01",
+                entities=json.dumps(["gRPC", "REST"]),
+            )
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+        return db_path, chunk_id, edge_id, src.id, tgt.id
+
+    def test_delete_invalidates_edges_on_chunk(self, tmp_path):
+        """DELETE sets valid_to on all edges connected to the chunk's entity nodes."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_current_edges
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] project uses gRPC instead of REST\n")
+        db_path, chunk_id, edge_id, _, _ = self._setup_db(tmp_path)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Contradicted: no longer uses gRPC"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                current = query_current_edges(conn)
+                current_ids = [e.id for e in current]
+                assert edge_id not in current_ids
+            finally:
+                close_db(conn)
+
+    def test_delete_chunk_with_no_edges_is_safe(self, tmp_path):
+        """DELETE on a chunk with no associated edges completes without error."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+        import json
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(
+                    content="fact with no edges",
+                    source_file="global-long-term-memory.md",
+                    source_type="ltm",
+                    scope="global",
+                    chunk_index=0,
+                    created_at="2026-01-01",
+                    entities=json.dumps([]),
+                )
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact with no edges\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("error" in w.lower() for w in warnings)
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.salience == 0.0
+            finally:
+                close_db(conn)
+
+    def test_delete_only_invalidates_chunk_related_edges(self, tmp_path):
+        """Only edges connected to nodes matching chunk's entities are invalidated."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, insert_node, insert_edge, ChunkRow, NodeRow, EdgeRow, query_current_edges, query_node_by_name_and_type
+        from synthesis import apply_memory_ops
+        import json
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                insert_node(conn, NodeRow(name="target-entity", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="unrelated-entity", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="other-node", type="entity", scope="global", created_at="2026-01-01"))
+                target_node = query_node_by_name_and_type(conn, "target-entity", "entity")
+                unrelated_node = query_node_by_name_and_type(conn, "unrelated-entity", "entity")
+                other_node = query_node_by_name_and_type(conn, "other-node", "entity")
+                target_edge_id = insert_edge(conn, EdgeRow(source=target_node.id, target=other_node.id, type="uses", created_at="2026-01-01"))
+                unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=other_node.id, type="uses", created_at="2026-01-01"))
+                chunk = ChunkRow(
+                    content="fact about target-entity only",
+                    source_file="global-long-term-memory.md",
+                    source_type="ltm",
+                    scope="global",
+                    chunk_index=0,
+                    created_at="2026-01-01",
+                    entities=json.dumps(["target-entity"]),
+                )
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about target-entity only\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                current = query_current_edges(conn)
+                current_ids = [e.id for e in current]
+                assert target_edge_id not in current_ids
+                assert unrelated_edge_id in current_ids
+            finally:
+                close_db(conn)
+
+
+# =============================================================================
 # C3: MEMORY_OPS parsing tests
 # =============================================================================
 
