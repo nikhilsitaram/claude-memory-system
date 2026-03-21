@@ -95,11 +95,15 @@ def _get_model():
 def ensure_vec_table(conn) -> bool:
     """Load sqlite-vec extension and create vec_chunks virtual table.
 
-    Returns True on success, False if sqlite-vec is not available.
+    Returns True on success, False if sqlite-vec is not available or extension
+    loading is not permitted by the SQLite build.
     """
     if not HAS_SQLITE_VEC:
         return False
-    sqlite_vec.load(conn)
+    try:
+        sqlite_vec.load(conn)
+    except Exception:
+        return False
     conn.executescript(VEC_CHUNKS_DDL)
     conn.commit()
     return True
