@@ -2367,6 +2367,232 @@ class TestApplyResultsProjectBlocks:
 
 
 # =============================================================================
+# C4: CRUD apply logic tests
+# =============================================================================
+
+
+def _make_ltm_file(tmp_path, scope="global"):
+    """Create a minimal LTM file with standard sections."""
+    content = f"""# {scope} Long-Term Memory
+
+## Key Actions
+<!-- recent actions -->
+
+## Key Decisions
+
+## Key Learnings
+
+"""
+    if scope == "global":
+        f = tmp_path / "global-long-term-memory.md"
+    else:
+        ltm_dir = tmp_path / "project-memory"
+        ltm_dir.mkdir(exist_ok=True)
+        f = ltm_dir / f"{scope}-long-term-memory.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content)
+    return f
+
+
+def _make_db(tmp_path):
+    """Create an in-memory DB with proper patching."""
+    from unittest.mock import patch
+    db_path = tmp_path / "memory.db"
+    return patch("storage.get_db_path", return_value=db_path)
+
+
+class TestApplyCrudOps:
+    """Tests for CRUD operation application from MEMORY_OPS."""
+
+    def test_add_inserts_chunk_and_appends_to_ltm(self, tmp_path):
+        """ADD: creates DB chunk and appends entry to LTM markdown."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "project uses gRPC for internal comms", "scope": "global", "section": "Key Actions", "type": "implement", "entities": ["gRPC"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert any("gRPC" in c.content for c in chunks)
+            finally:
+                close_db(conn)
+
+        content = ltm_file.read_text()
+        assert "gRPC for internal comms" in content
+
+    def test_update_modifies_chunk_and_markdown_line(self, tmp_path):
+        """UPDATE: modifies DB chunk content and updates markdown line."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="project uses REST API for external", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        # Add the old content to the LTM file
+        old_text = ltm_file.read_text()
+        ltm_file.write_text(old_text + "- (2026-01-01) [implement] project uses REST API for external\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "project uses gRPC for external", "entities": ["gRPC"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("not found" in w for w in warnings)
+        content = ltm_file.read_text()
+        assert "gRPC for external" in content
+
+    def test_update_db_only_when_markdown_not_found(self, tmp_path):
+        """UPDATE: when no markdown match, applies DB change and logs warning."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="some unique content xyz", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new content for this chunk"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("DB-only" in w or "not found" in w for w in warnings)
+
+    def test_delete_sets_salience_zero_and_archives(self, tmp_path):
+        """DELETE: sets salience=0, archives in markdown."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="deprecated fact to delete here", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        # Add the content to the LTM
+        old = ltm_file.read_text()
+        ltm_file.write_text(old + "- (2026-01-01) [implement] deprecated fact to delete here\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("not found" in w for w in warnings)
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.salience == 0.0
+            finally:
+                close_db(conn)
+        content = ltm_file.read_text()
+        assert "Archived" in content
+
+    def test_noop_increments_evidence_count(self, tmp_path):
+        """NOOP: increments evidence_count on the chunk."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="confirmed fact", source_file="test.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", evidence_count=1)
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "NOOP", "id": chunk_id, "reason": "Already accurate"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert warnings == []
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.evidence_count == 2
+            finally:
+                close_db(conn)
+
+    def test_unknown_action_logged_as_warning(self, tmp_path):
+        """Unrecognized action produces warning, does not crash."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "MERGE", "fact": "something"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("MERGE" in w or "Unknown" in w for w in warnings)
+
+    def test_missing_chunk_id_on_update_logged(self, tmp_path):
+        """UPDATE with nonexistent chunk ID produces warning."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": "nonexistent-id", "fact": "new fact"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("not found" in w or "nonexistent" in w for w in warnings)
+
+
+# =============================================================================
 # C3: MEMORY_OPS parsing tests
 # =============================================================================
 
