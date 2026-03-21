@@ -1,0 +1,248 @@
+{
+  "schema": 1,
+  "status": "Not Yet Started",
+  "workflow": "ship",
+  "goal": "Make the memory write path intelligent: salience-based decay replaces binary age thresholds, LLM-driven CRUD decisions replace keyword dedup, and entity metadata enables filtered retrieval.",
+  "architecture": "Two parallel worktrees (salience-decay and intelligent-synthesis) develop independently against the shared Phase 1 infrastructure (SQLite DB, chunks, vectors). Salience-decay modifies load_memory.py for access tracking and decay.py for tiered exponential decay. Intelligent-synthesis modifies synthesis.py/synthesis_cron.py/load_memory.py to add vector pre-retrieval, CRUD output parsing, bi-temporal edge invalidation, and entity extraction. A one-time backfill.py script re-extracts entities for existing chunks after both worktrees merge.",
+  "tech_stack": "Python 3.9+, SQLite WAL mode, sqlite-vec (vector search), pytest, dataclasses, math (exp), json",
+  "phases": [
+    {
+      "letter": "A",
+      "name": "Branch Reconciliation",
+      "status": "Not Started",
+      "depends_on": [],
+      "rationale": "Vector search (scripts/embeddings.py) on main must be on this branch before intelligent-synthesis can use it for pre-retrieval. This is a blocking prerequisite for Phase C.",
+      "tasks": [
+        {
+          "id": "A1",
+          "name": "Cherry-pick vector search onto memory-system-refactor",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [
+              "scripts/embeddings.py",
+              "tests/test_embeddings.py"
+            ],
+            "modify": [
+              "install.py",
+              "scripts/synthesis.py",
+              "pyproject.toml"
+            ],
+            "test": ["tests/test_embeddings.py"]
+          },
+          "verification": "python3 -c \"import sys; sys.path.insert(0, 'scripts'); import embeddings; print('OK')\"",
+          "done_when": "scripts/embeddings.py exists on memory-system-refactor branch, imports cleanly, and all existing tests pass (816 baseline)"
+        },
+        {
+          "id": "A2",
+          "name": "Verify test baseline on reconciled branch",
+          "status": "pending",
+          "depends_on": ["A1"],
+          "files": {
+            "create": [],
+            "modify": [],
+            "test": []
+          },
+          "verification": "python3 -m pytest tests/ -q --tb=short",
+          "done_when": "All 816+ tests pass on the reconciled branch with no regressions"
+        }
+      ]
+    },
+    {
+      "letter": "B",
+      "name": "Salience Decay",
+      "status": "Not Started",
+      "depends_on": ["A"],
+      "rationale": "Access tracking and tiered decay are self-contained changes to load_memory.py, decay.py, and storage.py. No dependency on the synthesis pipeline changes in Phase C. Delivers issue #50.",
+      "tasks": [
+        {
+          "id": "B1",
+          "name": "Add storage helpers for access tracking and salience updates",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": ["scripts/storage.py"],
+            "test": ["tests/test_storage.py"]
+          },
+          "verification": "python3 -m pytest tests/test_storage.py -v -k 'access or salience'",
+          "done_when": "storage.py exports batch_update_access(conn, chunk_ids), update_chunk_salience(conn, chunk_id, new_salience), update_node_salience(conn, node_id, new_salience), query_chunks_with_salience(conn) helpers. Tests cover happy path and edge cases (missing ID, empty batch, salience clamping)."
+        },
+        {
+          "id": "B2",
+          "name": "Implement access tracking in load_memory.py",
+          "status": "pending",
+          "depends_on": ["B1"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/load_memory.py"],
+            "test": ["tests/test_load_memory.py"]
+          },
+          "verification": "python3 -m pytest tests/test_load_memory.py -v -k 'access_track'",
+          "done_when": "When chunks/nodes are served at SessionStart, their access_count is incremented, last_accessed is updated to UTC now, and salience is reinforced using min(1.0, salience + 0.18 * (1.0 - salience)). Uses BEGIN IMMEDIATE with retry on SQLITE_BUSY. Tests verify: access_count increments, last_accessed updates, salience reinforcement with diminishing returns, concurrency retry behavior."
+        },
+        {
+          "id": "B3",
+          "name": "Implement associative reinforcement for graph neighbors",
+          "status": "pending",
+          "depends_on": ["B2"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/load_memory.py", "scripts/storage.py"],
+            "test": ["tests/test_load_memory.py"]
+          },
+          "verification": "python3 -m pytest tests/test_load_memory.py -v -k 'associative'",
+          "done_when": "When a node is accessed, its graph neighbors receive a salience boost of 0.18 * edge_weight * accessed_node.salience. storage.py has query_neighbor_nodes(conn, node_id) helper to fetch neighbors via edges table. Tests verify: neighbor boost calculation, boost proportional to edge weight, no boost when no neighbors."
+        },
+        {
+          "id": "B4",
+          "name": "Implement tiered salience decay replacing binary age threshold",
+          "status": "pending",
+          "depends_on": ["B1"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/decay.py"],
+            "test": ["tests/test_decay.py"]
+          },
+          "verification": "python3 -m pytest tests/test_decay.py -v",
+          "done_when": "decay.py implements pick_tier(chunk) returning (tier_name, lambda) based on last_accessed recency + access_count/salience, and decay_salience(chunk) applying factor = exp(-lambda * (dt / (salience + 0.1))). Archive threshold is salience < 0.05 (replaces 30-day/20-working-day cutoff). Auto-pinned sections remain protected. Decay reads from DB metadata and syncs changes back to markdown. Tests cover: tier classification (hot/warm/cold), decay math correctness, archive threshold, protected sections unchanged, death spiral for neglected memories."
+        },
+        {
+          "id": "B5",
+          "name": "Migration for existing data and integration test",
+          "status": "pending",
+          "depends_on": ["B2", "B3", "B4"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/storage.py", "scripts/decay.py"],
+            "test": ["tests/test_decay.py", "tests/test_storage.py"]
+          },
+          "verification": "python3 -m pytest tests/test_decay.py tests/test_storage.py tests/test_load_memory.py -v",
+          "done_when": "Existing chunks get salience=1.0 (schema default), access_count=0, last_accessed=created_at via a one-time migration step in ensure_db(). Integration test verifies: load memory -> access tracking fires -> decay runs -> salience-based archival works end-to-end. All existing tests still pass."
+        }
+      ]
+    },
+    {
+      "letter": "C",
+      "name": "Intelligent Synthesis",
+      "status": "Not Started",
+      "depends_on": ["A"],
+      "rationale": "LLM-driven CRUD decisions, bi-temporal edges, and entity extraction form the intelligent write path. Depends on vector search (Phase A) for pre-retrieval but is independent of salience decay (Phase B). Delivers issues #52, #54, #48.",
+      "tasks": [
+        {
+          "id": "C1",
+          "name": "Add storage helpers for CRUD operations and bi-temporal edges",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": ["scripts/storage.py"],
+            "test": ["tests/test_storage.py"]
+          },
+          "verification": "python3 -m pytest tests/test_storage.py -v -k 'invalidate or update_chunk_content or query_chunks_for_retrieval'",
+          "done_when": "storage.py exports: invalidate_edge(conn, edge_id, valid_to, expired_at) sets valid_to and expired_at on an edge; update_chunk_content(conn, chunk_id, new_content, new_entities) updates content/content_hash/entities on a chunk; update_chunk_salience(conn, chunk_id, new_salience) clamps and sets salience; query_chunks_for_retrieval(conn, scope) returns active chunks with their IDs for vector search context; query_chunk_by_id(conn, chunk_id) for individual lookup. Tests cover: edge invalidation with timestamps, chunk content update, salience clamping, retrieval query filtering."
+        },
+        {
+          "id": "C2",
+          "name": "Implement vector pre-retrieval for synthesis context",
+          "status": "pending",
+          "depends_on": ["C1"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/synthesis_cron.py", "scripts/load_memory.py"],
+            "test": ["tests/test_synthesis_cron.py", "tests/test_load_memory.py"]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis_cron.py tests/test_load_memory.py -v -k 'pre_retriev'",
+          "done_when": "Before synthesis LLM call, a new helper extracts key topics from transcripts (algorithmic, not LLM), vector-searches vec_chunks for top-K similar existing memories per topic, and formats them with chunk IDs. This replaces _build_embedded_files() approach of embedding full LTM content. The _build_preextracted_prompt() gains a new '## Existing Memories' section with vector-retrieved candidates instead of full LTM dumps. Tests verify: topic extraction from transcript text, vector search integration (mocked), prompt formatting includes chunk IDs."
+        },
+        {
+          "id": "C3",
+          "name": "Parse ===MEMORY_OPS=== block in synthesis output",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": ["scripts/synthesis.py"],
+            "test": ["tests/test_synthesis.py"]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'memory_ops'",
+          "done_when": "parse_synthesis_output() recognizes ===MEMORY_OPS=== as a new top-level delimiter alongside ===PROJECT:=== and ===END===. Parses the JSON ops array into SynthesisResult.memory_ops (new field: list[dict]). Each op has action (ADD/UPDATE/DELETE/NOOP), optional id, fact, scope, section, entities, reason. Tests cover: valid JSON parsing, mixed PROJECT+MEMORY_OPS output, malformed JSON warning, missing MEMORY_OPS (backward compat returns empty list)."
+        },
+        {
+          "id": "C4",
+          "name": "Implement CRUD apply logic for ADD/UPDATE/DELETE/NOOP",
+          "status": "pending",
+          "depends_on": ["C1", "C3"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/synthesis.py"],
+            "test": ["tests/test_synthesis.py"]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'apply_crud'",
+          "done_when": "apply_results() processes memory_ops: ADD inserts new chunk+node in DB and appends entry to LTM markdown; UPDATE modifies chunk content/metadata in DB and updates corresponding markdown line (matched by content_hash, fallback to substring); DELETE sets valid_to on edges (bi-temporal invalidation), reduces salience to 0, archives entry in markdown; NOOP optionally increments evidence_count. Tests cover each action type, chunk-to-markdown resolution by content_hash, substring fallback, DB-only fallback when markdown match fails."
+        },
+        {
+          "id": "C5",
+          "name": "Add bi-temporal edge handling for contradiction detection",
+          "status": "pending",
+          "depends_on": ["C1", "C4"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/synthesis.py", "scripts/storage.py"],
+            "test": ["tests/test_synthesis.py"]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'bitemporal'",
+          "done_when": "When LLM issues DELETE (contradiction): old edge gets valid_to=session_date, expired_at=now(); new fact creates fresh edge with valid_from=session_date. Both remain in DB. query_current_edges(conn) filters by valid_to IS NULL. query_edges_at_date(conn, date) uses valid_from <= date AND (valid_to IS NULL OR valid_to > date). Tests verify: old edge invalidation, new edge creation, temporal query correctness."
+        },
+        {
+          "id": "C6",
+          "name": "Add entity extraction to synthesis prompt and apply pipeline",
+          "status": "pending",
+          "depends_on": ["C4"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/synthesis.py", "scripts/load_memory.py"],
+            "test": ["tests/test_synthesis.py"]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis.py -v -k 'entities'",
+          "done_when": "Synthesis prompt instructions include entity extraction requirements (project names, libraries, tools, people, URLs, dates, concepts). Each CRUD op's entities array is stored in the chunk's entities JSON column. ADD creates chunk with entities populated. UPDATE updates entities alongside content. Tests verify: entities stored on ADD, entities updated on UPDATE, synthesis instructions include entity extraction guidance."
+        },
+        {
+          "id": "C7",
+          "name": "Update synthesis prompt to request CRUD decisions",
+          "status": "pending",
+          "depends_on": ["C2", "C3", "C6"],
+          "files": {
+            "create": [],
+            "modify": ["scripts/load_memory.py"],
+            "test": ["tests/test_load_memory.py"]
+          },
+          "verification": "python3 -m pytest tests/test_load_memory.py -v -k 'synthesis_prompt'",
+          "done_when": "_build_synthesis_instructions() and _build_preextracted_prompt() updated to request ===MEMORY_OPS=== JSON block with CRUD decisions and entity extraction. Prompt includes vector-retrieved existing memories with chunk IDs as context. Instructions describe ADD/UPDATE/DELETE/NOOP actions with examples. Test verifies prompt contains MEMORY_OPS format specification and Existing Memories section."
+        }
+      ]
+    },
+    {
+      "letter": "D",
+      "name": "Backfill Script",
+      "status": "Not Started",
+      "depends_on": ["B", "C"],
+      "rationale": "Entity backfill runs once after both worktrees merge, before Phase 3 starts. Must have CRUD infrastructure (Phase C) and salience tracking (Phase B) in place.",
+      "tasks": [
+        {
+          "id": "D1",
+          "name": "Create scripts/backfill.py for entity re-extraction",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": ["scripts/backfill.py"],
+            "modify": ["install.py"],
+            "test": ["tests/test_backfill.py"]
+          },
+          "verification": "python3 -m pytest tests/test_backfill.py -v",
+          "done_when": "backfill.py scans all chunks where entities IS NULL, batches them, sends to Sonnet via 'claude -p' for entity extraction, populates entities JSON column. Idempotent (skips chunks where entities IS NOT NULL). Progress reporting (prints chunks processed / total). install.py updated to include backfill.py in link_scripts(). Tests verify: idempotent skip, progress reporting, Sonnet model selection (mocked), batch processing."
+        }
+      ]
+    }
+  ]
+}
