@@ -3,6 +3,7 @@
 import json
 import sys
 from collections import namedtuple
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -643,3 +644,73 @@ class TestInstallLaunchdAgent:
 
         output = capsys.readouterr().out
         assert "Warning: launchctl bootstrap failed" in output
+
+
+# ---------------------------------------------------------------------------
+# create_database
+# ---------------------------------------------------------------------------
+
+
+class TestCreateDatabase:
+    def test_link_scripts_includes_storage(self, tmp_path):
+        """Verify storage.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "storage.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "storage.py").exists()
+
+    def test_link_scripts_includes_health(self, tmp_path):
+        """Verify health.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "health.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "health.py").exists()
+
+    def test_link_scripts_includes_embeddings(self, tmp_path):
+        """Verify embeddings.py symlink is created by link_scripts."""
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        (scripts_src / "embeddings.py").write_text("pass")
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path):
+            install.create_directories()
+            install.link_scripts(repo_dir)
+        assert (tmp_path / ".claude" / "scripts" / "embeddings.py").exists()
+
+    def test_create_database_creates_db_and_migrates(self, tmp_path):
+        """Verify create_database creates memory.db and runs migration."""
+        mem_dir = tmp_path / ".claude" / "memory"
+        mem_dir.mkdir(parents=True)
+        (mem_dir / "global-long-term-memory.md").write_text(
+            "## Key Learnings\n"
+            "- (2026-03-01) [pattern] Test entry for migration\n",
+            encoding="utf-8",
+        )
+        repo_dir = tmp_path / "repo"
+        scripts_src = repo_dir / "scripts"
+        scripts_src.mkdir(parents=True)
+        db_path = mem_dir / "memory.db"
+        with mock.patch("memory_utils.Path.home", return_value=tmp_path), \
+             mock.patch("storage.get_db_path", return_value=db_path):
+            install.create_database(repo_dir)
+        assert db_path.exists()
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        conn.close()
+        assert count >= 1
+
+    def test_create_database_handles_import_error(self, capsys):
+        """Verify graceful degradation if storage module missing."""
+        with mock.patch.dict(sys.modules, {"storage": None}):
+            install.create_database(Path("/nonexistent"))
+        output = capsys.readouterr().out
+        assert "Warning" in output or "Could not" in output

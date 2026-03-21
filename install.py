@@ -149,7 +149,12 @@ def link_scripts(script_dir: Path) -> None:
         "devtools.py",  # Dev diagnostics and mark-routed migration
         "synthesis.py",  # Zero-tool background synthesis
         "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
+        "storage.py",  # SQLite storage layer (DB lifecycle, CRUD, migration)
+        "health.py",  # Memory health diagnostics
         "token_usage.py",  # Token usage calculation for /settings
+        "simhash.py",  # SimHash fingerprinting for near-duplicate detection
+        "chunking.py",  # Chunk LTM and daily files for text processing
+        "embeddings.py",  # Vector embedding and semantic search
     ]
 
     for script_name in scripts_to_link:
@@ -246,6 +251,33 @@ def copy_templates(script_dir: Path) -> None:
             shutil.copy2(src, settings_file)
             print("Created default memory settings at ~/.claude/memory/settings.json")
 
+
+def create_database(script_dir: Path) -> None:
+    """Create or update memory.db and run markdown migration.
+
+    Non-fatal -- prints warning on failure since the markdown system
+    continues to work without the DB.
+    """
+    try:
+        # Import storage module from scripts directory
+        scripts_path = script_dir / "scripts"
+        if str(scripts_path) not in sys.path:
+            sys.path.insert(0, str(scripts_path))
+
+        from storage import close_db, ensure_db, migrate_markdown_to_db
+
+        conn = ensure_db()
+        try:
+            stats = migrate_markdown_to_db(conn)
+            print(f"Memory database: {stats.ltm_files_processed} LTM files, "
+                  f"{stats.daily_files_processed} daily files, "
+                  f"{stats.chunks_inserted} chunks indexed "
+                  f"({stats.chunks_skipped} unchanged)")
+        finally:
+            close_db(conn)
+    except Exception as e:
+        print(f"Warning: Could not create memory database: {e}")
+        print("  The markdown-based system continues to work without it.")
 
 
 def install_systemd_units(script_dir: Path) -> None:
@@ -614,6 +646,9 @@ def main() -> int:
     link_hooks(script_dir)
     link_skills(script_dir)
     copy_templates(script_dir)
+
+    # Create/update memory database
+    create_database(script_dir)
 
     # Clean up legacy scripts from previous versions
     remove_legacy_scripts()

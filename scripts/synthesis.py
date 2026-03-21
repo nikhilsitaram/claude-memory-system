@@ -778,6 +778,25 @@ def run_decay() -> None:
         pass  # Non-critical
 
 
+def _reindex_after_synthesis() -> None:
+    """Re-index all chunk vectors after synthesis completes.
+
+    Opens its own DB connection, calls reindex_all(), then closes.
+    Non-critical: failures are silently ignored.
+    """
+    try:
+        from embeddings import reindex_all
+        from storage import get_db, close_db
+
+        conn = get_db()
+        try:
+            reindex_all(conn)
+        finally:
+            close_db(conn)
+    except Exception:
+        pass
+
+
 def run_post_processing(
     extract_paths: list[str],
     offsets_json: str | None = None,
@@ -808,6 +827,11 @@ def run_post_processing(
     run_mark_routed()
     run_validate_ltm()
     run_decay()
+
+    try:
+        _reindex_after_synthesis()
+    except Exception:
+        pass
 
     # Update timestamp
     ts_file = get_memory_dir() / ".last-synthesis"
