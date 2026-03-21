@@ -1543,5 +1543,162 @@ class TestCheckSynthesisErrors:
         assert "error 0" not in result
 
 
+# =============================================================================
+# B2: Access Tracking Tests
+# =============================================================================
+
+
+class TestAccessTracking:
+    """Tests for track_memory_access() and access tracking at SessionStart."""
+
+    def _make_db(self, tmp_path):
+        """Helper: create a DB with ensure_db() and return (conn, db_path)."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+        return conn, db_path
+
+    def test_served_chunks_get_access_count_incremented(self, tmp_path):
+        """When chunks are served, their access_count increments by 1."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
+        from load_memory import track_memory_access, REINFORCEMENT_ETA
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="test entry", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([cid])
+            conn2 = ensure_db()
+            results = query_chunks_with_salience(conn2)
+            assert results[0].access_count == 1
+            close_db(conn2)
+
+    def test_last_accessed_updated_to_utc_now(self, tmp_path):
+        """last_accessed is set to current UTC timestamp."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="timestamp test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+
+        fixed_ts = "2026-03-21T12:00:00Z"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            with mock.patch("load_memory.datetime") as mock_dt:
+                mock_now = datetime(2026, 3, 21, 12, 0, 0, tzinfo=timezone.utc)
+                mock_dt.now.return_value = mock_now
+                from load_memory import track_memory_access
+                track_memory_access([cid])
+            conn2 = ensure_db()
+            results = query_chunks_with_salience(conn2)
+            assert results[0].last_accessed == fixed_ts
+            close_db(conn2)
+
+    def test_salience_reinforced_with_diminishing_returns(self, tmp_path):
+        """Salience reinforcement: new = min(1.0, old + 0.18 * (1.0 - old))."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
+        from load_memory import track_memory_access, REINFORCEMENT_ETA
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="salience test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([cid])
+            conn2 = ensure_db()
+            results = query_chunks_with_salience(conn2)
+            expected = 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5)
+            assert abs(results[0].salience - expected) < 1e-9
+            close_db(conn2)
+
+    def test_salience_near_1_converges(self, tmp_path):
+        """Repeated access converges toward 1.0 without overshooting."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
+        from load_memory import track_memory_access, REINFORCEMENT_ETA
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            chunk = ChunkRow(content="near-max salience", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.95)
+            cid = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([cid])
+            conn2 = ensure_db()
+            results = query_chunks_with_salience(conn2)
+            assert results[0].salience < 1.0
+            assert results[0].salience > 0.95
+            close_db(conn2)
+
+    def test_db_unavailable_does_not_block_session(self, tmp_path):
+        """If DB doesn't exist, access tracking silently skips."""
+        from load_memory import track_memory_access
+        nonexistent = tmp_path / "nonexistent" / "memory.db"
+        with mock.patch("load_memory.get_db_path", return_value=nonexistent, create=True):
+            track_memory_access(["some-id"])
+
+    def test_concurrent_write_retries_on_busy(self, tmp_path):
+        """BEGIN IMMEDIATE with retry on SQLITE_BUSY."""
+        import sqlite3
+        from load_memory import _execute_with_retry, MAX_BUSY_RETRIES
+
+        call_count = [0]
+        mock_conn = mock.MagicMock()
+
+        fetchone_result = mock.MagicMock()
+        fetchone_result.fetchone.return_value = None
+
+        def patched_execute(sql, *args, **kwargs):
+            if "BEGIN IMMEDIATE" in sql and call_count[0] < 1:
+                call_count[0] += 1
+                raise sqlite3.OperationalError("database is locked")
+            return fetchone_result
+
+        mock_conn.execute.side_effect = patched_execute
+
+        with mock.patch("load_memory.time") as mock_time:
+            with mock.patch("storage.batch_update_access"):
+                with mock.patch("storage.update_chunk_salience"):
+                    with mock.patch("storage.update_node_salience"):
+                        _execute_with_retry(mock_conn, ["chunk-1"], [])
+
+        assert call_count[0] == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
