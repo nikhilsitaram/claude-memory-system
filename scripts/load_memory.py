@@ -345,7 +345,31 @@ Maximum 5 [LTM] entries per project per synthesis run.
 - URLs (e.g., "https://github.com/...")
 - Dates (e.g., "2026-03-21")
 
-Be comprehensive but precise. Only include entities actually present in the fact.'''
+Be comprehensive but precise. Only include entities actually present in the fact.
+
+**Memory CRUD operations (Phase 2):** After the PROJECT blocks, output a MEMORY_OPS block with explicit decisions about existing memories:
+
+```
+===MEMORY_OPS===
+{{"ops": [
+  {{"action": "ADD", "fact": "description of new fact", "scope": "project-name", "section": "Key Decisions", "type": "design", "entities": ["entity1", "entity2"]}},
+  {{"action": "UPDATE", "id": "chunk_id_from_existing", "fact": "updated description", "entities": ["entity1"]}},
+  {{"action": "DELETE", "id": "chunk_id_from_existing", "reason": "Contradicted: explanation of why this is no longer true"}},
+  {{"action": "NOOP", "id": "chunk_id_from_existing", "reason": "Already accurately captured"}}
+]}}
+```
+
+**Actions:**
+- **ADD**: New fact not present in existing memories. Include scope, section, type, entities.
+- **UPDATE**: Existing memory needs modification (enrichment, correction). Reference by `id` from Existing Memories. Include updated fact and entities.
+- **DELETE**: Existing memory is contradicted by new evidence. Reference by `id`. Include reason explaining the contradiction.
+- **NOOP**: Existing memory is confirmed correct by new evidence. Reference by `id`. Optional.
+
+**Rules:**
+- Reference existing memories by their `[chunk_id]` prefix from the Existing Memories section.
+- Every ADD must include `entities` array with extracted structured data.
+- Prefer UPDATE over ADD+DELETE when a fact is being enriched (not contradicted).
+- MEMORY_OPS block is optional — omit it if no memory changes are needed.'''
 
 
 def _build_preextracted_prompt(
