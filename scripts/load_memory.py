@@ -335,7 +335,17 @@ Maximum 5 [LTM] entries per project per synthesis run.
 
 **Compactness:** Final solutions only, one entry per concept, omit routine details.
 
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.'''
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.
+
+**Entity extraction:** Every CRUD operation in the MEMORY_OPS block should include an `entities` array listing structured data extracted from the fact:
+- Project names (e.g., "myproject", "claude-memory-system")
+- Library/tool names (e.g., "pytest", "sqlite-vec", "gRPC")
+- Concepts (e.g., "bi-temporal tracking", "WAL mode")
+- People (e.g., "John", "@username")
+- URLs (e.g., "https://github.com/...")
+- Dates (e.g., "2026-03-21")
+
+Be comprehensive but precise. Only include entities actually present in the fact.'''
 
 
 def _build_preextracted_prompt(

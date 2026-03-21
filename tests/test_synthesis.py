@@ -2751,6 +2751,135 @@ class TestBitemporalEdges:
 
 
 # =============================================================================
+# C6: Entity extraction tests
+# =============================================================================
+
+
+class TestEntityExtraction:
+    """Tests for entity extraction via CRUD operations."""
+
+    def test_add_stores_entities_on_chunk(self, tmp_path):
+        """ADD op with entities array stores them in chunk's entities JSON column."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "uses gRPC for comms", "scope": "global", "section": "Key Actions", "entities": ["gRPC", "myproject", "internal services"]}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert len(chunks) == 1
+                stored_entities = json.loads(chunks[0].entities)
+                assert "gRPC" in stored_entities
+                assert "myproject" in stored_entities
+            finally:
+                close_db(conn)
+
+    def test_update_replaces_entities(self, tmp_path):
+        """UPDATE op with new entities replaces existing entities on chunk."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="old lib usage", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", entities=json.dumps(["old-lib"]))
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] old lib usage\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new lib api-client usage", "entities": ["new-lib", "api-client"]}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                updated = json.loads(result.entities)
+                assert "new-lib" in updated
+                assert "api-client" in updated
+                assert "old-lib" not in updated
+            finally:
+                close_db(conn)
+
+    def test_add_without_entities_stores_null(self, tmp_path):
+        """ADD op without entities key stores NULL (not empty array)."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "simple fact without entities", "scope": "global", "section": "Key Actions"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert chunks[0].entities is None
+            finally:
+                close_db(conn)
+
+    def test_entities_roundtrip_json(self, tmp_path):
+        """Entities survive JSON encode/decode roundtrip."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        entities = ["Python 3.13", "pytest", "https://example.com", "2026-03-21"]
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "uses various entities", "scope": "global", "section": "Key Actions", "entities": entities}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                roundtripped = json.loads(chunks[0].entities)
+                assert roundtripped == entities
+            finally:
+                close_db(conn)
+
+    def test_synthesis_instructions_mention_entities(self):
+        """Synthesis prompt includes entity extraction guidance."""
+        from load_memory import _build_synthesis_instructions
+        instructions = _build_synthesis_instructions("test-project")
+        assert "entities" in instructions.lower()
+
+
+# =============================================================================
 # C3: MEMORY_OPS parsing tests
 # =============================================================================
 
