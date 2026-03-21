@@ -195,6 +195,10 @@ def index_chunks(conn, chunk_ids: list) -> None:
     if not to_embed:
         return
 
+    stale_ids = [c.id for c in to_embed if c.id in existing_map]
+    if stale_ids:
+        delete_vec_chunks(conn, stale_ids)
+
     contents = [c.content for c in to_embed]
     vectors = embed_batch(contents)
 

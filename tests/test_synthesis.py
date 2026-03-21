@@ -1297,6 +1297,18 @@ class TestRunPostProcessingNoSubprocess:
             run_post_processing(extract_paths=[])
         mock_decay.assert_called_once()
 
+    def test_calls_reindex_after_synthesis(self, tmp_path):
+        """run_post_processing calls _reindex_after_synthesis."""
+        with patch("synthesis.prune_stale_state_entries"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.rebuild_projects_index_quiet"), \
+             patch("synthesis.run_mark_routed"), \
+             patch("synthesis.run_validate_ltm"), \
+             patch("synthesis.run_decay"), \
+             patch("synthesis._reindex_after_synthesis") as mock_reindex:
+            run_post_processing(extract_paths=[])
+        mock_reindex.assert_called_once()
+
     def test_calls_rebuild_projects_index(self, tmp_path):
         """run_post_processing rebuilds projects index before decay."""
         with patch("synthesis.prune_stale_state_entries"), \
