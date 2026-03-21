@@ -154,6 +154,7 @@ def link_scripts(script_dir: Path) -> None:
         "token_usage.py",  # Token usage calculation for /settings
         "simhash.py",  # SimHash fingerprinting for near-duplicate detection
         "chunking.py",  # Chunk LTM and daily files for text processing
+        "embeddings.py",  # Vector embedding and semantic search
     ]
 
     for script_name in scripts_to_link:
