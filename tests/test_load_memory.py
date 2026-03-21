@@ -1752,5 +1752,138 @@ class TestAssociativeReinforcement:
             track_memory_access([], node_ids=[nA])
 
 
+# ============================================================================
+# C7: CRUD-aware synthesis prompt
+# ============================================================================
+
+
+class TestSynthesisPromptCrud:
+    """Tests for CRUD-aware synthesis prompt generation."""
+
+    def test_prompt_contains_memory_ops_format_spec(self):
+        """Prompt includes ===MEMORY_OPS=== output format with examples."""
+        instructions = _build_synthesis_instructions("test-project")
+        assert "===MEMORY_OPS===" in instructions
+        assert "ADD" in instructions
+        assert "UPDATE" in instructions
+        assert "DELETE" in instructions
+        assert "NOOP" in instructions
+
+    def test_prompt_includes_crud_action_descriptions(self):
+        """Prompt describes what each CRUD action means and chunk ID referencing."""
+        instructions = _build_synthesis_instructions("test-project")
+        assert "chunk_id" in instructions or "chunk" in instructions.lower()
+        assert "id" in instructions.lower()
+
+    def test_prompt_includes_existing_memories_with_ids(self, tmp_path):
+        """When vector memories available, prompt has Existing Memories with chunk IDs."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "abc123", "content": "project uses REST API"},
+            {"chunk_id": "def456", "content": "prefers Python for scripting"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "abc123" in prompt
+        assert "def456" in prompt
+        assert "Existing Memories" in prompt
+
+    def test_prompt_falls_back_to_ltm_without_vector(self, tmp_path):
+        """Without vector memories, prompt uses full LTM embedding."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
+            },
+        )
+        assert "Key Actions" in prompt
+
+
+# ============================================================================
+# C2: Pre-retrieval context in synthesis prompts
+# ============================================================================
+
+
+class TestPreRetrievalPrompt:
+    """Tests for vector-retrieved memory context in _build_preextracted_prompt."""
+
+    def test_prompt_includes_existing_memories_section(self, tmp_path):
+        """Synthesis prompt has '## Existing Memories' with chunk IDs."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "abc123", "content": "project uses REST API"},
+            {"chunk_id": "def456", "content": "prefers Python for scripting"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "Existing Memories" in prompt
+        assert "abc123" in prompt
+        assert "def456" in prompt
+
+    def test_fallback_to_full_ltm_when_vec_unavailable(self, tmp_path):
+        """When vector_memories is None/empty, falls back to full LTM embedding."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
+            },
+        )
+        assert "Key Actions" in prompt
+
+    def test_vector_results_formatted_with_chunk_ids(self, tmp_path):
+        """Each retrieved memory includes its chunk ID for CRUD reference."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "chunk_abc123", "content": "content text here"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "[chunk_abc123] content text here" in prompt
+
+    def test_empty_vector_memories_falls_back_to_ltm(self, tmp_path):
+        """Empty vector_memories list uses full LTM fallback."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] some fact",
+            },
+            vector_memories=[],
+        )
+        assert "Key Actions" in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

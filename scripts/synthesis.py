@@ -44,6 +44,7 @@ from memory_utils import (  # noqa: E402
 
 __all__ = [
     "DailyFile",
+    "MemoryOp",
     "MIN_ROUTE_KEYWORDS",
     "ProjectBlock",
     "ROUTE_CAP",
@@ -51,6 +52,7 @@ __all__ = [
     "SECTION_ORDER",
     "SynthesisResult",
     "TYPE_TO_SECTION",
+    "MEMORY_OPS_HEADER",
     "build_dailies_from_project_blocks",
     "extract_routes_from_project_blocks",
     "inject_scopes",
@@ -61,6 +63,14 @@ __all__ = [
     "write_daily_files",
     "append_to_ltm",
     "apply_results",
+    "apply_memory_ops",
+    "_apply_add",
+    "_apply_update",
+    "_apply_delete",
+    "_apply_noop",
+    "_append_entry_to_section",
+    "_update_markdown_line",
+    "_archive_markdown_line",
     "compute_offsets_from_extracts",
     "run_mark_routed",
     "run_validate_ltm",
@@ -72,6 +82,7 @@ __all__ = [
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")  # Legacy format
 ROUTE_HEADER = re.compile(r"^===ROUTE:([^:]+):(.+)===$")  # Legacy format
 PROJECT_HEADER = re.compile(r"^===PROJECT:([^=]+)===$")
+MEMORY_OPS_HEADER = re.compile(r"^===MEMORY_OPS===$")
 END_MARKER = "===END==="
 
 # Routing quality gates
@@ -122,21 +133,37 @@ class ProjectBlock:
 
 
 @dataclass
+class MemoryOp:
+    """A single memory CRUD operation from LLM output."""
+
+    action: str
+    fact: str = ""
+    id: str | None = None
+    scope: str | None = None
+    section: str | None = None
+    type: str | None = None
+    entities: list | None = None
+    reason: str | None = None
+
+
+@dataclass
 class SynthesisResult:
     """Complete parsed synthesis output containing dailies, routes, and warnings."""
 
     dailies: list[DailyFile] = field(default_factory=list)
     routes: list[RouteEntry] = field(default_factory=list)
     project_blocks: list[ProjectBlock] = field(default_factory=list)
+    memory_ops: list[MemoryOp] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
 def _is_delimiter(line: str) -> bool:
-    """Check if a line is any known delimiter (daily, route, project, or end)."""
+    """Check if a line is any known delimiter (daily, route, project, memory_ops, or end)."""
     return bool(
         DAILY_HEADER.match(line)
         or ROUTE_HEADER.match(line)
         or PROJECT_HEADER.match(line)
+        or MEMORY_OPS_HEADER.match(line)
         or line == END_MARKER
     )
 
@@ -166,6 +193,40 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # Check for MEMORY_OPS block
+        if MEMORY_OPS_HEADER.match(line):
+            json_lines = []
+            i += 1
+            while i < len(lines):
+                stripped = lines[i].strip()
+                if _is_delimiter(stripped):
+                    break
+                json_lines.append(lines[i])
+                i += 1
+            json_text = "\n".join(json_lines).strip()
+            if json_text:
+                try:
+                    parsed = json.loads(json_text)
+                    raw_ops = parsed.get("ops", [])
+                    result.memory_ops = [
+                        MemoryOp(
+                            action=op.get("action", ""),
+                            fact=op.get("fact", ""),
+                            id=op.get("id"),
+                            scope=op.get("scope"),
+                            section=op.get("section"),
+                            type=op.get("type"),
+                            entities=op.get("entities"),
+                            reason=op.get("reason"),
+                        )
+                        for op in raw_ops
+                    ]
+                except json.JSONDecodeError as e:
+                    result.warnings.append(
+                        f"Failed to parse MEMORY_OPS JSON: {e}"
+                    )
+            continue
 
         # Check for project header
         project_match = PROJECT_HEADER.match(line)
@@ -745,6 +806,348 @@ def append_to_ltm(
     return warnings
 
 
+def _append_entry_to_section(filepath: Path, section_header: str, entry_line: str) -> None:
+    """Append entry_line after section_header in a markdown file.
+
+    Inserts immediately after the section header (and any comment/blank lines).
+    If the section is not found, appends to the end of the file.
+    """
+    content = filepath.read_text(encoding="utf-8")
+    lines = content.split("\n")
+    insert_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip() == section_header:
+            insert_idx = idx + 1
+            # Skip comment and blank lines after header
+            while insert_idx < len(lines) and (
+                lines[insert_idx].strip().startswith("<!--") or lines[insert_idx].strip() == ""
+            ):
+                insert_idx += 1
+            break
+    if insert_idx is None:
+        # Section not found — append to end
+        lines.append(entry_line)
+    else:
+        lines.insert(insert_idx, entry_line)
+    filepath.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _update_markdown_line(
+    filepath: Path, content_hash: str | None, old_content: str, new_content: str
+) -> bool:
+    """Find and update a line in markdown by content_hash, then substring fallback.
+
+    Returns True if a line was found and updated, False otherwise.
+    """
+    text = filepath.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    updated = False
+
+    # Try content_hash match first: find a line containing old_content exactly
+    if content_hash:
+        import hashlib
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                # Check if this line hashes to the known content_hash
+                # The chunk content stored in DB may differ from the markdown line format
+                # Try matching the last ] portion of the line
+                line_hash = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
+                if line_hash == content_hash:
+                    # Replace the descriptive text (after the last ]) with new_content
+                    bracket_idx = stripped.rfind("]")
+                    if bracket_idx >= 0:
+                        prefix = stripped[:bracket_idx + 1]
+                        lines[idx] = line.replace(stripped, f"{prefix} {new_content}".replace("  ", " "))
+                    else:
+                        lines[idx] = line.replace(stripped, f"- {new_content}")
+                    updated = True
+                    break
+
+    # Fallback: substring match on old_content
+    if not updated and old_content:
+        for idx, line in enumerate(lines):
+            if old_content in line:
+                lines[idx] = line.replace(old_content, new_content)
+                updated = True
+                break
+
+    if updated:
+        filepath.write_text("\n".join(lines), encoding="utf-8")
+    return updated
+
+
+def _archive_markdown_line(
+    filepath: Path, content_hash: str | None, content: str
+) -> bool:
+    """Move a matching line from its section to ## Archived in the markdown file.
+
+    Returns True if the line was found and archived.
+    """
+    text = filepath.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    found_idx = None
+
+    # Try content_hash match
+    if content_hash:
+        import hashlib
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                line_hash = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
+                if line_hash == content_hash:
+                    found_idx = idx
+                    break
+
+    # Substring fallback
+    if found_idx is None and content:
+        for idx, line in enumerate(lines):
+            if content in line and line.strip().startswith("- "):
+                found_idx = idx
+                break
+
+    if found_idx is None:
+        return False
+
+    archived_line = lines.pop(found_idx)
+
+    # Find or create ## Archived section
+    archived_section = "## Archived"
+    archived_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip() == archived_section:
+            archived_idx = idx
+            break
+
+    if archived_idx is None:
+        lines.append("")
+        lines.append(archived_section)
+        lines.append(archived_line)
+    else:
+        lines.insert(archived_idx + 1, archived_line)
+
+    filepath.write_text("\n".join(lines), encoding="utf-8")
+    return True
+
+
+def _apply_add(conn, op: dict, session_date: str, ltm_dir: Path, global_file: Path) -> list:
+    """Handle ADD: insert chunk in DB, append to LTM markdown."""
+    warnings = []
+    fact = op.get("fact", "")
+    scope = op.get("scope") or "global"
+    section = op.get("section") or "Key Actions"
+    entities = op.get("entities")
+    entry_type = op.get("type") or "implement"
+
+    from storage import ChunkRow, insert_chunk
+
+    from memory_utils import project_name_to_filename as _ptf
+
+    chunk = ChunkRow(
+        content=fact,
+        source_file=f"{scope}-long-term-memory.md",
+        source_type="ltm",
+        scope=scope,
+        section=f"## {section}",
+        entry_type=entry_type,
+        created_at=session_date,
+        entities=json.dumps(entities) if entities is not None else None,
+    )
+    insert_chunk(conn, chunk)
+
+    entry_line = f"- ({session_date}) [{entry_type}] {fact}"
+    target_file = global_file if scope == "global" else ltm_dir / _ptf(scope)
+    if target_file.exists():
+        _append_entry_to_section(target_file, f"## {section}", entry_line)
+    else:
+        warnings.append(f"ADD: LTM file not found for scope '{scope}', DB-only")
+
+    return warnings
+
+
+def _apply_update(conn, op: dict, ltm_dir: Path, global_file: Path) -> list:
+    """Handle UPDATE: modify chunk content+entities in DB, update markdown line."""
+    warnings = []
+    chunk_id = op.get("id")
+    new_fact = op.get("fact") or ""
+    new_entities = op.get("entities")
+
+    if not chunk_id:
+        warnings.append("UPDATE: missing chunk id")
+        return warnings
+
+    from storage import query_chunk_by_id, update_chunk_content
+
+    from memory_utils import project_name_to_filename as _ptf
+
+    existing = query_chunk_by_id(conn, chunk_id)
+    if not existing:
+        warnings.append(f"UPDATE: chunk {chunk_id} not found in DB")
+        return warnings
+
+    entities_json = json.dumps(new_entities) if new_entities is not None else None
+    update_chunk_content(conn, chunk_id, new_fact, entities_json)
+
+    scope = existing.scope or "global"
+    target_file = global_file if scope == "global" else ltm_dir / _ptf(scope)
+    if target_file.exists():
+        updated = _update_markdown_line(
+            target_file, existing.content_hash, existing.content, new_fact
+        )
+        if not updated:
+            warnings.append(f"UPDATE: markdown line not found for chunk {chunk_id}, DB-only")
+
+    return warnings
+
+
+def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file: Path) -> list:
+    """Handle DELETE: bi-temporal edge invalidation, salience=0, archive in markdown.
+
+    When a contradiction is detected:
+    1. Find entity nodes associated with this chunk (via entities JSON)
+    2. Invalidate all current edges connected to those nodes
+    3. Set chunk salience to 0
+    4. Archive the markdown line
+    """
+    from datetime import datetime, timezone
+
+    warnings = []
+    chunk_id = op.get("id")
+
+    if not chunk_id:
+        warnings.append("DELETE: missing chunk id")
+        return warnings
+
+    from storage import (
+        invalidate_edge,
+        query_chunk_by_id,
+        query_edges_for_node,
+        query_node_by_name_and_type,
+        update_chunk_salience,
+    )
+
+    from memory_utils import project_name_to_filename as _ptf
+
+    existing = query_chunk_by_id(conn, chunk_id)
+    if not existing:
+        warnings.append(f"DELETE: chunk {chunk_id} not found in DB")
+        return warnings
+
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Find and invalidate edges connected to this chunk's entity nodes.
+    # Only invalidate edges connected to nodes matching the chunk's entities —
+    # not all edges in the scope (that would over-invalidate).
+    chunk_entities = []
+    if existing.entities:
+        try:
+            chunk_entities = json.loads(existing.entities)
+        except (ValueError, TypeError):
+            pass
+
+    related_node_ids = set()
+    for entity_name in chunk_entities:
+        node = query_node_by_name_and_type(conn, entity_name, "entity")
+        if node:
+            related_node_ids.add(node.id)
+
+    for node_id in related_node_ids:
+        edges = query_edges_for_node(conn, node_id)
+        for edge in edges:
+            if edge.valid_to is None:
+                invalidate_edge(conn, edge.id, valid_to=session_date, expired_at=now_iso)
+
+    # Set chunk salience to 0
+    update_chunk_salience(conn, chunk_id, 0.0)
+
+    scope = existing.scope or "global"
+    target_file = global_file if scope == "global" else ltm_dir / _ptf(scope)
+    if target_file.exists():
+        _archive_markdown_line(target_file, existing.content_hash, existing.content)
+
+    return warnings
+
+
+def _apply_noop(conn, op: dict) -> None:
+    """Handle NOOP: increment evidence_count."""
+    chunk_id = op.get("id")
+    if chunk_id:
+        conn.execute(
+            "UPDATE chunks SET evidence_count = evidence_count + 1 WHERE id = ?",
+            (chunk_id,),
+        )
+
+
+def apply_memory_ops(
+    ops: list,
+    session_date: str,
+    ltm_dir: Path | None = None,
+    global_file: Path | None = None,
+) -> list:
+    """Apply CRUD operations from ===MEMORY_OPS=== to DB and markdown.
+
+    Args:
+        ops: List of MemoryOp instances or dicts from parsed MEMORY_OPS.
+        session_date: Date string (YYYY-MM-DD) for new entries.
+        ltm_dir: Project LTM directory. Defaults to get_project_memory_dir().
+        global_file: Global LTM file. Defaults to get_global_memory_file().
+
+    Returns:
+        List of warning strings (empty if all ops succeeded).
+    """
+    if not ops:
+        return []
+
+    from storage import close_db, ensure_db
+
+    if global_file is None:
+        global_file = get_global_memory_file()
+    if ltm_dir is None:
+        ltm_dir = get_project_memory_dir()
+
+    warnings = []
+    conn = None
+    try:
+        conn = ensure_db()
+        for op in ops:
+            # Support both MemoryOp dataclass and raw dict
+            if hasattr(op, "action"):
+                op_dict = {
+                    "action": op.action,
+                    "fact": op.fact,
+                    "id": op.id,
+                    "scope": op.scope,
+                    "section": op.section,
+                    "type": op.type,
+                    "entities": op.entities,
+                    "reason": op.reason,
+                }
+            else:
+                op_dict = op
+
+            action = (op_dict.get("action") or "").upper()
+            if action == "ADD":
+                warnings.extend(_apply_add(conn, op_dict, session_date, ltm_dir, global_file))
+            elif action == "UPDATE":
+                warnings.extend(_apply_update(conn, op_dict, ltm_dir, global_file))
+            elif action == "DELETE":
+                warnings.extend(_apply_delete(conn, op_dict, session_date, ltm_dir, global_file))
+            elif action == "NOOP":
+                _apply_noop(conn, op_dict)
+            else:
+                warnings.append(f"Unknown MEMORY_OPS action: {action!r}")
+        conn.commit()
+    except Exception as e:
+        warnings.append(f"MEMORY_OPS apply error: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            close_db(conn)
+
+    return warnings
+
+
 def run_mark_routed() -> None:
     """Run mark-routed dedup as function call (no subprocess)."""
     try:
@@ -958,6 +1361,13 @@ def apply_results(
     if routes:
         total_entries = sum(len(r.entries) for r in routes)
         print(f"Routed {total_entries} entries to LTM")
+
+    # Apply CRUD ops from MEMORY_OPS block (when present)
+    if result.memory_ops:
+        date = _extract_date_from_extracts(extract_paths)
+        crud_warnings = apply_memory_ops(result.memory_ops, date)
+        for w in crud_warnings:
+            print(f"CRUD warning: {w}", file=sys.stderr)
 
     # Update synthesis state with new high water marks
     if offsets_json:

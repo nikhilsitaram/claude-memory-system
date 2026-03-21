@@ -19,8 +19,10 @@ import argparse
 import contextlib
 import io
 import os
+import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +36,91 @@ from load_memory import (
 from memory_utils import get_synthesis_error_log, load_settings
 
 SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
+
+# Common English stopwords for topic extraction
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "dare", "ought",
+    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+    "they", "them", "their", "this", "that", "these", "those",
+    "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
+    "for", "of", "to", "from", "in", "on", "at", "by", "with", "about",
+    "into", "through", "during", "before", "after", "above", "below",
+    "if", "then", "else", "when", "where", "how", "what", "which", "who",
+    "all", "each", "every", "some", "any", "no", "more", "most", "other",
+    "just", "also", "very", "too", "quite", "really", "still", "already",
+})
+
+MAX_TOPICS = 20
+
+
+def extract_topics(text: str, max_topics: int = MAX_TOPICS) -> list:
+    """Extract key topics from transcript text using term frequency.
+
+    Algorithmic extraction (no LLM call). Tokenizes text, removes stopwords,
+    and returns the most frequent meaningful terms.
+
+    Args:
+        text: Raw transcript text.
+        max_topics: Maximum number of topics to return.
+
+    Returns:
+        List of topic strings, ordered by frequency (most frequent first).
+    """
+    if not text or not text.strip():
+        return []
+    tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_.-]*", text)
+    meaningful = [t for t in tokens if t.lower() not in _STOPWORDS and len(t) > 2]
+    counts = Counter(meaningful)
+    return [term for term, _ in counts.most_common(max_topics)]
+
+
+def retrieve_existing_memories(
+    transcript_text: str,
+    scope: str | None = None,
+    top_k: int = 10,
+) -> list:
+    """Vector-search for existing memories relevant to transcript content.
+
+    Returns list of dicts with 'chunk_id' and 'content' keys,
+    formatted for inclusion in synthesis prompt.
+
+    Falls back to empty list if embeddings module is unavailable.
+    """
+    try:
+        from embeddings import search_similar
+        from storage import get_db, close_db
+    except ImportError:
+        return []
+
+    topics = extract_topics(transcript_text)
+    if not topics:
+        return []
+
+    query_text = " ".join(topics[:10])
+    seen_ids = set()
+    results = []
+
+    conn = None
+    try:
+        conn = get_db()
+        similar = search_similar(conn, query_text, top_k=top_k, scope=scope)
+        for scored_chunk in similar:
+            chunk = scored_chunk.chunk
+            if chunk.id not in seen_ids:
+                seen_ids.add(chunk.id)
+                results.append({
+                    "chunk_id": chunk.id,
+                    "content": chunk.content,
+                })
+    except Exception:
+        pass
+    finally:
+        if conn:
+            close_db(conn)
+
+    return results
 
 
 def should_run_deferred_synthesis() -> bool:
