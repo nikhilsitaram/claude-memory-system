@@ -828,10 +828,7 @@ def run_post_processing(
     run_validate_ltm()
     run_decay()
 
-    try:
-        _reindex_after_synthesis()
-    except Exception:
-        pass
+    _reindex_after_synthesis()
 
     # Update timestamp
     ts_file = get_memory_dir() / ".last-synthesis"
