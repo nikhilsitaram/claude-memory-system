@@ -27,6 +27,17 @@ from load_memory import (
     should_synthesize,
     write_synthesis_prompt,
 )
+from storage import (
+    ChunkRow,
+    EdgeRow,
+    NodeRow,
+    close_db,
+    ensure_db,
+    insert_chunk,
+    insert_edge,
+    insert_node,
+    query_chunks_with_salience,
+)
 
 # =============================================================================
 # _strip_profile_sections Tests
@@ -1553,11 +1564,6 @@ class TestAccessTracking:
 
     def _make_db(self, tmp_path):
         """Helper: create a DB with ensure_db() and return (conn, db_path)."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_chunk, ChunkRow
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
             conn = ensure_db()
@@ -1565,11 +1571,6 @@ class TestAccessTracking:
 
     def test_served_chunks_get_access_count_incremented(self, tmp_path):
         """When chunks are served, their access_count increments by 1."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
         from load_memory import track_memory_access, REINFORCEMENT_ETA
 
         db_path = tmp_path / "memory.db"
@@ -1589,11 +1590,6 @@ class TestAccessTracking:
 
     def test_last_accessed_updated_to_utc_now(self, tmp_path):
         """last_accessed is set to current UTC timestamp."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
@@ -1617,11 +1613,6 @@ class TestAccessTracking:
 
     def test_salience_reinforced_with_diminishing_returns(self, tmp_path):
         """Salience reinforcement: new = min(1.0, old + 0.18 * (1.0 - old))."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
         from load_memory import track_memory_access, REINFORCEMENT_ETA
 
         db_path = tmp_path / "memory.db"
@@ -1642,11 +1633,6 @@ class TestAccessTracking:
 
     def test_salience_near_1_converges(self, tmp_path):
         """Repeated access converges toward 1.0 without overshooting."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunks_with_salience
         from load_memory import track_memory_access, REINFORCEMENT_ETA
 
         db_path = tmp_path / "memory.db"
@@ -1710,11 +1696,6 @@ class TestAssociativeReinforcement:
 
     def test_neighbor_receives_boost_proportional_to_edge_weight(self, tmp_path):
         """Neighbor boost = 0.18 * edge_weight * accessed_node.salience."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_node, insert_edge, NodeRow, EdgeRow
         from load_memory import track_memory_access, REINFORCEMENT_ETA
 
         db_path = tmp_path / "memory.db"
@@ -1728,22 +1709,16 @@ class TestAssociativeReinforcement:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([], node_ids=[nA])
-            from storage import ensure_db as ensure_db2, close_db as close_db2
-            conn2 = ensure_db2()
+            conn2 = ensure_db()
             row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
             accessed_row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nA,)).fetchone()
             accessed_salience_after = accessed_row[0]
             expected_b = min(1.0, 0.3 + REINFORCEMENT_ETA * 0.5 * accessed_salience_after)
             assert abs(row[0] - expected_b) < 1e-6
-            close_db2(conn2)
+            close_db(conn2)
 
     def test_boost_clamped_to_1(self, tmp_path):
         """Neighbor salience cannot exceed 1.0 after boost."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_node, insert_edge, NodeRow, EdgeRow
         from load_memory import track_memory_access
 
         db_path = tmp_path / "memory.db"
@@ -1757,19 +1732,13 @@ class TestAssociativeReinforcement:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([], node_ids=[nA])
-            from storage import ensure_db as ensure_db2, close_db as close_db2
-            conn2 = ensure_db2()
+            conn2 = ensure_db()
             row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
             assert row[0] <= 1.0
-            close_db2(conn2)
+            close_db(conn2)
 
     def test_no_neighbors_no_error(self, tmp_path):
         """Node with no edges -- associative reinforcement is a no-op."""
-        import sys
-        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
-        if worktree not in sys.path:
-            sys.path.insert(0, worktree)
-        from storage import ensure_db, close_db, insert_node, NodeRow
         from load_memory import track_memory_access
 
         db_path = tmp_path / "memory.db"
