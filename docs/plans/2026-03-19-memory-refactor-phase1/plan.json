@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "Not Yet Started",
+  "status": "In Development",
   "workflow": "ship",
   "goal": "CPU-only embedding + vector search module for semantic memory retrieval",
   "architecture": "Single new module `scripts/embeddings.py` owns all embedding and vector search logic. FastEmbed (sentence-transformers/all-MiniLM-L6-v2) produces 384-dim vectors stored in sqlite-vec virtual table (`vec_chunks`). Multi-signal ranked retrieval combines vector similarity (saturating exponential boost), recency, and salience. Graceful degradation: if fastembed or sqlite-vec are missing, all operations are silent no-ops. Integration point: `run_post_processing()` in synthesis.py calls `reindex_all()` after decay.",
@@ -16,12 +16,16 @@
         {
           "id": "A1",
           "name": "Integration test skeleton for embeddings module",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
-            "create": ["tests/test_embeddings.py"],
+            "create": [
+              "tests/test_embeddings.py"
+            ],
             "modify": [],
-            "test": ["tests/test_embeddings.py"]
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py --collect-only 2>&1 | grep -q 'error' && echo 'RED as expected' || echo 'UNEXPECTED: imports succeeded'",
           "done_when": "Test file exists with test classes TestEmbedText, TestIndexChunks, TestSearchSimilar, TestScoring, TestGracefulDegradation, TestReindex. All tests fail with ImportError since embeddings.py does not exist yet."
@@ -29,12 +33,18 @@
         {
           "id": "A2",
           "name": "Core module with constants, dataclass, embed functions, and vec table setup",
-          "status": "pending",
-          "depends_on": ["A1"],
+          "status": "in_progress",
+          "depends_on": [
+            "A1"
+          ],
           "files": {
-            "create": ["scripts/embeddings.py"],
+            "create": [
+              "scripts/embeddings.py"
+            ],
             "modify": [],
-            "test": ["tests/test_embeddings.py"]
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -c \"from embeddings import EMBEDDING_MODEL, EMBEDDING_DIM, ScoredChunk, HAS_FASTEMBED, HAS_SQLITE_VEC, ensure_vec_table, embed_text, embed_batch; print('OK')\"",
           "done_when": "Module imports cleanly. Constants EMBEDDING_MODEL, EMBEDDING_DIM, VEC_SIM_WEIGHT, RECENCY_WEIGHT, SALIENCE_WEIGHT, RECENCY_DECAY, VEC_BOOST_RATE, DEFAULT_TOP_K are defined. ScoredChunk dataclass exists. HAS_FASTEMBED and HAS_SQLITE_VEC flags detect availability. ensure_vec_table(conn) creates vec_chunks virtual table or returns False. embed_text() and embed_batch() return vectors or empty lists on graceful degradation. TestEmbedText and TestGracefulDegradation tests pass."
@@ -43,11 +53,17 @@
           "id": "A3",
           "name": "Index and delete operations for vec_chunks",
           "status": "pending",
-          "depends_on": ["A2"],
+          "depends_on": [
+            "A2"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/embeddings.py"],
-            "test": ["tests/test_embeddings.py"]
+            "modify": [
+              "scripts/embeddings.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py::TestIndexChunks -v",
           "done_when": "index_chunks(conn, chunk_ids) queries chunks table, embeds content, inserts into vec_chunks with content_hash skip logic. index_chunks_by_source(conn, source_files) wraps index_chunks for source-file-based workflows. delete_vec_chunks(conn, chunk_ids) removes vectors. All TestIndexChunks tests pass."
@@ -56,11 +72,17 @@
           "id": "A4",
           "name": "Scoring function and search_similar",
           "status": "pending",
-          "depends_on": ["A3"],
+          "depends_on": [
+            "A3"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/embeddings.py"],
-            "test": ["tests/test_embeddings.py"]
+            "modify": [
+              "scripts/embeddings.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py::TestScoring tests/test_embeddings.py::TestSearchSimilar -v",
           "done_when": "score_memory(vec_distance, chunk) implements the saturating exponential formula with Phase 1 fallbacks (last_accessed defaults to created_at, salience defaults to 1.0). search_similar(conn, query, top_k, scope) embeds query, fetches top_k*3 candidates from vec_chunks, JOINs to chunks for metadata, applies scope filter, scores and ranks, returns top_k ScoredChunk list. All TestScoring and TestSearchSimilar tests pass."
@@ -69,11 +91,18 @@
           "id": "A5",
           "name": "Reindex functions and synthesis.py integration",
           "status": "pending",
-          "depends_on": ["A4"],
+          "depends_on": [
+            "A4"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/embeddings.py", "scripts/synthesis.py"],
-            "test": ["tests/test_embeddings.py"]
+            "modify": [
+              "scripts/embeddings.py",
+              "scripts/synthesis.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py::TestReindex -v",
           "done_when": "reindex_changed_files(conn, changed_files) deletes old vectors then calls index_chunks_by_source. reindex_all(conn) re-indexes all chunks in DB. synthesis.py run_post_processing() calls _reindex_after_synthesis() after run_decay(), wrapped in try/except. All TestReindex tests pass."
@@ -82,11 +111,18 @@
           "id": "A6",
           "name": "Install integration and full test suite GREEN",
           "status": "pending",
-          "depends_on": ["A5"],
+          "depends_on": [
+            "A5"
+          ],
           "files": {
             "create": [],
-            "modify": ["install.py"],
-            "test": ["tests/test_embeddings.py", "tests/test_install.py"]
+            "modify": [
+              "install.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py",
+              "tests/test_install.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py tests/test_install.py -v",
           "done_when": "embeddings.py added to link_scripts() in install.py. Full test suite passes: all TestEmbedText, TestIndexChunks, TestSearchSimilar, TestScoring, TestGracefulDegradation, TestReindex tests GREEN. test_install.py verifies embeddings.py is in the scripts list."
