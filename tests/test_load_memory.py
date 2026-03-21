@@ -1700,5 +1700,88 @@ class TestAccessTracking:
         assert call_count[0] == 1
 
 
+# =============================================================================
+# B3: Associative Reinforcement Tests
+# =============================================================================
+
+
+class TestAssociativeReinforcement:
+    """Tests for associative reinforcement of graph neighbors."""
+
+    def test_neighbor_receives_boost_proportional_to_edge_weight(self, tmp_path):
+        """Neighbor boost = 0.18 * edge_weight * accessed_node.salience."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_node, insert_edge, NodeRow, EdgeRow
+        from load_memory import track_memory_access, REINFORCEMENT_ETA
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="nodeA", type="concept", scope="global", created_at="2026-01-01", salience=0.8))
+            nB = insert_node(conn, NodeRow(name="nodeB", type="concept", scope="global", created_at="2026-01-01", salience=0.3))
+            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=0.5))
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([], node_ids=[nA])
+            from storage import ensure_db as ensure_db2, close_db as close_db2
+            conn2 = ensure_db2()
+            row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
+            accessed_row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nA,)).fetchone()
+            accessed_salience_after = accessed_row[0]
+            expected_b = min(1.0, 0.3 + REINFORCEMENT_ETA * 0.5 * accessed_salience_after)
+            assert abs(row[0] - expected_b) < 1e-6
+            close_db2(conn2)
+
+    def test_boost_clamped_to_1(self, tmp_path):
+        """Neighbor salience cannot exceed 1.0 after boost."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_node, insert_edge, NodeRow, EdgeRow
+        from load_memory import track_memory_access
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="nodeA2", type="concept", scope="global", created_at="2026-01-01", salience=1.0))
+            nB = insert_node(conn, NodeRow(name="nodeB2", type="concept", scope="global", created_at="2026-01-01", salience=0.99))
+            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=1.0))
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([], node_ids=[nA])
+            from storage import ensure_db as ensure_db2, close_db as close_db2
+            conn2 = ensure_db2()
+            row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
+            assert row[0] <= 1.0
+            close_db2(conn2)
+
+    def test_no_neighbors_no_error(self, tmp_path):
+        """Node with no edges -- associative reinforcement is a no-op."""
+        import sys
+        worktree = "/Users/nsitaram/personal/claude-memory-system/.claude/worktrees/phase2-intelligence-phase-b/scripts"
+        if worktree not in sys.path:
+            sys.path.insert(0, worktree)
+        from storage import ensure_db, close_db, insert_node, NodeRow
+        from load_memory import track_memory_access
+
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="isolated2", type="concept", scope="global", created_at="2026-01-01", salience=0.7))
+            conn.commit()
+            close_db(conn)
+
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            track_memory_access([], node_ids=[nA])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

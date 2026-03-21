@@ -32,6 +32,7 @@ from storage import (
     query_chunks_by_scope,
     query_chunks_by_source,
     query_chunks_with_salience,
+    query_neighbor_nodes,
     query_node_by_name_and_type,
     query_nodes_by_scope,
     update_node_access,
@@ -366,6 +367,57 @@ class TestEdgeCRUD:
             "SELECT source_sessions FROM edges WHERE source=?", (src.id,)
         ).fetchone()
         assert "2026-03-01" in row[0]
+
+
+# ============================================================================
+# B3: Neighbor node query helper
+# ============================================================================
+
+
+class TestQueryNeighborNodes:
+    """Tests for query_neighbor_nodes() helper."""
+
+    def test_returns_direct_neighbors_via_edges(self, tmp_path):
+        """Returns nodes connected by edges (both source and target directions)."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="A", type="concept", scope="global", created_at="2026-01-01"))
+            nB = insert_node(conn, NodeRow(name="B", type="concept", scope="global", created_at="2026-01-01"))
+            nC = insert_node(conn, NodeRow(name="C", type="concept", scope="global", created_at="2026-01-01"))
+            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=0.8))
+            insert_edge(conn, EdgeRow(source=nA, target=nC, type="related", created_at="2026-01-01", weight=0.5))
+            conn.commit()
+            neighbors = query_neighbor_nodes(conn, nA)
+            neighbor_ids = {n.node_id for n in neighbors}
+            assert nB in neighbor_ids
+            assert nC in neighbor_ids
+            assert len(neighbors) == 2
+            close_db(conn)
+
+    def test_no_neighbors_returns_empty(self, tmp_path):
+        """Node with no edges returns empty list."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="isolated", type="concept", scope="global", created_at="2026-01-01"))
+            conn.commit()
+            neighbors = query_neighbor_nodes(conn, nA)
+            assert neighbors == []
+            close_db(conn)
+
+    def test_expired_edges_excluded(self, tmp_path):
+        """Edges with valid_to set (expired) are excluded from neighbor lookup."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            nA = insert_node(conn, NodeRow(name="A2", type="concept", scope="global", created_at="2026-01-01"))
+            nB = insert_node(conn, NodeRow(name="B2", type="concept", scope="global", created_at="2026-01-01"))
+            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=0.9, valid_to="2026-02-01"))
+            conn.commit()
+            neighbors = query_neighbor_nodes(conn, nA)
+            assert neighbors == []
+            close_db(conn)
 
 
 # ============================================================================

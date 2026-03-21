@@ -681,6 +681,7 @@ def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
         batch_update_access,
         update_chunk_salience,
         update_node_salience,
+        query_neighbor_nodes,
     )
 
     for attempt in range(MAX_BUSY_RETRIES):
@@ -715,6 +716,20 @@ def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
                 current = row[0] if row[0] is not None else 1.0
                 new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
                 update_node_salience(conn, nid, new_salience)
+
+            # Associative reinforcement: boost graph neighbors
+            accessed_row = conn.execute(
+                "SELECT salience FROM nodes WHERE id = ?", (nid,)
+            ).fetchone()
+            if not accessed_row:
+                continue
+            accessed_salience = accessed_row[0] if accessed_row[0] is not None else 1.0
+
+            neighbors = query_neighbor_nodes(conn, nid)
+            for neighbor in neighbors:
+                boost = REINFORCEMENT_ETA * neighbor.edge_weight * accessed_salience
+                new_neighbor_salience = min(1.0, neighbor.salience + boost)
+                update_node_salience(conn, neighbor.node_id, new_neighbor_salience)
 
         conn.commit()
     except Exception:

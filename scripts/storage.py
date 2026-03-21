@@ -126,6 +126,8 @@ __all__ = [
     "query_node_by_name_and_type",
     "update_node_access",
     "insert_edge",
+    "NeighborInfo",
+    "query_neighbor_nodes",
     "batch_update_access",
     "update_chunk_salience",
     "update_node_salience",
@@ -431,6 +433,38 @@ def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
         ),
     )
     return edge_id
+
+
+@dataclass
+class NeighborInfo:
+    """A neighbor node with the connecting edge weight."""
+    node_id: str
+    salience: float
+    edge_weight: float
+
+
+def query_neighbor_nodes(
+    conn: sqlite3.Connection, node_id: str
+) -> list:
+    """Query direct graph neighbors of a node via valid edges.
+
+    Looks up both directions (node as source or target).
+    Excludes expired edges (valid_to IS NOT NULL).
+
+    Returns:
+        List of NeighborInfo with node_id, current salience, and edge weight.
+    """
+    rows = conn.execute(
+        """
+        SELECT n.id, n.salience, e.weight
+        FROM edges e
+        JOIN nodes n ON n.id = CASE WHEN e.source = ? THEN e.target ELSE e.source END
+        WHERE (e.source = ? OR e.target = ?)
+          AND e.valid_to IS NULL
+        """,
+        (node_id, node_id, node_id),
+    ).fetchall()
+    return [NeighborInfo(node_id=r[0], salience=r[1], edge_weight=r[2]) for r in rows]
 
 
 def batch_update_access(
