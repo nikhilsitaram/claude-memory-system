@@ -57,8 +57,9 @@ def init_db():
 def _warm_model_async():
     """Load FastEmbed model in a background thread so server startup is not blocked."""
     def _warm():
-        embed_text("warmup")
-        _model_ready.set()
+        result = embed_text("warmup")
+        if result and len(result) > 0:
+            _model_ready.set()
 
     t = threading.Thread(target=_warm, daemon=True)
     t.start()
@@ -240,7 +241,7 @@ async def _search_memories(query, scope=None, top_k=10):
     formatted = []
     for r in results[:top_k]:
         prov_edges = conn.execute(
-            "SELECT id, type, reason FROM edges WHERE source=? "
+            "SELECT id, type, fact FROM edges WHERE source=? "
             "AND type IN ('supersedes','contradicts','refines','led_to','supports') "
             "AND valid_to IS NULL",
             (r.data_point.id,),

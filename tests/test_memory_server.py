@@ -92,6 +92,34 @@ class TestMCPServerScaffold:
             assert isinstance(t, threading.Thread)
             assert t.daemon is True
 
+    def test_model_ready_set_when_warmup_returns_embedding(self):
+        """_model_ready is set when embed_text returns a non-empty vector."""
+        import memory_server
+        memory_server._model_ready.clear()
+        with patch("memory_server.embed_text", return_value=[0.1] * 384):
+            t = memory_server._warm_model_async()
+            t.join(timeout=2)
+        assert memory_server._model_ready.is_set()
+        memory_server._model_ready.clear()
+
+    def test_model_ready_not_set_when_warmup_returns_empty(self):
+        """_model_ready stays unset when embed_text returns [] (FastEmbed unavailable)."""
+        import memory_server
+        memory_server._model_ready.clear()
+        with patch("memory_server.embed_text", return_value=[]):
+            t = memory_server._warm_model_async()
+            t.join(timeout=2)
+        assert not memory_server._model_ready.is_set()
+
+    def test_model_ready_not_set_when_warmup_returns_none(self):
+        """_model_ready stays unset when embed_text returns None."""
+        import memory_server
+        memory_server._model_ready.clear()
+        with patch("memory_server.embed_text", return_value=None):
+            t = memory_server._warm_model_async()
+            t.join(timeout=2)
+        assert not memory_server._model_ready.is_set()
+
     def test_db_connection_established(self, db_dir):
         """init_db() returns the connection from ensure_db()."""
         import memory_server
@@ -247,6 +275,57 @@ class TestSearchMemories:
         assert len(results) == 1
         assert results[0]["id"] == dp_id
         memory_server._model_ready.clear()
+
+    def test_provenance_reason_populated_from_fact_column(self, db):
+        """Provenance reason is read from the edges.fact column, not a nonexistent reason column."""
+        import memory_server
+        memory_server._db_conn = db
+        memory_server._model_ready.clear()
+
+        old_id = _make_dp(db, content="old fact", scope="global", salience=0.7)
+        new_id = _make_dp(db, content="new fact", scope="global", salience=0.9)
+        now = _now()
+        insert_edge(db, EdgeRow(
+            source=new_id,
+            target=old_id,
+            type="supersedes",
+            fact="updated because data changed",
+            created_at=now,
+            valid_from=now,
+        ))
+        db.commit()
+
+        results = self._run(memory_server._search_memories("new fact", scope="global"))
+        new_result = next((r for r in results if r["id"] == new_id), None)
+        assert new_result is not None
+        assert len(new_result["provenance"]) == 1
+        prov = new_result["provenance"][0]
+        assert prov["type"] == "supersedes"
+        assert prov["reason"] == "updated because data changed"
+
+    def test_provenance_reason_is_none_when_fact_is_null(self, db):
+        """Provenance reason is None when the edge fact column is NULL."""
+        import memory_server
+        memory_server._db_conn = db
+        memory_server._model_ready.clear()
+
+        old_id = _make_dp(db, content="old item", scope="global", salience=0.7)
+        new_id = _make_dp(db, content="new item", scope="global", salience=0.9)
+        now = _now()
+        insert_edge(db, EdgeRow(
+            source=new_id,
+            target=old_id,
+            type="supersedes",
+            created_at=now,
+            valid_from=now,
+        ))
+        db.commit()
+
+        results = self._run(memory_server._search_memories("new item", scope="global"))
+        new_result = next((r for r in results if r["id"] == new_id), None)
+        assert new_result is not None
+        assert len(new_result["provenance"]) == 1
+        assert new_result["provenance"][0]["reason"] is None
 
 
 # ===========================================================================
