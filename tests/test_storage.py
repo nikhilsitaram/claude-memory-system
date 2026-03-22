@@ -1453,3 +1453,179 @@ class TestDataPointCRUD:
         edges = query_edges_for_data_point(conn, dp_id)
         assert edges == []
         conn.close()
+
+    def test_insert_data_point_autogenerates_id_and_hash(self, tmp_path):
+        """insert_data_point auto-generates id and content_hash when not provided."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import DataPointRow, insert_data_point, query_data_point_by_id
+
+            dp = DataPointRow(
+                type="observation",
+                content="User prefers pytest for testing",
+                scope="global",
+            )
+            # Note: DataPointRow is frozen, so id and content_hash are None by default
+            dp_id = insert_data_point(conn, dp)
+            conn.commit()
+
+            result = query_data_point_by_id(conn, dp_id)
+            assert result is not None
+            assert result.id is not None  # auto-generated
+            assert len(result.id) > 0
+            assert result.content_hash is not None  # auto-generated
+            assert len(result.content_hash) > 0
+            conn.close()
+
+    def test_update_data_point_nonexistent_returns_zero(self, tmp_path):
+        """update_data_point returns 0 rowcount for nonexistent ID."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import update_data_point
+
+            rowcount = update_data_point(conn, "nonexistent-id", content="New")
+            assert rowcount == 0
+            conn.close()
+
+    def test_soft_delete_nonexistent_returns_zero(self, tmp_path):
+        """soft_delete_data_point returns 0 rowcount for nonexistent ID."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import soft_delete_data_point
+
+            rowcount = soft_delete_data_point(conn, "nonexistent-id")
+            assert rowcount == 0
+            conn.close()
+
+    def test_insert_edge_validates_data_points_fk(self, tmp_path):
+        """insert_edge validates that source/target exist in data_points (FK enforcement)."""
+        db_path = tmp_path / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript("""
+            CREATE TABLE data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL,
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+            CREATE TABLE edges (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL REFERENCES data_points(id),
+                target TEXT NOT NULL REFERENCES data_points(id),
+                type TEXT NOT NULL,
+                fact TEXT,
+                properties TEXT,
+                created_at TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                expired_at TEXT,
+                weight REAL DEFAULT 1.0,
+                source_sessions TEXT
+            );
+        """)
+        conn.commit()
+
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        # Create only one data point
+        dpA_id = insert_data_point(conn, DataPointRow(type="entity", name="A", scope="global"))
+        conn.commit()
+
+        # Try to create an edge with a nonexistent target
+        import pytest
+        with pytest.raises(sqlite3.IntegrityError):
+            edge = EdgeRow(source=dpA_id, target="nonexistent-id", type="related_to", created_at="2026-03-22")
+            insert_edge(conn, edge)
+            conn.commit()
+
+        conn.close()
