@@ -48,7 +48,7 @@ Make the DB the sole store with a unified data model. Loading becomes SQL-ranked
 
 10. **Web frontend.** Local web app for browsing, searching, and managing the knowledge graph. Interactive graph visualization. Browse by scope/type/date/salience. Edit and delete memories.
 
-11. **No regressions.** All new public functions tested. Existing tests updated for DB-only paths. Test baseline: 949 passed.
+11. **No regressions.** All new public functions tested. Existing tests updated for DB-only paths. Test baseline: 949 passed, 12 skipped.
 
 ## Non-Goals
 
@@ -129,7 +129,7 @@ CREATE VIRTUAL TABLE vec_data USING vec0(
 
 | Scope | Loaded | Decays? | Purpose |
 |---|---|---|---|
-| `user` | Every session, always | No (salience=1.0, permanent) | Claude knows who you are from the first message |
+| `user` | Every session, always | No (salience=1.0, permanent) | Claude knows who you are from the first message. `write_memory` with `scope='user'` auto-sets `salience=1.0` and `consolidated=1`. |
 | `global` | Every session, ranked by salience | Yes (normal decay) | Cross-project technical knowledge surfaces by relevance |
 | `{project}` | Only when CWD matches, ranked | Yes (normal decay) | Project context surfaces when you're in that project |
 
@@ -148,15 +148,19 @@ A persistent Python process giving Claude native tool access to the memory DB. U
 
 **Tools:**
 
-1. **`search_memories(query, scope?, top_k?)`** — Embed query (warm FastEmbed model), sqlite-vec KNN search, composite scoring (0.50 vec_sim + 0.25 recency + 0.25 salience), graph boost for connected data_points. Returns ranked results with IDs, provenance chains, and entities.
+1. **`search_memories(query, scope?, top_k?)`** — Embed query (warm FastEmbed model), sqlite-vec KNN search, composite scoring via existing `score_memory()` from `embeddings.py` (saturating exponential on vec_sim: `1 - exp(-3.0 * vec_sim)`, 0.50 weight + 0.25 recency + 0.25 salience). Graph boost: for each result with edges to other results in the top-K set, add +0.05 per connection (capped at +0.15). Returns ranked results with IDs, provenance chains, and entities.
 
 2. **`write_memory(fact, scope, salience?, entities?, supersedes?, relation_type?, relation_reason?)`** — Atomic: INSERT data_point + generate embedding + create entity data_points + create `mentions` edges + optional provenance edge (supersedes/refines/etc).
 
-3. **`delete_memory(id, reason?)`** — Soft delete: set salience=0, invalidate related edges, create `supersedes`/`contradicts` edge with reason. Preserves temporal history.
+3. **`delete_memory(id, reason?)`** — Soft delete: set salience=0, invalidate related edges. **Pure deletion** (no replacement): creates a synthetic "deletion marker" data_point with type='memory', content=reason, salience=0, and a `supersedes` edge from the marker to the deleted data_point — preserving provenance ("memory X was deleted because [reason]"). **Supersession** (via `write_memory` with `supersedes` parameter): the new memory is the edge source, no deletion marker needed.
 
 4. **`traverse_graph(entity, depth?, relationship_type?)`** — Walk the knowledge graph from a data_point. Returns connected entities, memories, and their relationships. Follows both entity edges AND memory provenance chains. Uses recursive CTE for multi-hop traversal.
 
-**Lifecycle:** Starts when Claude Code opens a session (MCP runtime). FastEmbed model loaded in background thread. SQLite connection kept warm. Graceful degradation if FastEmbed/sqlite-vec unavailable.
+**Lifecycle & Failure Modes:**
+- **Registration:** `install.py` adds `mcpServers` entry to `~/.claude/settings.json`: `{"memory": {"command": "python3", "args": ["~/.claude/scripts/memory_server.py"], "env": {}}}`. Claude Code manages the process lifecycle (start on session open, stop on session close, auto-restart on crash).
+- **Startup:** Server must respond within 10 seconds. FastEmbed model loading happens in a background thread; `search_memories` returns SQL-only results until the model is warm.
+- **Fallback:** If the MCP server is unavailable, SessionStart SQL loading continues to work (it does not depend on MCP). The 4 MCP tools become unavailable — Claude cannot search/write memories mid-conversation but still receives context at session start. This is graceful degradation, not a hard failure.
+- **Graceful degradation:** If FastEmbed is unavailable, `search_memories` falls back to SQL-only ranking (salience + recency). If sqlite-vec is unavailable, vector search is skipped.
 
 **Latency:**
 - SessionStart (SQL loading): ~60ms (no MCP, no vectors)
@@ -195,7 +199,7 @@ AND created_at > date('now', '-3 days')
 ORDER BY created_at DESC LIMIT 15;
 ```
 
-Target budget: ~6K tokens. Access tracking on served data_points (existing Phase 2 logic, adapted).
+Target budget: ~6K tokens. **Deduplication:** Queries execute in priority order (1-5). Each subsequent query excludes data_point IDs already selected by earlier queries using a running `seen_ids` set. Access tracking on served data_points (existing Phase 2 logic, adapted).
 
 ### Session Continuity
 
@@ -214,6 +218,8 @@ Target budget: ~6K tokens. Access tracking on served data_points (existing Phase
 Plus `context_for` edges to entity data_points and optionally a `continues` edge to previous session context.
 
 **SessionStart hook** retrieves the most recent session context for the current project scope.
+
+**Session context creation mechanism:** The synthesis pipeline (`synthesis_cron.py`) writes `session_context` data_points as part of deferred synthesis, since it already reads transcripts and extracts session metadata. This is the least intrusive change — synthesis already runs after sessions end and has full transcript access for summarization. The session context is available by the next session (synthesis runs every 30 min or on next session start). For immediate context (same-day rapid sessions), the MCP server's `write_memory` tool can also create session context data_points if Claude detects session-end patterns.
 
 ### Unified Synthesis
 
@@ -266,15 +272,19 @@ Local web app for browsing and managing the knowledge graph.
 
 **How to run:** `python3 ~/.claude/scripts/web_app.py` → opens `http://localhost:8742`
 
-### Migration Strategy
+**Security:** Server binds to `127.0.0.1` only (not `0.0.0.0`). No authentication — acceptable for single-user localhost tool. Port conflict: if 8742 is in use, try 8743-8749, print actual port. CORS: no CORS headers (same-origin only). API write operations (edit/delete) require a simple CSRF token generated at server start and embedded in the HTML page.
 
-1. Phase 1 already has `migrate_markdown_to_db()` — extend for unified schema (v2 → v3)
-2. Existing chunks → `data_points` with type='memory'
-3. Existing nodes → `data_points` with type='entity'
-4. Profile sections (About Me, etc.) → `data_points` with type='profile', scope='user', salience=1.0
-5. Existing edges → keep as-is (already reference by ID)
-6. Existing vec_chunks → migrate to `vec_data`
-7. Archive old markdown files to `~/.claude/memory/.archive/`
+### Migration Strategy (v2 → v3)
+
+1. Phase 1 already has `migrate_markdown_to_db()` — extend for unified schema
+2. Existing chunks → `data_points` with `type='memory'`. **IDs preserved** (same primary key values).
+3. Existing nodes → `data_points` with `type='entity'`. **IDs preserved** (same primary key values).
+4. Profile sections (About Me, etc.) → `data_points` with `type='profile'`, `scope='user'`, `salience=1.0`, `consolidated=1`
+5. Existing edges: keep rows as-is. Node IDs are preserved (step 3), chunk IDs are preserved (step 2), so existing edge `source`/`target` references remain valid. `ALTER TABLE edges ADD COLUMN reason TEXT` for the new column (using version-gated migration pattern from v1→v2). **Post-migration integrity check:** `SELECT COUNT(*) FROM edges WHERE source NOT IN (SELECT id FROM data_points) OR target NOT IN (SELECT id FROM data_points)` must return 0.
+6. Existing `vec_chunks` → create `vec_data` virtual table, `INSERT INTO vec_data SELECT embedding, chunk_id AS data_point_id, source_type AS type FROM vec_chunks`, then `DROP TABLE vec_chunks`. Chunk IDs preserved (step 2), so `data_point_id` values remain valid.
+7. Drop old `chunks` and `nodes` tables after data migration
+8. Archive old markdown files to `~/.claude/memory/.archive/`
+9. Bump SCHEMA_VERSION to 3
 
 ## Key Decisions
 
@@ -290,6 +300,59 @@ Local web app for browsing and managing the knowledge graph.
 | Complete markdown deprecation | DB is sole store, web frontend for inspection | Eliminates dual write paths. One source of truth. Web UI is better for inspection than flat files. |
 | Salience replaces LTM flag | LLM assigns 0.0-1.0 at synthesis time | Continuous spectrum is more expressive than binary. High-salience entries naturally persist; low-salience entries naturally decay. |
 | vis.js for graph visualization | Lightweight, no build step | Works with vanilla JS. Good for knowledge graphs. No npm/React overhead. |
+
+## Dead Code Inventory
+
+Functions, constants, and modules that become dead in Phase 3, organized by file:
+
+**`scripts/load_memory.py`:**
+- `load_global_memory()` — reads markdown LTM file
+- `load_project_memory()` — reads markdown project LTM
+- `load_daily_summaries()` — reads daily markdown files
+- `load_project_history()` — reads daily markdown files
+- `_strip_profile_sections()` — strips profile from LTM for synthesis prompt
+- `_build_embedded_files()` — builds file-based context for synthesis
+- `_build_synthesis_prompt()` — replaced by simplified MEMORY_OPS prompt
+- `_build_preextracted_prompt()` — PROJECT block format eliminated
+- `_build_synthesis_instructions()` — replaced by MEMORY_OPS-only instructions
+- `_get_project_names_str()` — PROJECT block format eliminated
+- `TRANSCRIPT_LINE_BUDGET` — may change with new synthesis prompt
+- `write_synthesis_prompt()` — rewritten for MEMORY_OPS-only
+
+**`scripts/synthesis.py`:**
+- `build_dailies_from_project_blocks()` — no daily files
+- `extract_routes_from_project_blocks()` — no LTM routing
+- `inject_scopes()` — scope goes in MEMORY_OPS directly
+- `write_daily_files()` — no markdown writing
+- `append_to_ltm()` — no LTM file management
+- `mark_routed_entries()` — no `[routed]` system
+- `parse_daily_sections()` / `merge_daily_sections()` — no daily file merging
+- `DailyFile` / `RouteEntry` / `ProjectBlock` dataclasses — PROJECT format eliminated
+- `MIN_ROUTE_KEYWORDS`, `ROUTE_CAP`, `TYPE_TO_SECTION` constants — routing eliminated
+
+**`scripts/memory_utils.py`:**
+- `filter_daily_content()` — no tag-based filtering
+- `get_working_days()` — no longer relevant with salience-based loading
+- `get_daily_dir()` — no daily files (keep for migration only)
+- `get_global_memory_file()` — no markdown LTM (keep for migration only)
+- `get_project_memory_dir()` — no markdown LTM (keep for migration only)
+- `project_name_to_filename()` — no project LTM files
+
+**`scripts/storage.py`:**
+- `chunks` table DDL — replaced by `data_points`
+- `nodes` table DDL — replaced by `data_points`
+- `VEC_CHUNKS_DDL` — replaced by `vec_data`
+- `insert_chunk()` / `insert_node()` — replaced by `insert_data_point()`
+- `query_chunks_by_scope()` / `query_chunks_by_source()` — replaced by data_point queries
+- `update_chunk_salience()` / `update_node_salience()` — unified to `update_data_point_salience()`
+
+**`skills/`:**
+- `skills/recall/SKILL.md` — deprecated (MCP `search_memories`)
+- `skills/remember/SKILL.md` — deprecated (MCP `write_memory`)
+
+**`scripts/chunking.py`:**
+- `chunk_ltm_file()` — no LTM files to chunk (keep for migration only)
+- `chunk_daily_file()` — no daily files to chunk (keep for migration only)
 
 ## Implementation Approach
 
