@@ -16,6 +16,7 @@ from load_memory import (
     _build_embedded_files,
     _build_preextracted_prompt,
     _build_synthesis_instructions,
+    _build_synthesis_instructions_v3,
     _build_synthesis_prompt,
     _find_projects_in_extracts,
     _get_project_names_str,
@@ -1896,6 +1897,41 @@ class TestPreRetrievalPrompt:
             vector_memories=[],
         )
         assert "Key Actions" in prompt
+
+
+# =============================================================================
+# _build_synthesis_instructions_v3 Tests
+# =============================================================================
+
+
+class TestSynthesisPromptV3:
+    def test_prompt_requests_memory_ops_only(self):
+        """V3 prompt should request MEMORY_OPS format, not PROJECT blocks."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "MEMORY_OPS" in instructions
+        assert "===PROJECT:" not in instructions
+
+    def test_prompt_includes_salience_guidance(self):
+        """Prompt explains salience spectrum (0.3-0.5 transient, 0.7-0.9 important)."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "salience" in instructions.lower()
+        assert "0.3" in instructions or "transient" in instructions
+
+    def test_prompt_documents_three_scopes(self):
+        """Prompt explains user, global, and project scopes."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "user" in instructions
+        assert "global" in instructions
+
+    def test_prompt_includes_provenance_fields(self):
+        """Prompt explains supersedes, contradicts, etc. relationship types."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "supersedes" in instructions
+
+    def test_prompt_includes_entity_extraction(self):
+        """Prompt requests entities array in each operation."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "entities" in instructions
 
 
 if __name__ == "__main__":

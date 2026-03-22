@@ -182,8 +182,263 @@ def _clear_eager_timestamp() -> None:
         ts_file.unlink()
 
 
+def _write_session_context(
+    conn,
+    project_name: str,
+    topics: list,
+    session_id: str,
+    entities: list | None = None,
+) -> str:
+    """Write a session_context data_point for a completed synthesis session.
+
+    Idempotent: checks for existing session_context with the same session_id.
+    Creates context_for edges to entity data_points and a continues edge to
+    the prior session_context for the same project.
+
+    Args:
+        conn: Open SQLite connection (v3 schema).
+        project_name: Scope / project name.
+        topics: Key topics extracted from transcripts.
+        session_id: Unique session identifier (used for idempotency).
+        entities: Optional list of entity names to link via context_for edges.
+
+    Returns:
+        The data_point ID of the session_context.
+    """
+    import json as _json
+    from storage import DataPointRow, insert_data_point, insert_edge, EdgeRow
+
+    # Idempotency check
+    existing = conn.execute(
+        "SELECT id FROM data_points WHERE type='session_context' AND properties LIKE ?",
+        (f'%"session_id": "{session_id}"%',),
+    ).fetchone()
+    if existing:
+        return existing[0]
+
+    content = f"Working on {project_name}. Topics: {', '.join(topics[:5])}."
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    props = _json.dumps({"session_id": session_id, "status": "completed"})
+
+    dp = DataPointRow(
+        type="session_context", content=content, scope=project_name,
+        salience=0.8, source_type="session_end", created_at=now,
+        properties=props,
+    )
+    dp_id = insert_data_point(conn, dp)
+
+    # context_for edges to entities
+    if entities:
+        seen_entity_ids = set()
+        for entity_name in entities:
+            entity_id = _get_or_create_entity_in_db(conn, entity_name, project_name)
+            if entity_id not in seen_entity_ids:
+                seen_entity_ids.add(entity_id)
+                try:
+                    insert_edge(conn, EdgeRow(
+                        source=dp_id, target=entity_id, type="context_for",
+                        created_at=now,
+                    ))
+                except Exception:
+                    pass  # FK violations or duplicates — skip
+
+    # continues edge to prior session_context
+    prior = conn.execute(
+        "SELECT id FROM data_points WHERE type='session_context' "
+        "AND scope=? AND id != ? ORDER BY created_at DESC LIMIT 1",
+        (project_name, dp_id),
+    ).fetchone()
+    if prior:
+        try:
+            insert_edge(conn, EdgeRow(
+                source=dp_id, target=prior[0], type="continues",
+                created_at=now,
+            ))
+        except Exception:
+            pass
+
+    conn.commit()
+    return dp_id
+
+
+def _get_or_create_entity_in_db(conn, entity_name: str, scope: str | None) -> str:
+    """Return the ID of an entity data_point, creating it if absent.
+
+    Separate from synthesis._get_or_create_entity to avoid circular import.
+    """
+    from storage import DataPointRow, insert_data_point, _content_hash  # noqa: F401
+
+    content_hash = _content_hash(f"entity:{entity_name}")
+    row = conn.execute(
+        "SELECT id FROM data_points WHERE type='entity' AND content_hash=?",
+        (content_hash,),
+    ).fetchone()
+    if row:
+        return row[0]
+    return insert_data_point(conn, DataPointRow(
+        type="entity", name=entity_name, scope=scope,
+        content=entity_name, source_type="synthesis_v3",
+        salience=0.5,
+    ))
+
+
+def _get_schema_version(conn) -> int:
+    """Return the schema version from PRAGMA user_version."""
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _run_synthesis_v2(model: str, prompt_files: list) -> bool:
+    """Run the existing v2 synthesis pipeline (claude -p with PROJECT blocks).
+
+    Returns True on success, False if any prompt failed.
+    """
+    cmd_base = build_claude_command(model)
+    env = os.environ.copy()
+    env["CLAUDECODE"] = ""
+
+    failed = False
+    for prompt_file in prompt_files:
+        date_label = Path(prompt_file).stem
+        print(f"Running v2 synthesis for {date_label} with model={model}")
+        try:
+            with open(prompt_file, encoding="utf-8") as f:
+                result = subprocess.run(
+                    cmd_base,
+                    stdin=f,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            msg = f"Synthesis failed for {date_label}: {exc}"
+            print(f"Error: {msg}", file=sys.stderr)
+            _log_error(msg)
+            failed = True
+            continue
+
+        if result.returncode != 0:
+            msg = f"claude -p exited {result.returncode} for {date_label}"
+            if result.stderr:
+                msg += f": {result.stderr[:200]}"
+            print(f"Error: {msg}", file=sys.stderr)
+            _log_error(msg)
+            failed = True
+            continue
+
+        print(f"Synthesis complete for {date_label}")
+
+    return not failed
+
+
+def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
+    """Run the v3 DB-primary synthesis pipeline.
+
+    Uses _build_synthesis_instructions_v3 prompt and apply_memory_ops_v3.
+
+    Steps:
+    1. Build v3 prompt for each date
+    2. Call claude -p
+    3. Parse MEMORY_OPS output
+    4. Apply ops using apply_memory_ops_v3 (no markdown writes)
+    5. Write session_context data_points
+
+    Returns True on success, False if any date failed.
+    """
+    from load_memory import _build_synthesis_instructions_v3
+    from synthesis import parse_synthesis_output, apply_memory_ops_v3
+
+    cmd_base = build_claude_command(model)
+    env = os.environ.copy()
+    env["CLAUDECODE"] = ""
+
+    failed = False
+    for prompt_file in prompt_files:
+        date_label = Path(prompt_file).stem
+        print(f"Running v3 synthesis for {date_label} with model={model}")
+
+        try:
+            prompt_text = Path(prompt_file).read_text(encoding="utf-8")
+        except IOError as exc:
+            _log_error(f"Cannot read prompt file {prompt_file}: {exc}")
+            failed = True
+            continue
+
+        # Replace v2 instructions with v3 instructions in the prompt
+        v3_instructions = _build_synthesis_instructions_v3()
+        if "## Synthesis Instructions" in prompt_text:
+            parts = prompt_text.split("## Synthesis Instructions", 1)
+            if len(parts) == 2:
+                after_header = parts[1]
+                next_section = after_header.find("\n## ")
+                if next_section != -1:
+                    rest = after_header[next_section:]
+                else:
+                    rest = ""
+                prompt_text = parts[0] + "## Synthesis Instructions\n\n" + v3_instructions + rest
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(prompt_text)
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, encoding="utf-8") as f:
+                result = subprocess.run(
+                    cmd_base,
+                    stdin=f,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            msg = f"V3 synthesis failed for {date_label}: {exc}"
+            print(f"Error: {msg}", file=sys.stderr)
+            _log_error(msg)
+            failed = True
+            Path(tmp_path).unlink(missing_ok=True)
+            continue
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        if result.returncode != 0:
+            msg = f"claude -p exited {result.returncode} for {date_label} (v3)"
+            if result.stderr:
+                msg += f": {result.stderr[:200]}"
+            print(f"Error: {msg}", file=sys.stderr)
+            _log_error(msg)
+            failed = True
+            continue
+
+        # Parse and apply the v3 MEMORY_OPS output
+        synthesis_result = parse_synthesis_output(result.stdout)
+        if synthesis_result.memory_ops:
+            apply_results = apply_memory_ops_v3(conn, synthesis_result.memory_ops)
+            print(f"Applied {len(apply_results)} memory ops for {date_label}")
+
+            # Write session_context data_point
+            topics = extract_topics(prompt_text)
+            entities = [
+                e for op in synthesis_result.memory_ops
+                if op.entities for e in op.entities
+            ]
+            session_id = date_label
+            _write_session_context(conn, date_label, topics, session_id, entities)
+        else:
+            print(f"No MEMORY_OPS in v3 synthesis output for {date_label}")
+
+    return not failed
+
+
 def run_synthesis(force: bool = False) -> int:
     """Run the full deferred synthesis pipeline.
+
+    Detects schema version and dispatches to the appropriate apply function:
+    - v3+: Uses _run_synthesis_v3 with MEMORY_OPS-only output and DB writes
+    - v2: Uses _run_synthesis_v2 with PROJECT blocks and markdown writes
 
     Args:
         force: If True, skip the schedule check.
@@ -227,46 +482,33 @@ def run_synthesis(force: bool = False) -> int:
         encoding="utf-8",
     )
 
-    # Run claude -p for each date's prompt file
-    cmd_base = build_claude_command(model)
-    env = os.environ.copy()
-    env["CLAUDECODE"] = ""  # Unset nesting guard
+    # Detect schema version and dispatch
+    conn = None
+    try:
+        from storage import get_db, close_db
+        conn = get_db()
+        version = _get_schema_version(conn)
+    except Exception:
+        version = 0  # No DB yet — fall back to v2
+        conn = None
 
-    failed = False
-    for prompt_file in prompt_files:
-        date_label = Path(prompt_file).stem  # e.g. synthesis-prompt-2026-02-26-1234
-        print(f"Running synthesis for {date_label} with model={model}")
-        try:
-            with open(prompt_file, encoding="utf-8") as f:
-                result = subprocess.run(
-                    cmd_base,
-                    stdin=f,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,  # 5 minute timeout
-                )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            msg = f"Synthesis failed for {date_label}: {exc}"
-            print(f"Error: {msg}", file=sys.stderr)
-            _log_error(msg)
-            failed = True
-            continue
+    try:
+        if version >= 3 and conn is not None:
+            success = _run_synthesis_v3(conn, model, prompt_files)
+        else:
+            if conn:
+                close_db(conn)
+                conn = None
+            success = _run_synthesis_v2(model, prompt_files)
+    finally:
+        if conn:
+            try:
+                from storage import close_db
+                close_db(conn)
+            except Exception:
+                pass
 
-        if result.returncode != 0:
-            msg = f"claude -p exited {result.returncode} for {date_label}"
-            if result.stderr:
-                msg += f": {result.stderr[:200]}"
-            print(f"Error: {msg}", file=sys.stderr)
-            _log_error(msg)
-            failed = True
-            continue
-
-        print(f"Synthesis complete for {date_label}")
-
-    if failed:
-        # Don't clear timestamp — some dates may have succeeded.
-        # Next run will re-extract only dates that still have pending sessions.
+    if not success:
         return 1
 
     print("All synthesis runs complete")

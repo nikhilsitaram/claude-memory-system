@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS edges (
     source TEXT NOT NULL REFERENCES nodes(id),
     target TEXT NOT NULL REFERENCES nodes(id),
     type TEXT NOT NULL,
+    reason TEXT,
     fact TEXT,
     properties TEXT,
     created_at TEXT NOT NULL,
@@ -218,6 +219,9 @@ __all__ = [
     "soft_delete_data_point",
     "delete_data_point_soft",
     "query_edges_for_data_point",
+    "PROVENANCE_TYPES",
+    "create_provenance_edge",
+    "query_provenance_chain",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
@@ -276,6 +280,7 @@ class EdgeRow:
     source: str
     target: str
     type: str
+    reason: Optional[str] = None
     fact: Optional[str] = None
     properties: Optional[str] = None
     created_at: Optional[str] = None
@@ -772,12 +777,12 @@ def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
     edge_id = edge.id or _generate_id()
     conn.execute(
         "INSERT INTO edges "
-        "(id, source, target, type, fact, properties, created_at, "
+        "(id, source, target, type, reason, fact, properties, created_at, "
         "valid_from, valid_to, expired_at, weight, source_sessions) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            edge_id, edge.source, edge.target, edge.type, edge.fact,
-            edge.properties, edge.created_at, edge.valid_from,
+            edge_id, edge.source, edge.target, edge.type, edge.reason,
+            edge.fact, edge.properties, edge.created_at, edge.valid_from,
             edge.valid_to, edge.expired_at, edge.weight,
             edge.source_sessions,
         ),
@@ -975,7 +980,7 @@ def query_chunk_by_id(
 
 
 _EDGE_COLUMNS = (
-    "id, source, target, type, fact, properties, created_at, "
+    "id, source, target, type, reason, fact, properties, created_at, "
     "valid_from, valid_to, expired_at, weight, source_sessions"
 )
 
@@ -984,9 +989,9 @@ def _row_to_edge(row: tuple) -> EdgeRow:
     """Convert a raw SQLite row tuple to an EdgeRow dataclass."""
     return EdgeRow(
         id=row[0], source=row[1], target=row[2], type=row[3],
-        fact=row[4], properties=row[5], created_at=row[6],
-        valid_from=row[7], valid_to=row[8], expired_at=row[9],
-        weight=row[10], source_sessions=row[11],
+        reason=row[4], fact=row[5], properties=row[6], created_at=row[7],
+        valid_from=row[8], valid_to=row[9], expired_at=row[10],
+        weight=row[11], source_sessions=row[12],
     )
 
 
@@ -1263,6 +1268,81 @@ def query_edges_for_data_point(
         ).fetchall()
 
     return [_row_to_edge(r) for r in rows]
+
+
+PROVENANCE_TYPES = frozenset({"supersedes", "contradicts", "led_to", "refines", "supports"})
+
+
+def create_provenance_edge(
+    conn: sqlite3.Connection,
+    source_id: str,
+    target_id: str,
+    edge_type: str,
+    reason: Optional[str] = None,
+) -> str:
+    """Create a provenance edge between two data_points.
+
+    Args:
+        conn: Database connection.
+        source_id: ID of the newer/current data_point (the one doing the relating).
+        target_id: ID of the older/referenced data_point.
+        edge_type: One of PROVENANCE_TYPES (supersedes, contradicts, led_to, refines, supports).
+        reason: Optional human-readable explanation for the relationship.
+
+    Returns:
+        The new edge ID.
+
+    Raises:
+        ValueError: If source_id == target_id (self-reference) or edge_type is invalid.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    if source_id == target_id:
+        raise ValueError("Cannot create self-referencing provenance edge")
+    if edge_type not in PROVENANCE_TYPES:
+        raise ValueError(f"Invalid provenance type: {edge_type!r}. Must be one of {sorted(PROVENANCE_TYPES)}")
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return insert_edge(conn, EdgeRow(
+        source=source_id, target=target_id, type=edge_type,
+        reason=reason, created_at=now, valid_from=now,
+    ))
+
+
+def query_provenance_chain(
+    conn: sqlite3.Connection,
+    data_point_id: str,
+) -> list:
+    """Follow provenance edges from a data_point using a recursive CTE.
+
+    Traverses outgoing supersedes/contradicts/refines edges up to 10 hops deep.
+
+    Args:
+        conn: Database connection.
+        data_point_id: Starting data_point ID.
+
+    Returns:
+        List of dicts: {source_id, target_id, type, reason, depth}.
+        Empty list if no provenance edges exist.
+    """
+    rows = conn.execute("""
+        WITH RECURSIVE chain(source_id, target_id, edge_type, reason, depth) AS (
+            SELECT source, target, type, reason, 1
+            FROM edges
+            WHERE source = ? AND type IN ('supersedes', 'contradicts', 'refines')
+              AND valid_to IS NULL
+            UNION ALL
+            SELECT e.source, e.target, e.type, e.reason, c.depth + 1
+            FROM chain c
+            JOIN edges e ON e.source = c.target_id
+            WHERE e.type IN ('supersedes', 'contradicts', 'refines')
+              AND e.valid_to IS NULL
+              AND c.depth < 10
+        )
+        SELECT source_id, target_id, edge_type, reason, depth
+        FROM chain ORDER BY depth
+    """, (data_point_id,)).fetchall()
+    return [{"source_id": r[0], "target_id": r[1], "type": r[2],
+             "reason": r[3], "depth": r[4]} for r in rows]
 
 
 _LTM_ENTRY_RE = re.compile(

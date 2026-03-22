@@ -3091,3 +3091,197 @@ class TestMemoryOpsParsing:
 ===END==='''
         result = parse_synthesis_output(text)
         assert result.memory_ops[0].type is None
+
+
+# =============================================================================
+# TestMemoryOpsV3 — C2: Enhanced MEMORY_OPS parser with salience and provenance
+# =============================================================================
+
+
+class TestMemoryOpsV3:
+    def test_memory_ops_only_output(self):
+        """Parser handles output with MEMORY_OPS but no PROJECT blocks."""
+        text = """===MEMORY_OPS===
+{"ops": [
+  {"action": "ADD", "fact": "gRPC for internal services", "scope": "myproject",
+   "type": "design", "salience": 0.8, "entities": ["gRPC"]}
+]}
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 1
+        assert result.memory_ops[0].salience == 0.8
+        assert len(result.project_blocks) == 0
+
+    def test_salience_field_parsed(self):
+        """MemoryOp.salience populated from JSON."""
+        text = '===MEMORY_OPS===\n{"ops": [{"action": "ADD", "fact": "test", "salience": 0.6}]}\n===END==='
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].salience == 0.6
+
+    def test_salience_defaults_to_none(self):
+        """Missing salience in JSON yields None on MemoryOp."""
+        text = '===MEMORY_OPS===\n{"ops": [{"action": "ADD", "fact": "test"}]}\n===END==='
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].salience is None
+
+    def test_backward_compat_mixed_format(self):
+        """Mixed PROJECT + MEMORY_OPS still parses both."""
+        text = """===PROJECT:myproject===
+- [implement] Added retry logic
+===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "retry logic added", "salience": 0.5}]}
+===END==="""
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert len(result.memory_ops) == 1
+
+    def test_supersedes_field_parsed(self):
+        """supersedes field extracted from ADD ops."""
+        text = '===MEMORY_OPS===\n{"ops": [{"action": "ADD", "fact": "new", "supersedes": "dp_abc", "reason": "updated"}]}\n===END==='
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].supersedes == "dp_abc"
+
+
+# =============================================================================
+# TestApplyV3 — C3: DB-only apply pipeline
+# =============================================================================
+
+
+def _make_v3_db_for_synthesis(tmp_path):
+    """Create a minimal v3 schema DB (data_points + edges) without vec0."""
+    import sqlite3
+    conn = sqlite3.connect(str(tmp_path / "test.db"))
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS data_points (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            name TEXT,
+            content TEXT,
+            scope TEXT,
+            entry_type TEXT,
+            source_type TEXT,
+            source_sessions TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            salience REAL DEFAULT 1.0,
+            access_count INTEGER DEFAULT 0,
+            last_accessed TEXT,
+            evidence_count INTEGER DEFAULT 1,
+            consolidated INTEGER DEFAULT 0,
+            content_hash TEXT,
+            simhash INTEGER,
+            entities TEXT,
+            properties TEXT
+        );
+        CREATE TABLE IF NOT EXISTS edges (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL REFERENCES data_points(id),
+            target TEXT NOT NULL REFERENCES data_points(id),
+            type TEXT NOT NULL,
+            reason TEXT,
+            fact TEXT,
+            properties TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            valid_from TEXT,
+            valid_to TEXT,
+            expired_at TEXT,
+            weight REAL DEFAULT 1.0,
+            source_sessions TEXT
+        );
+    """)
+    conn.commit()
+    return conn
+
+
+class TestApplyV3:
+    def test_add_creates_data_point(self, tmp_path):
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [MemoryOp(action="ADD", fact="gRPC for services", scope="proj",
+                        type="design", salience=0.8, entities=["gRPC"])]
+        results = apply_memory_ops_v3(conn, ops)
+        assert len(results) == 1
+        dp = query_data_point_by_id(conn, results[0]["id"])
+        assert dp is not None
+        assert dp.content == "gRPC for services"
+        assert dp.salience == 0.8
+        assert dp.type == "memory"
+
+    def test_add_creates_entity_data_points(self, tmp_path):
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [MemoryOp(action="ADD", fact="uses gRPC", scope="proj",
+                        entities=["gRPC", "internal services"])]
+        apply_memory_ops_v3(conn, ops)
+        entities = conn.execute(
+            "SELECT name FROM data_points WHERE type='entity'"
+        ).fetchall()
+        names = {e[0] for e in entities}
+        assert "gRPC" in names
+        assert "internal services" in names
+
+    def test_update_modifies_content(self, tmp_path):
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        dp_id = insert_data_point(conn, DataPointRow(
+            type="memory", content="old fact", scope="proj", id="dp_old"))
+        conn.commit()
+        ops = [MemoryOp(action="UPDATE", id="dp_old", fact="new fact", entities=["JWT"])]
+        apply_memory_ops_v3(conn, ops)
+        dp = query_data_point_by_id(conn, "dp_old")
+        assert dp.content == "new fact"
+
+    def test_delete_creates_provenance(self, tmp_path):
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        insert_data_point(conn, DataPointRow(
+            type="memory", content="wrong fact", scope="proj", id="dp_wrong"))
+        conn.commit()
+        ops = [MemoryOp(action="DELETE", id="dp_wrong", reason="Contradicted")]
+        apply_memory_ops_v3(conn, ops)
+        dp = query_data_point_by_id(conn, "dp_wrong")
+        assert dp.salience == 0.0
+        edges = conn.execute(
+            "SELECT type FROM edges WHERE target='dp_wrong'"
+        ).fetchall()
+        assert any(e[0] == "supersedes" for e in edges)
+
+    def test_noop_increments_evidence(self, tmp_path):
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        insert_data_point(conn, DataPointRow(
+            type="memory", content="confirmed", scope="proj", id="dp_ok"))
+        conn.commit()
+        ops = [MemoryOp(action="NOOP", id="dp_ok", reason="Still correct")]
+        apply_memory_ops_v3(conn, ops)
+        dp = query_data_point_by_id(conn, "dp_ok")
+        assert dp.evidence_count == 2
+
+    def test_no_filesystem_writes(self, tmp_path):
+        """V3 apply does not write to any markdown files."""
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        import os
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [MemoryOp(action="ADD", fact="test", scope="proj")]
+        md_files_before = set()
+        for root, dirs, files in os.walk(str(tmp_path)):
+            md_files_before.update(f for f in files if f.endswith(".md"))
+        apply_memory_ops_v3(conn, ops)
+        md_files_after = set()
+        for root, dirs, files in os.walk(str(tmp_path)):
+            md_files_after.update(f for f in files if f.endswith(".md"))
+        assert md_files_before == md_files_after
+
+    def test_add_default_salience(self, tmp_path):
+        """ADD without salience defaults to 0.5."""
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [MemoryOp(action="ADD", fact="no salience", scope="proj")]
+        results = apply_memory_ops_v3(conn, ops)
+        dp = query_data_point_by_id(conn, results[0]["id"])
+        assert dp.salience == 0.5
