@@ -22,10 +22,6 @@ from load_memory import (
     _get_project_names_str,
     _load_from_db,
     _strip_profile_sections,
-    load_daily_summaries,
-    load_global_memory,
-    load_project_history,
-    load_project_memory,
     pre_extract_transcripts_incremental,
     should_synthesize,
     write_synthesis_prompt,
@@ -243,205 +239,6 @@ class TestShouldSynthesize:
 # =============================================================================
 # load_global_memory Tests
 # =============================================================================
-
-
-class TestLoadGlobalMemory:
-    def test_returns_content_when_exists(self, tmp_path):
-        mem_file = tmp_path / "global-long-term-memory.md"
-        mem_file.write_text("# Global Memory\nSome content here")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = mem_file
-            content, size = load_global_memory()
-            assert "Global Memory" in content
-            assert size > 0
-
-    def test_returns_empty_when_no_file(self):
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = Path("/nonexistent/memory.md")
-            content, size = load_global_memory()
-            assert content == ""
-            assert size == 0
-
-    def test_returns_empty_on_io_error(self, tmp_path):
-        mem_file = tmp_path / "memory.md"
-        mem_file.write_text("content")
-        # Make unreadable
-        mem_file.chmod(0o000)
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = mem_file
-            content, size = load_global_memory()
-            assert content == ""
-            assert size == 0
-
-        # Restore permissions for cleanup
-        mem_file.chmod(0o644)
-
-
-# =============================================================================
-# load_project_memory Tests
-# =============================================================================
-
-
-class TestLoadProjectMemory:
-    def test_returns_content(self, tmp_path):
-        mem_file = tmp_path / "myproject-long-term-memory.md"
-        mem_file.write_text("# myproject\nProject learnings")
-
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("myproject")
-            assert "Project learnings" in content
-            assert size > 0
-
-    def test_returns_empty_when_missing(self, tmp_path):
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("nonexistent")
-            assert content == ""
-            assert size == 0
-
-    def test_handles_special_chars_in_name(self, tmp_path):
-        """Project names with special chars map to correct filenames."""
-        # "My Project!" -> "my-project-long-term-memory.md"
-        mem_file = tmp_path / "my-project-long-term-memory.md"
-        mem_file.write_text("# My Project\nContent")
-
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("My Project!")
-            assert "Content" in content
-
-
-# =============================================================================
-# load_daily_summaries Tests
-# =============================================================================
-
-
-SAMPLE_DAILY_GLOBAL = """# 2026-02-05
-## Actions
-- [global/implement] Set up new hooks
-- [myproject/implement] Added feature X
-
-## Learnings
-- [global/pattern] Important global pattern
-- [myproject/gotcha] Project-specific gotcha
-"""
-
-SAMPLE_DAILY_PROJECT = """# 2026-02-04
-## Actions
-- [global/document] Wrote docs
-- [myproject/implement] Built the widget
-
-## Learnings
-- [myproject/pattern] Widget must be initialized first
-"""
-
-
-def _setup_daily_dir(tmp_path, include_global_only_day=False):
-    daily_dir = tmp_path / "daily"
-    daily_dir.mkdir()
-    (daily_dir / "2026-02-05.md").write_text(SAMPLE_DAILY_GLOBAL)
-    (daily_dir / "2026-02-04.md").write_text(SAMPLE_DAILY_PROJECT)
-    if include_global_only_day:
-        (daily_dir / "2026-02-03.md").write_text(
-            "# 2026-02-03\n## Actions\n- [global/implement] Only global\n"
-        )
-    return daily_dir
-
-
-class TestLoadDailySummaries:
-    def test_global_scope_filtering(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
-
-            summaries, total_bytes = load_daily_summaries(2, scope="global")
-            all_content = " ".join(content for _, content in summaries)
-            assert "[global/" in all_content
-            assert "[myproject/" not in all_content
-
-    def test_project_scope_filtering(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
-
-            summaries, total_bytes = load_daily_summaries(2, scope="myproject")
-            all_content = " ".join(content for _, content in summaries)
-            assert "[myproject/" in all_content
-            assert "[global/" not in all_content
-
-    def test_respects_days_limit(self, tmp_path):
-        """get_working_days already limits, so only those dates are loaded."""
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05"]  # Only 1 day
-
-            summaries, _ = load_daily_summaries(1, scope="global")
-            dates = [d for d, _ in summaries]
-            assert "2026-02-04" not in dates
-
-    def test_empty_when_no_matching_content(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05"]
-
-            summaries, total_bytes = load_daily_summaries(1, scope="other-project")
-            assert summaries == []
-            assert total_bytes == 0
-
-
-# =============================================================================
-# load_project_history Tests
-# =============================================================================
-
-
-class TestLoadProjectHistory:
-    def test_loads_project_entries(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, total_bytes = load_project_history(project, days_limit=10)
-
-            assert len(summaries) == 2  # Feb 4 and Feb 5 have myproject entries
-            all_content = " ".join(content for _, content in summaries)
-            assert "[myproject/" in all_content
-            assert "[global/" not in all_content
-            assert total_bytes > 0
-
-    def test_oldest_first_ordering(self, tmp_path):
-        """Output should be chronological (oldest first)."""
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, _ = load_project_history(project, days_limit=10)
-            dates = [d for d, _ in summaries]
-            assert dates == sorted(dates)
-
-    def test_respects_day_limit(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, _ = load_project_history(project, days_limit=1)
-            assert len(summaries) == 1
-
-    def test_empty_project_name(self):
-        project = {"name": ""}
-        summaries, total_bytes = load_project_history(project, days_limit=10)
-        assert summaries == []
-        assert total_bytes == 0
 
 
 # =============================================================================
@@ -1495,11 +1292,10 @@ class TestSynthesisDeferredSetting:
         monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
 
         # Mock memory loading functions (not under test here)
-        monkeypatch.setattr("load_memory.load_global_memory", lambda: ("", 0))
         monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
         monkeypatch.setattr("load_memory.load_json_file", lambda p, d: {})
         monkeypatch.setattr("load_memory.find_current_project", lambda *a: None)
-        monkeypatch.setattr("load_memory.load_daily_summaries", lambda *a, **kw: ([], 0))
+        monkeypatch.setattr("load_memory._load_from_db", lambda *a: "")
 
         main()
         return capsys.readouterr().out

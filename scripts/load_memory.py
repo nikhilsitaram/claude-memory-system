@@ -44,7 +44,6 @@ from memory_utils import (
     load_json_file,
     load_settings,
     load_synthesis_state,
-    project_name_to_filename,
     resolve_project_path_to_name,
     resolve_session_path,
 )
@@ -65,11 +64,8 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # =============================================================================
 # Entry points:
 #   main()                                  SessionStart hook (stdout -> context)
-# Memory loading:
-#   load_global_memory() -> (str, int)
-#   load_project_memory(name) -> (str, int)
-#   load_daily_summaries(days, scope) -> (list[(date, content)], int)
-#   load_project_history(project, days) -> (list[(date, content)], int)
+# DB-first loading (v3):
+#   _load_from_db(project_scope) -> str | None
 # Scheduling:
 #   should_synthesize(settings) -> bool
 # =============================================================================
@@ -149,106 +145,6 @@ def should_synthesize(settings: dict) -> bool:
     except (ValueError, OSError, IOError):
         return True  # Fallback: always synthesize if file missing/invalid
 
-
-def load_global_memory() -> tuple[str, int]:
-    """Load global long-term memory file. Returns (content, bytes)."""
-    global_file = get_global_memory_file()
-    if not global_file.exists():
-        return "", 0
-
-    try:
-        content = global_file.read_text(encoding="utf-8")
-        return content, len(content.encode("utf-8"))
-    except IOError:
-        return "", 0
-
-
-def load_project_memory(project_name: str) -> tuple[str, int]:
-    """Load project-specific long-term memory. Returns (content, bytes)."""
-    project_memory_dir = get_project_memory_dir()
-    filename = project_name_to_filename(project_name)
-    project_file = project_memory_dir / filename
-
-    if not project_file.exists():
-        return "", 0
-
-    try:
-        content = project_file.read_text(encoding="utf-8")
-        return content, len(content.encode("utf-8"))
-    except IOError:
-        return "", 0
-
-
-def load_daily_summaries(days_limit: int, scope: str = "global") -> tuple[list[tuple[str, str]], int]:
-    """
-    Load recent daily summaries, filtered by scope.
-
-    Args:
-        days_limit: Maximum number of working days to load
-        scope: Filter scope - "global" for global entries, or project name for project entries
-
-    Returns (list of (date, content) tuples, total bytes).
-    """
-    daily_dir = get_daily_dir()
-    working_days = get_working_days(days_limit)
-    summaries = []
-    total_bytes = 0
-
-    for date in working_days:
-        daily_file = daily_dir / f"{date}.md"
-        if daily_file.exists():
-            try:
-                raw_content = daily_file.read_text(encoding="utf-8")
-                filtered_content = filter_daily_content(raw_content, scope)
-                if filtered_content:
-                    summaries.append((date, filtered_content))
-                    total_bytes += len(filtered_content.encode("utf-8"))
-            except IOError:
-                continue
-
-    return summaries, total_bytes
-
-
-def load_project_history(
-    project: dict, days_limit: int
-) -> tuple[list[tuple[str, str]], int]:
-    """
-    Load project-specific work history (days worked in this project).
-
-    Filters content to only include entries tagged with this project's name.
-    Returns (list of (date, content) tuples, total bytes).
-    """
-    daily_dir = get_daily_dir()
-    project_name = project.get("name", "")
-
-    if not project_name:
-        return [], 0
-
-    # Get all daily files and filter by project content
-    # We scan all daily files since project work may exist on any day
-    all_daily_files = sorted(daily_dir.glob("*.md"), reverse=True)
-
-    summaries = []
-    total_bytes = 0
-
-    for daily_file in all_daily_files:
-        if len(summaries) >= days_limit:
-            break
-
-        try:
-            raw_content = daily_file.read_text(encoding="utf-8")
-            filtered_content = filter_daily_content(raw_content, project_name)
-            if filtered_content:
-                date = daily_file.stem  # YYYY-MM-DD from filename
-                summaries.append((date, filtered_content))
-                total_bytes += len(filtered_content.encode("utf-8"))
-        except IOError:
-            continue
-
-    # Output oldest first for chronological reading
-    summaries.reverse()
-
-    return summaries, total_bytes
 
 
 def _get_project_names_str() -> str:
@@ -1050,12 +946,6 @@ def main() -> None:
 
     # Load settings
     settings = load_settings()
-    short_term_days = settings["globalShortTerm"]["workingDays"]
-    project_days = settings["projectShortTerm"]["workingDays"]
-    total_budget = settings["totalTokenBudget"]
-
-    # Track total bytes for token estimation
-    total_bytes = 0
 
     # Start output
     print("<memory>")
@@ -1156,70 +1046,12 @@ def main() -> None:
     current_project = find_current_project(projects_index, pwd)
     project_scope = current_project.get("name", "") if current_project else ""
 
-    # Try DB-first loading (v3 schema)
+    # DB-first loading (v3 schema); falls back to empty context if no v3 DB
     db_content = _load_from_db(project_scope)
-    if db_content is not None:
-        # v3 DB found — output SQL-ranked context
-        if db_content.strip():
-            print(db_content)
-            print()
-        print("</memory>")
-        return
-
-    # Legacy fallback: markdown-based loading (v2 or no DB)
-    # Load global long-term memory
-    global_content, global_bytes = load_global_memory()
-    total_bytes += global_bytes
-
-    if global_content:
-        print("## Long-Term Memory")
-        print(global_content)
+    if db_content is not None and db_content.strip():
+        print(db_content)
         print()
-
-    # Load project-specific long-term memory
-    if current_project:
-        project_name = current_project.get("name", "")
-        if project_name:
-            project_content, project_bytes = load_project_memory(project_name)
-            total_bytes += project_bytes
-
-            if project_content:
-                print(f"## Project Long-Term Memory: {project_name}")
-                print(project_content)
-                print()
-
-    # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
-    global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
-    total_bytes += global_daily_bytes
-
-    if global_summaries:
-        print("## Global Short-Term Memory")
-        for date, content in global_summaries:
-            print(f"### {date}")
-            print(content)
-            print()
-
-    # Load project short-term memory (project history, filtered to [project/*] tags)
-    if current_project:
-        project_name = current_project.get("name", "unknown")
-        project_history, history_bytes = load_project_history(current_project, project_days)
-        total_bytes += history_bytes
-
-        if project_history:
-            print(f"## Project Short-Term Memory: {project_name}")
-            print()
-            for date, content in project_history:
-                print(f"### {date}")
-                print(content)
-                print()
-
     print("</memory>")
-
-    # Token estimation (informational)
-    estimated_tokens = total_bytes // 4
-    if estimated_tokens > total_budget:
-        print(f"<!-- Memory usage: ~{estimated_tokens} tokens (budget: {total_budget}) -->")
-        print("<!-- Consider running /synthesize to consolidate older sessions -->")
 
 
 if __name__ == "__main__":
