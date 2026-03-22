@@ -105,13 +105,63 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
 );
 """
 
+VEC_DATA_DDL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+    embedding float[384],
+    +data_point_id TEXT,
+    +type TEXT
+);
+"""
+
+SCHEMA_V3_DDL = """\
+-- Unified data_points table (replaces chunks and nodes)
+CREATE TABLE IF NOT EXISTS data_points (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    name TEXT,
+    content TEXT,
+    scope TEXT,
+    entry_type TEXT,
+    source_type TEXT,
+    source_sessions TEXT,
+    created_at TEXT NOT NULL,
+    salience REAL DEFAULT 1.0,
+    access_count INTEGER DEFAULT 0,
+    last_accessed TEXT,
+    evidence_count INTEGER DEFAULT 1,
+    consolidated INTEGER DEFAULT 0,
+    content_hash TEXT,
+    simhash INTEGER,
+    entities TEXT,
+    properties TEXT
+);
+
+-- Vector search layer for data_points
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+    embedding float[384],
+    +data_point_id TEXT,
+    +type TEXT
+);
+
+-- Indexes for data_points
+CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
+CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
+CREATE INDEX IF NOT EXISTS idx_dp_salience ON data_points(salience);
+CREATE INDEX IF NOT EXISTS idx_dp_created ON data_points(created_at);
+CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
+CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
+"""
+
 __all__ = [
     "SCHEMA_VERSION",
     "SCHEMA_DDL",
     "VEC_CHUNKS_DDL",
+    "VEC_DATA_DDL",
+    "SCHEMA_V3_DDL",
     "ChunkRow",
     "NodeRow",
     "EdgeRow",
+    "DataPointRow",
     "MigrationStats",
     "ensure_db",
     "get_db",
@@ -201,6 +251,29 @@ class EdgeRow:
     expired_at: Optional[str] = None
     weight: float = 1.0
     source_sessions: Optional[str] = None
+    id: Optional[str] = None
+
+
+@dataclass
+class DataPointRow:
+    """Represents a row in the data_points table (v3 schema)."""
+    type: str
+    content: Optional[str] = None
+    scope: Optional[str] = None
+    name: Optional[str] = None
+    entry_type: Optional[str] = None
+    source_type: Optional[str] = None
+    source_sessions: Optional[str] = None
+    created_at: Optional[str] = None
+    salience: float = 1.0
+    access_count: int = 0
+    last_accessed: Optional[str] = None
+    evidence_count: int = 1
+    consolidated: int = 0
+    content_hash: Optional[str] = None
+    simhash: Optional[int] = None
+    entities: Optional[str] = None
+    properties: Optional[str] = None
     id: Optional[str] = None
 
 

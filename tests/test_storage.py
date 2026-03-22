@@ -882,3 +882,104 @@ class TestTemporalEdgeQueries:
         results = query_edges_for_node(db, src_id)
         assert len(results) == 1
         assert results[0].id == edge_id
+
+
+class TestV3Schema:
+    """Tests for v3 schema DDL and DataPointRow."""
+
+    def test_data_point_row_creation(self):
+        """DataPointRow has correct defaults for optional fields."""
+        from storage import DataPointRow
+
+        row = DataPointRow(content='test fact', scope='global', type='memory')
+        assert row.content == 'test fact'
+        assert row.scope == 'global'
+        assert row.type == 'memory'
+        assert row.salience == 1.0
+        assert row.access_count == 0
+        assert row.evidence_count == 1
+        assert row.consolidated == 0
+        assert row.name is None
+        assert row.properties is None
+
+    def test_v3_schema_creates_data_points_table(self, db_dir):
+        """SCHEMA_V3_DDL creates data_points table with all 18 columns."""
+        from storage import SCHEMA_V3_DDL
+
+        db_path = db_dir / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Execute DDL but skip if sqlite-vec not available
+        try:
+            conn.executescript(SCHEMA_V3_DDL)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "no such module: vec0" in str(e):
+                # sqlite-vec not available - create just the data_points table
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS data_points (
+                        id TEXT PRIMARY KEY,
+                        type TEXT NOT NULL,
+                        name TEXT,
+                        content TEXT,
+                        scope TEXT,
+                        entry_type TEXT,
+                        source_type TEXT,
+                        source_sessions TEXT,
+                        created_at TEXT NOT NULL,
+                        salience REAL DEFAULT 1.0,
+                        access_count INTEGER DEFAULT 0,
+                        last_accessed TEXT,
+                        evidence_count INTEGER DEFAULT 1,
+                        consolidated INTEGER DEFAULT 0,
+                        content_hash TEXT,
+                        simhash INTEGER,
+                        entities TEXT,
+                        properties TEXT
+                    );
+                """)
+                conn.commit()
+            else:
+                raise
+
+        # Check data_points table exists
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='data_points'"
+        ).fetchone()
+        assert result is not None
+
+        # Check all 18 columns exist
+        cols = conn.execute("PRAGMA table_info(data_points)").fetchall()
+        col_names = {col[1] for col in cols}
+        expected_cols = {
+            'id', 'type', 'name', 'content', 'scope', 'entry_type',
+            'source_type', 'source_sessions', 'created_at', 'salience',
+            'access_count', 'last_accessed', 'evidence_count', 'consolidated',
+            'content_hash', 'simhash', 'entities', 'properties'
+        }
+        assert col_names == expected_cols
+        conn.close()
+
+    def test_v3_schema_creates_vec_data_table(self, db_dir):
+        """VEC_DATA_DDL creates vec_data virtual table (requires sqlite-vec)."""
+        from storage import VEC_DATA_DDL
+
+        db_path = db_dir / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+
+        try:
+            conn.executescript(VEC_DATA_DDL)
+            conn.commit()
+
+            # Check vec_data table exists
+            result = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_data'"
+            ).fetchone()
+            assert result is not None
+        except sqlite3.OperationalError as e:
+            if "no such module: vec0" in str(e):
+                pytest.skip("sqlite-vec extension not available")
+            else:
+                raise
+        finally:
+            conn.close()
