@@ -35,9 +35,7 @@ from storage import (
     insert_data_point,
     insert_edge,
     query_data_point_by_id,
-    query_data_points,
     query_edges_for_data_point,
-    query_edges_for_node,
     soft_delete_data_point,
     invalidate_edge,
 )
@@ -421,12 +419,13 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
           {type_clause}
           AND CASE WHEN e.source = gw.dp_id THEN e.target ELSE e.source END != ?
     )
-    SELECT gw.dp_id, MIN(gw.depth) AS min_depth, gw.edge_type, gw.edge_reason,
+    SELECT gw.dp_id, MIN(gw.depth) AS min_depth, MIN(gw.edge_type) AS edge_type,
+           MIN(gw.edge_reason) AS edge_reason,
            dp.content, dp.type, dp.name, dp.scope
     FROM graph_walk gw
     JOIN data_points dp ON dp.id = gw.dp_id
     WHERE gw.dp_id != ?
-    GROUP BY gw.dp_id
+    GROUP BY gw.dp_id, dp.content, dp.type, dp.name, dp.scope
     ORDER BY min_depth, dp.salience DESC
     """
 
