@@ -1,48 +1,13 @@
 ---
 name: recall
-description: Use when user asks about past work, decisions, discussions, or topics that might have relevant history beyond loaded context
+description: "[DEPRECATED] Search memory - use search_memories MCP tool instead"
 user-invokable: true
 ---
 
-# Recall Skill
+# /recall - DEPRECATED
 
-## Proactive Use (IMPORTANT)
+This skill has been replaced by the `search_memories` MCP tool, which Claude calls automatically when relevant.
 
-Use this skill PROACTIVELY without being asked when:
-- User asks about past decisions, discussions, or work ("what did we decide about X?")
-- User references something from more than a week ago
-- User asks "when did we...", "did we ever...", "have we talked about..."
-- A topic comes up that likely has relevant history (projects, patterns, bugs fixed)
-- User seems to expect you to remember something not in the loaded context
+**Migration:** Instead of typing `/recall`, Claude now proactively searches memories during conversation using the `search_memories` tool. You don't need to do anything -- relevant memories surface automatically.
 
-Don't wait to be prompted - search first, then answer with full context.
-
-## Instructions
-
-1. Get the search query from the user
-2. List all files in `~/.claude/memory/daily/`
-3. Read through each file searching for relevant content
-4. Return matching excerpts with their dates
-5. Summarize findings if there are many matches
-
-## Example Usage
-
-- `/recall authentication` → Search all daily files for authentication mentions
-- `/recall what was I working on in December?` → Read December files, summarize work
-
-## Search Strategy
-
-1. For specific topics: search files for keywords
-2. For time-based queries: read files from the specified time period
-3. Always include date context when returning results
-
-## Implementation
-
-Use the Grep tool to search across daily files:
-- `Grep(pattern: "search_term", path: "~/.claude/memory/daily/")` for keyword matches
-- Use `-B2 -A2` context for surrounding lines
-
-Use the Glob tool for time-based queries:
-- `Glob(pattern: "~/.claude/memory/daily/2026-01-*.md")` for a specific month
-
-Always provide the date with each result so the user knows when something happened.
+**Manual search:** If you want to explicitly search, ask Claude: "Search my memories for [topic]" and Claude will use the `search_memories` tool.
