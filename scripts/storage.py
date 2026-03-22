@@ -217,6 +217,9 @@ __all__ = [
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
+    "PROFILE_SECTIONS",
+    "_migrate_profiles",
+    "migrate_profiles",
 ]
 
 
@@ -540,6 +543,10 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 
     # Step 8: Set schema version to 3
     conn.execute("PRAGMA user_version = 3")
+
+    # Step 9: Migrate profile sections from global LTM (idempotent)
+    _migrate_profiles(conn, get_memory_dir() / "global-long-term-memory.md")
+
     conn.commit()
 
 
@@ -1274,6 +1281,94 @@ def query_edges_for_data_point(
 _LTM_ENTRY_RE = re.compile(
     r'^\s*-\s*\((\d{4}-\d{2}-\d{2})\)\s*\[([^\]]+)\]\s*(.+)'
 )
+
+# Profile section names that are migrated to data_points with type='profile'
+PROFILE_SECTIONS = frozenset({
+    "About Me",
+    "Current Projects",
+    "Technical Environment",
+    "Patterns & Preferences",
+})
+
+
+def _insert_profile_section(
+    conn: sqlite3.Connection, header: str, lines: list, created_at: str
+) -> None:
+    """Insert a single profile section as a data_point.
+
+    Skips insertion if a profile data_point with the same content_hash already
+    exists (idempotency).
+    """
+    content = "\n".join(lines).strip()
+    if not content:
+        return
+
+    h = _content_hash(content)
+    existing = conn.execute(
+        "SELECT id FROM data_points WHERE content_hash = ? AND type = 'profile'",
+        (h,),
+    ).fetchone()
+    if existing:
+        return
+
+    conn.execute(
+        "INSERT INTO data_points "
+        "(id, type, name, content, scope, source_type, created_at, "
+        "salience, consolidated, content_hash) "
+        "VALUES (?, 'profile', ?, ?, 'user', 'migration', ?, 1.0, 1, ?)",
+        (_generate_id(), header, content, created_at, h),
+    )
+
+
+def _migrate_profiles(conn: sqlite3.Connection, ltm_path: Path) -> None:
+    """Parse global LTM markdown and create profile data_points.
+
+    Only processes sections whose headers match PROFILE_SECTIONS.
+    Sections with no content are skipped.
+    Idempotent: uses content_hash to avoid duplicate inserts.
+
+    Args:
+        conn: Database connection.
+        ltm_path: Path to global-long-term-memory.md.
+    """
+    if not ltm_path.exists():
+        return
+
+    created_at = datetime.fromtimestamp(
+        ltm_path.stat().st_mtime, tz=timezone.utc
+    ).isoformat().replace("+00:00", "Z")
+
+    content = ltm_path.read_text(encoding="utf-8")
+    current_header: Optional[str] = None
+    current_lines: list = []
+
+    for line in content.split("\n"):
+        if line.startswith("## "):
+            if current_header in PROFILE_SECTIONS and current_lines:
+                _insert_profile_section(conn, current_header, current_lines, created_at)
+            current_header = line[3:].strip()
+            current_lines = []
+        elif current_header is not None:
+            current_lines.append(line)
+
+    # Handle final section
+    if current_header in PROFILE_SECTIONS and current_lines:
+        _insert_profile_section(conn, current_header, current_lines, created_at)
+
+
+def migrate_profiles(conn: sqlite3.Connection, ltm_path: Path) -> None:
+    """Public API: migrate profile sections from global LTM to data_points.
+
+    Parses ## About Me, ## Current Projects, ## Technical Environment, and
+    ## Patterns & Preferences sections from the global LTM markdown file,
+    creating one data_point per section with type='profile', scope='user',
+    salience=1.0, consolidated=1.
+
+    Idempotent: safe to run multiple times.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    _migrate_profiles(conn, ltm_path)
 
 
 def _parse_ltm_entries(content: str, source_file: str, scope: str) -> list[ChunkRow]:
