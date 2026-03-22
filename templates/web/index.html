@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Claude Memory System</title>
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -432,7 +432,10 @@
     // -----------------------------------------------------------------------
     // Nav
     // -----------------------------------------------------------------------
+    let _currentSection = 'dashboard';
+
     function showSection(name) {
+        _currentSection = name;
         document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
         document.getElementById('section-' + name).classList.add('active');
         document.querySelectorAll('#nav button').forEach(b => b.classList.remove('active'));
@@ -440,6 +443,12 @@
         if (name === 'dashboard') loadDashboard();
         if (name === 'browse') loadBrowse(0);
         if (name === 'graph') loadGraph();
+    }
+
+    function _refreshCurrentView() {
+        if (_currentSection === 'browse') loadBrowse(browseOffset);
+        else if (_currentSection === 'graph') loadGraph();
+        else loadDashboard();
     }
 
     // -----------------------------------------------------------------------
@@ -762,7 +771,7 @@
             if (data.status === 'deleted') {
                 toast('Deleted');
                 closeModal();
-                loadDashboard();
+                _refreshCurrentView();
             } else {
                 toast(data.error || 'Delete failed', true);
             }

@@ -22,7 +22,11 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from storage import (
+    DataPointRow,
+    EdgeRow,
     ensure_db,
+    insert_data_point,
+    insert_edge,
     invalidate_edge,
     query_data_point_by_id,
     query_edges_for_data_point,
@@ -255,7 +259,7 @@ def _edit_data_point(conn: sqlite3.Connection, dp_id: str, updates: dict) -> dic
     if "content" in updates:
         kwargs["content"] = updates["content"]
     if "salience" in updates:
-        kwargs["salience"] = float(updates["salience"])
+        kwargs["salience"] = max(0.0, min(1.0, float(updates["salience"])))
 
     if kwargs:
         update_data_point(conn, dp_id, **kwargs)
@@ -274,19 +278,39 @@ def _edit_data_point(conn: sqlite3.Connection, dp_id: str, updates: dict) -> dic
 
 
 def _delete_data_point(conn: sqlite3.Connection, dp_id: str, reason: str = None) -> dict:
-    """Soft-delete a data_point (set salience=0) and invalidate its edges."""
+    """Soft-delete a data_point (set salience=0), invalidate its edges, and record provenance."""
     dp = query_data_point_by_id(conn, dp_id)
     if not dp:
         return {"error": f"Data point {dp_id} not found"}
 
+    now = datetime.now(timezone.utc).isoformat()
     soft_delete_data_point(conn, dp_id)
 
     # Invalidate edges connected to this data_point
     edges = query_edges_for_data_point(conn, dp_id)
-    now = datetime.now(timezone.utc).isoformat()
     for edge in edges:
         if edge.valid_to is None:
             invalidate_edge(conn, edge.id, now, now)
+
+    # Create a tombstone data_point + supersedes edge to record deletion reason
+    marker_content = reason or f"Deleted: {(dp.content or '')[:100]}"
+    marker = DataPointRow(
+        type="memory",
+        content=marker_content,
+        scope=dp.scope,
+        salience=0.0,
+        source_type="deletion",
+        created_at=now,
+    )
+    marker_id = insert_data_point(conn, marker)
+    insert_edge(conn, EdgeRow(
+        source=marker_id,
+        target=dp_id,
+        type="supersedes",
+        fact=reason,
+        created_at=now,
+        valid_from=now,
+    ))
 
     conn.commit()
     return {"status": "deleted", "id": dp_id}
