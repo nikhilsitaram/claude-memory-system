@@ -23,7 +23,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from storage import ChunkRow, VEC_CHUNKS_DDL, _row_to_chunk, _CHUNK_COLUMNS  # noqa: E402
+from storage import _CHUNK_COLUMNS, VEC_CHUNKS_DDL, ChunkRow, _row_to_chunk  # noqa: E402
 
 try:
     from fastembed import TextEmbedding
@@ -101,6 +101,7 @@ def ensure_vec_table(conn) -> bool:
     if not HAS_SQLITE_VEC:
         return False
     try:
+        conn.enable_load_extension(True)
         sqlite_vec.load(conn)
     except Exception:
         return False
@@ -245,17 +246,30 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
         return []
 
     fetch_k = top_k * 3
-    qualified = ", ".join(f"c.{col.strip()}" for col in _CHUNK_COLUMNS.split(","))
 
-    rows = conn.execute(
-        f"SELECT vc.distance, {qualified} FROM vec_chunks vc JOIN chunks c ON vc.chunk_id = c.id WHERE vc.embedding MATCH ? ORDER BY vc.distance LIMIT ?",
+    # Step 1: KNN query for nearest chunk_ids and distances
+    knn_rows = conn.execute(
+        "SELECT distance, chunk_id FROM vec_chunks WHERE embedding MATCH ? AND k = ?",
         (_serialize_vector(query_vec), fetch_k),
     ).fetchall()
 
+    if not knn_rows:
+        return []
+
+    # Step 2: Fetch full chunk metadata for matched IDs
+    chunk_ids = [r[1] for r in knn_rows]
+    dist_map = {r[1]: r[0] for r in knn_rows}
+    placeholders = ",".join("?" * len(chunk_ids))
+    chunk_rows = conn.execute(
+        f"SELECT {', '.join(col.strip() for col in _CHUNK_COLUMNS.split(','))} "
+        f"FROM chunks WHERE id IN ({placeholders})",
+        chunk_ids,
+    ).fetchall()
+
     results = []
-    for row in rows:
-        distance = row[0]
-        chunk = _row_to_chunk(row[1:])
+    for crow in chunk_rows:
+        chunk = _row_to_chunk(crow)
+        distance = dist_map.get(chunk.id, 1.0)
         if scope is not None and chunk.scope != scope:
             continue
         vec_sim = max(0.0, 1.0 - distance)

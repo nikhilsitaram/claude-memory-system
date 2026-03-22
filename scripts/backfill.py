@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from storage import ensure_db, close_db, query_chunk_by_id  # noqa: E402
+from storage import close_db, ensure_db  # noqa: E402
 
 BATCH_SIZE = 50
 MODEL = "sonnet"
@@ -71,6 +71,7 @@ def extract_entities_batch(chunks: list[tuple[str, str]]) -> dict[str, list[str]
             capture_output=True,
             text=True,
             timeout=120,
+            cwd="/tmp",
         )
         if result.returncode != 0:
             print(f"Warning: claude -p failed: {result.stderr[:200]}", file=sys.stderr)

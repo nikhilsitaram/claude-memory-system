@@ -12,15 +12,14 @@ from unittest import mock
 import pytest
 from decay import (  # noqa: I001
     ARCHIVE_HEADER_PATTERN,
+    ARCHIVE_SALIENCE_THRESHOLD,
+    COLD_LAMBDA,
     DATE_PATTERN,
     DEFAULT_AGE_DAYS,
     DEFAULT_ARCHIVE_RETENTION_DAYS,
     DEFAULT_PROJECT_WORKING_DAYS,
     HOT_LAMBDA,
     WARM_LAMBDA,
-    COLD_LAMBDA,
-    HOT_DAYS_THRESHOLD,
-    ARCHIVE_SALIENCE_THRESHOLD,
     append_to_archive,
     build_project_work_days_map,
     days_since,
@@ -662,7 +661,6 @@ class TestDaysSince:
     def test_returns_0_for_today(self):
         """Today's timestamp returns 0.0."""
         from datetime import date as date_cls
-        import datetime as dt_module
         today = date_cls(2026, 3, 21)
         ts = "2026-03-21T00:00:00Z"
         result = days_since(ts, today=today)
@@ -688,8 +686,8 @@ class TestSalienceDecayIntegration:
         5. Verify: accessed entries have higher salience than unaccessed old entry
         6. Verify: cold old entry decays below archive threshold
         """
-        from unittest import mock
-        from storage import ensure_db, close_db, migrate_markdown_to_db, query_chunks_with_salience, update_chunk_salience
+        from unittest import mock  # noqa: I001
+        from storage import close_db, ensure_db, migrate_markdown_to_db, query_chunks_with_salience, update_chunk_salience
 
         db_path = tmp_path / "memory.db"
 
@@ -697,7 +695,7 @@ class TestSalienceDecayIntegration:
 ## Key Learnings
 - (2026-03-20) [pattern] Recent entry one day ago
 - (2026-03-10) [pattern] Moderate entry eleven days ago
-- (2026-02-20) [pattern] Old entry twenty-nine days ago
+- (2025-09-03) [pattern] Old entry two hundred days ago
 """
         ltm_file = tmp_path / "global-long-term-memory.md"
         ltm_file.write_text(ltm_content, encoding="utf-8")
