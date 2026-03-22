@@ -20,6 +20,7 @@ from load_memory import (
     _build_synthesis_prompt,
     _find_projects_in_extracts,
     _get_project_names_str,
+    _load_from_db,
     _strip_profile_sections,
     load_daily_summaries,
     load_global_memory,
@@ -1932,6 +1933,360 @@ class TestSynthesisPromptV3:
         """Prompt requests entities array in each operation."""
         instructions = _build_synthesis_instructions_v3()
         assert "entities" in instructions
+
+
+# =============================================================================
+# _load_from_db Tests (E1 + E2)
+# =============================================================================
+
+
+def _make_v3_db(tmp_path):
+    """Create a minimal v3 DB for testing smart loading.
+
+    Uses ensure_db() via patched get_db_path so vec0 errors are handled
+    gracefully (same as production code).
+    """
+    from storage import ensure_db
+
+    db_path = tmp_path / "test.db"
+    with mock.patch("storage.get_db_path", return_value=db_path):
+        conn = ensure_db()
+    return conn
+
+
+class TestSmartLoading:
+    def test_returns_none_for_v2_db(self, tmp_path):
+        """Returns None (signal legacy) when DB is v2."""
+        from storage import SCHEMA_DDL
+
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        conn.executescript(SCHEMA_DDL)
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+        assert result is None
+
+    def test_returns_empty_string_when_no_db(self, tmp_path):
+        """Returns empty string (not None) when DB file doesn't exist."""
+        with mock.patch("storage.get_db", side_effect=FileNotFoundError):
+            result = _load_from_db("myproject")
+        assert result == ""
+
+    def test_graceful_fallback_no_db(self, tmp_path):
+        """If DB doesn't exist, loading returns empty context gracefully."""
+        with mock.patch("storage.get_db", side_effect=FileNotFoundError):
+            result = _load_from_db("")
+        assert result == ""
+
+    def test_loads_user_profile(self, tmp_path):
+        """User profile data_points (scope='user') are loaded."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn, DataPointRow(type="profile", content="Senior Python dev", scope="user", salience=1.0)
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Senior Python dev" in result
+
+    def test_loads_project_memories(self, tmp_path):
+        """Project memories with salience > 0.4 are loaded; below threshold excluded from Tier 3."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="Uses gRPC", scope="myproject", salience=0.8),
+        )
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="memory",
+                content="Low salience old",
+                scope="myproject",
+                salience=0.2,
+                created_at=old_date,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Uses gRPC" in result
+        assert "Low salience old" not in result
+
+    def test_loads_global_knowledge(self, tmp_path):
+        """Global memories with salience > 0.6 are loaded."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="SQLite WAL mode", scope="global", salience=0.9),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("")
+            mock_conn.close()
+
+        assert result is not None
+        assert "SQLite WAL mode" in result
+
+    def test_dedup_across_tiers(self, tmp_path):
+        """Same data_point doesn't appear twice across query tiers."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                id="dp_cross",
+                type="memory",
+                content="Cross-tier fact",
+                scope="global",
+                salience=0.9,
+                created_at=now_iso,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("")
+            mock_conn.close()
+
+        assert result is not None
+        assert result.count("Cross-tier fact") == 1
+
+    def test_access_tracking_fires(self, tmp_path):
+        """All served data_point IDs have access_count incremented."""
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
+
+        conn = _make_v3_db(tmp_path)
+        dp_id = insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="tracked", scope="global", salience=0.9),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            _load_from_db("")
+            mock_conn.close()
+
+        verify_conn = sqlite3.connect(str(tmp_path / "test.db"))
+        row = verify_conn.execute(
+            "SELECT access_count FROM data_points WHERE id=?", (dp_id,)
+        ).fetchone()
+        verify_conn.close()
+        assert row is not None
+        assert row[0] > 0
+
+
+class TestSessionContinuity:
+    def test_shows_last_session_work(self, tmp_path):
+        """Output includes 'Last Session' section when context exists."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Working on auth",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" in result
+        assert "Working on auth" in result
+
+    def test_no_section_when_no_context(self, tmp_path):
+        """No 'Last Session' section when no session_context exists for project."""
+        conn = _make_v3_db(tmp_path)
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" not in result
+
+    def test_status_from_properties(self, tmp_path):
+        """Status field from properties JSON is displayed in output."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Auth work",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+                properties=json.dumps({"status": "in_progress"}),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "in_progress" in result
+
+    def test_stale_context_not_shown(self, tmp_path):
+        """Session context older than 7 days is not shown."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        stale = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Old work",
+                scope="myproject",
+                salience=0.8,
+                created_at=stale,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" not in result
+
+    def test_entities_from_context_for_edges(self, tmp_path):
+        """Entities connected via context_for edges are listed in output."""
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        ctx_id = insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Auth work",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+            ),
+        )
+        entity_id = insert_data_point(
+            conn,
+            DataPointRow(type="entity", name="JWT", scope="myproject", salience=0.7),
+        )
+        insert_edge(
+            conn,
+            EdgeRow(
+                source=ctx_id,
+                target=entity_id,
+                type="context_for",
+                created_at=recent,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "JWT" in result
 
 
 if __name__ == "__main__":

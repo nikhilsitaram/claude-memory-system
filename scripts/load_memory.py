@@ -21,7 +21,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -873,6 +873,164 @@ def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
             close_db(conn)
 
 
+def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str]) -> None:
+    """Increment access_count and update last_accessed for data_point IDs.
+
+    Note: Does not commit. Caller must commit.
+    """
+    if not dp_ids:
+        return
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    placeholders = ",".join("?" for _ in dp_ids)
+    conn.execute(
+        f"UPDATE data_points SET access_count = access_count + 1, "
+        f"last_accessed = ? WHERE id IN ({placeholders})",
+        [timestamp] + list(dp_ids),
+    )
+
+
+def _load_from_db(project_scope: str) -> str | None:
+    """Load memory context via SQL queries against data_points.
+
+    Executes 5 query tiers in priority order with dedup:
+    1. User profile (scope='user', salience>0.5)
+    2. Session continuity (type='session_context', most recent for project, last 7 days)
+    3. Project memories (type='memory', scope=project, salience>0.4, top 20)
+    4. Global knowledge (type='memory', scope='global', salience>0.6, top 10)
+    5. Recent activity (created_at > 3 days ago, top 15)
+
+    Returns formatted context string, empty string if DB is empty, or None to
+    signal that the DB is not at v3 (caller should use legacy markdown loading).
+    """
+    try:
+        from storage import get_db, close_db
+    except ImportError:
+        return None
+
+    try:
+        conn = get_db()
+    except FileNotFoundError:
+        return ""
+
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 3:
+            return None  # Signal: use legacy loading
+
+        seen_ids: set[str] = set()
+        sections: list[str] = []
+
+        # Tier 1: User profile
+        profiles = conn.execute(
+            "SELECT id, content FROM data_points WHERE scope='user' AND salience > 0.5 "
+            "ORDER BY salience DESC"
+        ).fetchall()
+        if profiles:
+            profile_text = "\n".join(row[1] for row in profiles if row[1])
+            if profile_text.strip():
+                sections.append(f"## Your Profile\n{profile_text}")
+            seen_ids.update(row[0] for row in profiles)
+
+        # Tier 2: Session continuity (E2)
+        if project_scope:
+            seven_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).isoformat().replace("+00:00", "Z")
+            context_row = conn.execute(
+                "SELECT id, content, properties FROM data_points "
+                "WHERE type='session_context' AND scope=? AND created_at > ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (project_scope, seven_days_ago),
+            ).fetchone()
+            if context_row:
+                ctx_id, ctx_content, ctx_props = context_row
+                seen_ids.add(ctx_id)
+
+                # Get connected entities via context_for edges
+                edges = conn.execute(
+                    "SELECT dp.name FROM edges e JOIN data_points dp ON dp.id = e.target "
+                    "WHERE e.source = ? AND e.type = 'context_for' AND e.valid_to IS NULL",
+                    (ctx_id,),
+                ).fetchall()
+                entity_names = [e[0] for e in edges if e[0]]
+
+                # Extract status from properties JSON
+                status = ""
+                if ctx_props:
+                    try:
+                        props = json.loads(ctx_props)
+                        status = props.get("status", "")
+                    except json.JSONDecodeError:
+                        pass
+
+                section = f"## Last Session\nYou were working on: {ctx_content}"
+                if entity_names:
+                    section += f"\nEntities: {', '.join(entity_names)}"
+                if status:
+                    section += f"\nStatus: {status}"
+                sections.append(section)
+
+        # Tier 3: Project memories
+        if project_scope:
+            rows = conn.execute(
+                "SELECT id, content FROM data_points "
+                "WHERE scope=? AND type='memory' AND salience > 0.4 "
+                "ORDER BY salience DESC, last_accessed DESC LIMIT 20",
+                (project_scope,),
+            ).fetchall()
+            new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+            if new_rows:
+                mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+                if mem_text.strip():
+                    sections.append(f"## Project Memory: {project_scope}\n{mem_text}")
+                seen_ids.update(r[0] for r in new_rows)
+
+        # Tier 4: Global knowledge
+        rows = conn.execute(
+            "SELECT id, content FROM data_points "
+            "WHERE scope='global' AND type='memory' AND salience > 0.6 "
+            "ORDER BY salience DESC, last_accessed DESC LIMIT 10",
+        ).fetchall()
+        new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        if new_rows:
+            mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+            if mem_text.strip():
+                sections.append(f"## Global Knowledge\n{mem_text}")
+            seen_ids.update(r[0] for r in new_rows)
+
+        # Tier 5: Recent activity (last 3 days)
+        three_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=3)
+        ).isoformat().replace("+00:00", "Z")
+        scope_param = project_scope or "global"
+        rows = conn.execute(
+            "SELECT id, content FROM data_points "
+            "WHERE scope IN ('global', ?) AND type='memory' "
+            "AND created_at > ? "
+            "ORDER BY created_at DESC LIMIT 15",
+            (scope_param, three_days_ago),
+        ).fetchall()
+        new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        if new_rows:
+            mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+            if mem_text.strip():
+                sections.append(f"## Recent Activity\n{mem_text}")
+            seen_ids.update(r[0] for r in new_rows)
+
+        # Access tracking for all served data_points
+        if seen_ids:
+            try:
+                _batch_update_data_point_access(conn, list(seen_ids))
+                conn.commit()
+            except Exception as e:
+                print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
+
+        return "\n\n".join(sections)
+
+    finally:
+        close_db(conn)
+
+
 def main() -> None:
     """Main entry point - outputs memory context to stdout."""
     check_python_version()
@@ -992,6 +1150,23 @@ def main() -> None:
                       f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {combined_prompt_path}>)')
                 print()
 
+    # Detect current project (resolve worktree/subdir to repo root for matching)
+    pwd = resolve_session_path(os.getcwd())
+    projects_index = load_json_file(get_projects_index_file(), {})
+    current_project = find_current_project(projects_index, pwd)
+    project_scope = current_project.get("name", "") if current_project else ""
+
+    # Try DB-first loading (v3 schema)
+    db_content = _load_from_db(project_scope)
+    if db_content is not None:
+        # v3 DB found — output SQL-ranked context
+        if db_content.strip():
+            print(db_content)
+            print()
+        print("</memory>")
+        return
+
+    # Legacy fallback: markdown-based loading (v2 or no DB)
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
     total_bytes += global_bytes
@@ -1000,11 +1175,6 @@ def main() -> None:
         print("## Long-Term Memory")
         print(global_content)
         print()
-
-    # Detect current project (resolve worktree/subdir to repo root for matching)
-    pwd = resolve_session_path(os.getcwd())
-    projects_index = load_json_file(get_projects_index_file(), {})
-    current_project = find_current_project(projects_index, pwd)
 
     # Load project-specific long-term memory
     if current_project:
