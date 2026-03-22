@@ -13,9 +13,9 @@ import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
@@ -23,13 +23,11 @@ if str(script_dir) not in sys.path:
 
 from storage import (
     ensure_db,
-    query_data_points,
+    invalidate_edge,
     query_data_point_by_id,
     query_edges_for_data_point,
-    update_data_point,
     soft_delete_data_point,
-    invalidate_edge,
-    query_edges_for_node,
+    update_data_point,
 )
 
 HOST = "127.0.0.1"
@@ -216,7 +214,7 @@ def _get_data_point_detail(conn: sqlite3.Connection, dp_id: str) -> dict:
     edges = [
         {
             "id": e.id, "source": e.source, "target": e.target,
-            "type": e.type, "fact": e.fact, "weight": e.weight,
+            "type": e.type, "fact": e.fact, "reason": e.fact, "weight": e.weight,
             "valid_from": e.valid_from, "valid_to": e.valid_to,
         }
         for e in edges_raw
@@ -266,7 +264,7 @@ def _edit_data_point(conn: sqlite3.Connection, dp_id: str, updates: dict) -> dic
     # Re-embed if content changed (optional; silently skip if unavailable)
     if "content" in updates:
         try:
-            from embeddings import index_data_points, ensure_vec_table
+            from embeddings import ensure_vec_table, index_data_points
             ensure_vec_table(conn)
             index_data_points(conn, [dp_id])
         except Exception:
