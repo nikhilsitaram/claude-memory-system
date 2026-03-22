@@ -2429,7 +2429,7 @@ class TestApplyCrudOps:
         conn = _make_v2_db(db_path)
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "ADD", "fact": "project uses gRPC for internal comms", "scope": "global", "section": "Key Actions", "type": "implement", "entities": ["gRPC"]}]
@@ -2456,7 +2456,7 @@ class TestApplyCrudOps:
         conn = _make_v2_db(db_path)
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "ADD", "fact": "JWT over sessions for statelessness", "scope": "global", "section": "Key Decisions", "type": "design", "entities": ["JWT"]}]
@@ -2478,7 +2478,7 @@ class TestApplyCrudOps:
         conn = _make_v2_db(db_path)
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [MemoryOp(action="ADD", fact="chose gRPC over REST", scope="global", section="Key Decisions", type="design", entities=["gRPC", "REST"])]
@@ -2513,7 +2513,7 @@ class TestApplyCrudOps:
         ltm_file.write_text(old_text + "- (2026-01-01) [implement] project uses REST API for external\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "UPDATE", "id": chunk_id, "fact": "project uses gRPC for external", "entities": ["gRPC"]}]
@@ -2545,7 +2545,7 @@ class TestApplyCrudOps:
                 pass  # Keep connection open for apply_memory_ops
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new content for this chunk"}]
@@ -2579,7 +2579,7 @@ class TestApplyCrudOps:
         ltm_file.write_text(old + "- (2026-01-01) [implement] deprecated fact to delete here\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
@@ -2617,7 +2617,7 @@ class TestApplyCrudOps:
                 pass  # Keep connection open for apply_memory_ops
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "NOOP", "id": chunk_id, "reason": "Already accurate"}]
@@ -2645,7 +2645,7 @@ class TestApplyCrudOps:
         ltm_file = _make_ltm_file(tmp_path, "global")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "MERGE", "fact": "something"}]
@@ -2666,7 +2666,7 @@ class TestApplyCrudOps:
         ltm_file = _make_ltm_file(tmp_path, "global")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "UPDATE", "id": "nonexistent-id", "fact": "new fact"}]
@@ -2734,7 +2734,7 @@ class TestBitemporalEdges:
         conn = _make_v2_db(db_path)
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "DELETE", "id": chunk_id, "reason": "Contradicted: no longer uses gRPC"}]
@@ -2781,7 +2781,7 @@ class TestBitemporalEdges:
         ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact with no edges\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
@@ -2853,7 +2853,7 @@ class TestBitemporalEdges:
         ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about entity-a and entity-b\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
@@ -2893,7 +2893,7 @@ class TestEntityExtraction:
         ltm_file = _make_ltm_file(tmp_path, "global")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "ADD", "fact": "uses gRPC for comms", "scope": "global", "section": "Key Actions", "entities": ["gRPC", "myproject", "internal services"]}]
@@ -2933,7 +2933,7 @@ class TestEntityExtraction:
         ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] old lib usage\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new lib api-client usage", "entities": ["new-lib", "api-client"]}]
@@ -2963,7 +2963,7 @@ class TestEntityExtraction:
         ltm_file = _make_ltm_file(tmp_path, "global")
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "ADD", "fact": "simple fact without entities", "scope": "global", "section": "Key Actions"}]
@@ -2992,7 +2992,7 @@ class TestEntityExtraction:
         entities = ["Python 3.13", "pytest", "https://example.com", "2026-03-21"]
 
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), \
+             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
             ops = [{"action": "ADD", "fact": "uses various entities", "scope": "global", "section": "Key Actions", "entities": entities}]
