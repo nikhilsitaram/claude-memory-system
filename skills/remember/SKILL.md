@@ -1,51 +1,13 @@
 ---
 name: remember
-description: Use when user wants to explicitly preserve something permanently in long-term memory's Pinned section
+description: "[DEPRECATED] Save to memory - use write_memory MCP tool instead"
 user-invokable: true
 ---
 
-# Remember Skill
+# /remember - DEPRECATED
 
-Save a note directly to long-term memory's `## Pinned` section. User-invoked `/remember` indicates importance worth preserving permanently.
+This skill has been replaced by the `write_memory` MCP tool, which Claude calls automatically when it detects important facts.
 
-## Instructions
+**Migration:** Instead of typing `/remember`, Claude now proactively writes memories during conversation using the `write_memory` tool. Important facts, decisions, and learnings are captured automatically.
 
-1. If the user provided text after `/remember`, use that as the note
-2. If no text provided, ask what they'd like to remember
-3. Determine scope:
-   - If note is project-specific, use project long-term memory
-   - If note is general/cross-project, use global long-term memory
-   - When in doubt, ask the user
-4. Format the note with date and type:
-
-```markdown
-- (YYYY-MM-DD) [type] Title - Description
-```
-
-   Common types for pinned notes: `pattern`, `insight`, `tip`
-
-5. Append to the `## Pinned` section of the appropriate long-term memory file
-6. Confirm where the note was saved
-
-## File Locations
-
-- Global: `~/.claude/memory/global-long-term-memory.md`
-- Project: `~/.claude/memory/project-memory/{project}-long-term-memory.md`
-
-## Example
-
-User: `/remember The API rate limit is 100 requests per minute`
-
-Result: Appends to global `## Pinned` section:
-
-```markdown
-- (2026-01-29) [tip] API rate limit - 100 requests per minute
-```
-
-User: `/remember Granada uses CoverageTypeId for claim-level coverage`
-
-Result: Appends to `granada-long-term-memory.md` `## Pinned` section:
-
-```markdown
-- (2026-01-29) [pattern] CoverageTypeId for claim-level coverage - Granada uses CoverageTypeId to identify which coverage a loss is filed under
-```
+**Manual save:** If you want to explicitly save something, tell Claude: "Remember that [fact]" and Claude will use the `write_memory` tool.

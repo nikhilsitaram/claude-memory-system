@@ -5,11 +5,10 @@ SessionStart hook - loads memory context for Claude Code.
 This script runs on: startup, resume, clear, compact
 
 It performs:
-1. Loads global long-term memory
-2. Loads project-specific long-term memory (if applicable)
-3. Loads global short-term memory (recent daily summaries, filtered to [global/*] tags)
-4. Loads project short-term memory (project history, filtered to [project/*] tags)
-5. Checks for pending transcripts and prompts for synthesis
+1. SQL-ranked loading from data_points (user profile, session continuity,
+   project memories, global knowledge, recent activity)
+2. Falls back to markdown LTM files if the database is unavailable
+3. Checks for pending transcripts and prompts for synthesis
 
 Output is printed to stdout and injected into Claude Code's context.
 
@@ -21,7 +20,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -32,7 +31,6 @@ if str(script_dir) not in sys.path:
 from memory_utils import (
     DEFAULT_SETTINGS,
     check_python_version,
-    filter_daily_content,
     find_current_project,
     get_daily_dir,
     get_global_memory_file,
@@ -40,11 +38,9 @@ from memory_utils import (
     get_project_memory_dir,
     get_projects_index_file,
     get_synthesis_error_log,
-    get_working_days,
     load_json_file,
     load_settings,
     load_synthesis_state,
-    project_name_to_filename,
     resolve_project_path_to_name,
     resolve_session_path,
 )
@@ -65,11 +61,8 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # =============================================================================
 # Entry points:
 #   main()                                  SessionStart hook (stdout -> context)
-# Memory loading:
-#   load_global_memory() -> (str, int)
-#   load_project_memory(name) -> (str, int)
-#   load_daily_summaries(days, scope) -> (list[(date, content)], int)
-#   load_project_history(project, days) -> (list[(date, content)], int)
+# DB-first loading (v3):
+#   _load_from_db(project_scope) -> str | None
 # Scheduling:
 #   should_synthesize(settings) -> bool
 # =============================================================================
@@ -149,106 +142,6 @@ def should_synthesize(settings: dict) -> bool:
     except (ValueError, OSError, IOError):
         return True  # Fallback: always synthesize if file missing/invalid
 
-
-def load_global_memory() -> tuple[str, int]:
-    """Load global long-term memory file. Returns (content, bytes)."""
-    global_file = get_global_memory_file()
-    if not global_file.exists():
-        return "", 0
-
-    try:
-        content = global_file.read_text(encoding="utf-8")
-        return content, len(content.encode("utf-8"))
-    except IOError:
-        return "", 0
-
-
-def load_project_memory(project_name: str) -> tuple[str, int]:
-    """Load project-specific long-term memory. Returns (content, bytes)."""
-    project_memory_dir = get_project_memory_dir()
-    filename = project_name_to_filename(project_name)
-    project_file = project_memory_dir / filename
-
-    if not project_file.exists():
-        return "", 0
-
-    try:
-        content = project_file.read_text(encoding="utf-8")
-        return content, len(content.encode("utf-8"))
-    except IOError:
-        return "", 0
-
-
-def load_daily_summaries(days_limit: int, scope: str = "global") -> tuple[list[tuple[str, str]], int]:
-    """
-    Load recent daily summaries, filtered by scope.
-
-    Args:
-        days_limit: Maximum number of working days to load
-        scope: Filter scope - "global" for global entries, or project name for project entries
-
-    Returns (list of (date, content) tuples, total bytes).
-    """
-    daily_dir = get_daily_dir()
-    working_days = get_working_days(days_limit)
-    summaries = []
-    total_bytes = 0
-
-    for date in working_days:
-        daily_file = daily_dir / f"{date}.md"
-        if daily_file.exists():
-            try:
-                raw_content = daily_file.read_text(encoding="utf-8")
-                filtered_content = filter_daily_content(raw_content, scope)
-                if filtered_content:
-                    summaries.append((date, filtered_content))
-                    total_bytes += len(filtered_content.encode("utf-8"))
-            except IOError:
-                continue
-
-    return summaries, total_bytes
-
-
-def load_project_history(
-    project: dict, days_limit: int
-) -> tuple[list[tuple[str, str]], int]:
-    """
-    Load project-specific work history (days worked in this project).
-
-    Filters content to only include entries tagged with this project's name.
-    Returns (list of (date, content) tuples, total bytes).
-    """
-    daily_dir = get_daily_dir()
-    project_name = project.get("name", "")
-
-    if not project_name:
-        return [], 0
-
-    # Get all daily files and filter by project content
-    # We scan all daily files since project work may exist on any day
-    all_daily_files = sorted(daily_dir.glob("*.md"), reverse=True)
-
-    summaries = []
-    total_bytes = 0
-
-    for daily_file in all_daily_files:
-        if len(summaries) >= days_limit:
-            break
-
-        try:
-            raw_content = daily_file.read_text(encoding="utf-8")
-            filtered_content = filter_daily_content(raw_content, project_name)
-            if filtered_content:
-                date = daily_file.stem  # YYYY-MM-DD from filename
-                summaries.append((date, filtered_content))
-                total_bytes += len(filtered_content.encode("utf-8"))
-        except IOError:
-            continue
-
-    # Output oldest first for chronological reading
-    summaries.reverse()
-
-    return summaries, total_bytes
 
 
 def _get_project_names_str() -> str:
@@ -787,9 +680,9 @@ def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
     """Execute access tracking with BEGIN IMMEDIATE and retry on SQLITE_BUSY."""
     from storage import (
         batch_update_access,
+        query_neighbor_nodes,
         update_chunk_salience,
         update_node_salience,
-        query_neighbor_nodes,
     )
 
     for attempt in range(MAX_BUSY_RETRIES):
@@ -856,7 +749,7 @@ def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
         return
 
     try:
-        from storage import get_db, close_db
+        from storage import close_db, get_db
     except ImportError:
         return
 
@@ -871,6 +764,164 @@ def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
     finally:
         if conn:
             close_db(conn)
+
+
+def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str]) -> None:
+    """Increment access_count and update last_accessed for data_point IDs.
+
+    Note: Does not commit. Caller must commit.
+    """
+    if not dp_ids:
+        return
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    placeholders = ",".join("?" for _ in dp_ids)
+    conn.execute(
+        f"UPDATE data_points SET access_count = access_count + 1, "
+        f"last_accessed = ? WHERE id IN ({placeholders})",
+        [timestamp] + list(dp_ids),
+    )
+
+
+def _load_from_db(project_scope: str) -> str | None:
+    """Load memory context via SQL queries against data_points.
+
+    Executes 5 query tiers in priority order with dedup:
+    1. User profile (scope='user', salience>0.5)
+    2. Session continuity (type='session_context', most recent for project, last 7 days)
+    3. Project memories (type='memory', scope=project, salience>0.4, top 20)
+    4. Global knowledge (type='memory', scope='global', salience>0.6, top 10)
+    5. Recent activity (created_at > 3 days ago, top 15)
+
+    Returns formatted context string, empty string if DB is empty, or None to
+    signal that the DB is not at v3 (caller should use legacy markdown loading).
+    """
+    try:
+        from storage import close_db, get_db
+    except ImportError:
+        return None
+
+    try:
+        conn = get_db()
+    except FileNotFoundError:
+        return ""
+
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 3:
+            return None  # Signal: use legacy loading
+
+        seen_ids: set[str] = set()
+        sections: list[str] = []
+
+        # Tier 1: User profile
+        profiles = conn.execute(
+            "SELECT id, content FROM data_points WHERE scope='user' AND salience > 0.5 "
+            "ORDER BY salience DESC"
+        ).fetchall()
+        if profiles:
+            profile_text = "\n".join(row[1] for row in profiles if row[1])
+            if profile_text.strip():
+                sections.append(f"## Your Profile\n{profile_text}")
+            seen_ids.update(row[0] for row in profiles)
+
+        # Tier 2: Session continuity (E2)
+        if project_scope:
+            seven_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).isoformat().replace("+00:00", "Z")
+            context_row = conn.execute(
+                "SELECT id, content, properties FROM data_points "
+                "WHERE type='session_context' AND scope=? AND created_at > ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (project_scope, seven_days_ago),
+            ).fetchone()
+            if context_row:
+                ctx_id, ctx_content, ctx_props = context_row
+                seen_ids.add(ctx_id)
+
+                # Get connected entities via context_for edges
+                edges = conn.execute(
+                    "SELECT dp.name FROM edges e JOIN data_points dp ON dp.id = e.target "
+                    "WHERE e.source = ? AND e.type = 'context_for' AND e.valid_to IS NULL",
+                    (ctx_id,),
+                ).fetchall()
+                entity_names = [e[0] for e in edges if e[0]]
+
+                # Extract status from properties JSON
+                status = ""
+                if ctx_props:
+                    try:
+                        props = json.loads(ctx_props)
+                        status = props.get("status", "")
+                    except json.JSONDecodeError:
+                        pass
+
+                section = f"## Last Session\nYou were working on: {ctx_content}"
+                if entity_names:
+                    section += f"\nEntities: {', '.join(entity_names)}"
+                if status:
+                    section += f"\nStatus: {status}"
+                sections.append(section)
+
+        # Tier 3: Project memories
+        if project_scope:
+            rows = conn.execute(
+                "SELECT id, content FROM data_points "
+                "WHERE scope=? AND type='memory' AND salience > 0.4 "
+                "ORDER BY salience DESC, last_accessed DESC LIMIT 20",
+                (project_scope,),
+            ).fetchall()
+            new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+            if new_rows:
+                mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+                if mem_text.strip():
+                    sections.append(f"## Project Memory: {project_scope}\n{mem_text}")
+                seen_ids.update(r[0] for r in new_rows)
+
+        # Tier 4: Global knowledge
+        rows = conn.execute(
+            "SELECT id, content FROM data_points "
+            "WHERE scope='global' AND type='memory' AND salience > 0.6 "
+            "ORDER BY salience DESC, last_accessed DESC LIMIT 10",
+        ).fetchall()
+        new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        if new_rows:
+            mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+            if mem_text.strip():
+                sections.append(f"## Global Knowledge\n{mem_text}")
+            seen_ids.update(r[0] for r in new_rows)
+
+        # Tier 5: Recent activity (last 3 days)
+        three_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=3)
+        ).isoformat().replace("+00:00", "Z")
+        scope_param = project_scope or "global"
+        rows = conn.execute(
+            "SELECT id, content FROM data_points "
+            "WHERE scope IN ('global', ?) AND type='memory' "
+            "AND created_at > ? "
+            "ORDER BY created_at DESC LIMIT 15",
+            (scope_param, three_days_ago),
+        ).fetchall()
+        new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        if new_rows:
+            mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
+            if mem_text.strip():
+                sections.append(f"## Recent Activity\n{mem_text}")
+            seen_ids.update(r[0] for r in new_rows)
+
+        # Access tracking for all served data_points
+        if seen_ids:
+            try:
+                _batch_update_data_point_access(conn, list(seen_ids))
+                conn.commit()
+            except Exception as e:
+                print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
+
+        return "\n\n".join(sections)
+
+    finally:
+        close_db(conn)
 
 
 def main() -> None:
@@ -892,12 +943,6 @@ def main() -> None:
 
     # Load settings
     settings = load_settings()
-    short_term_days = settings["globalShortTerm"]["workingDays"]
-    project_days = settings["projectShortTerm"]["workingDays"]
-    total_budget = settings["totalTokenBudget"]
-
-    # Track total bytes for token estimation
-    total_bytes = 0
 
     # Start output
     print("<memory>")
@@ -992,64 +1037,18 @@ def main() -> None:
                       f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {combined_prompt_path}>)')
                 print()
 
-    # Load global long-term memory
-    global_content, global_bytes = load_global_memory()
-    total_bytes += global_bytes
-
-    if global_content:
-        print("## Long-Term Memory")
-        print(global_content)
-        print()
-
     # Detect current project (resolve worktree/subdir to repo root for matching)
     pwd = resolve_session_path(os.getcwd())
     projects_index = load_json_file(get_projects_index_file(), {})
     current_project = find_current_project(projects_index, pwd)
+    project_scope = current_project.get("name", "") if current_project else ""
 
-    # Load project-specific long-term memory
-    if current_project:
-        project_name = current_project.get("name", "")
-        if project_name:
-            project_content, project_bytes = load_project_memory(project_name)
-            total_bytes += project_bytes
-
-            if project_content:
-                print(f"## Project Long-Term Memory: {project_name}")
-                print(project_content)
-                print()
-
-    # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
-    global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
-    total_bytes += global_daily_bytes
-
-    if global_summaries:
-        print("## Global Short-Term Memory")
-        for date, content in global_summaries:
-            print(f"### {date}")
-            print(content)
-            print()
-
-    # Load project short-term memory (project history, filtered to [project/*] tags)
-    if current_project:
-        project_name = current_project.get("name", "unknown")
-        project_history, history_bytes = load_project_history(current_project, project_days)
-        total_bytes += history_bytes
-
-        if project_history:
-            print(f"## Project Short-Term Memory: {project_name}")
-            print()
-            for date, content in project_history:
-                print(f"### {date}")
-                print(content)
-                print()
-
+    # DB-first loading (v3 schema); falls back to empty context if no v3 DB
+    db_content = _load_from_db(project_scope)
+    if db_content is not None and db_content.strip():
+        print(db_content)
+        print()
     print("</memory>")
-
-    # Token estimation (informational)
-    estimated_tokens = total_bytes // 4
-    if estimated_tokens > total_budget:
-        print(f"<!-- Memory usage: ~{estimated_tokens} tokens (budget: {total_budget}) -->")
-        print("<!-- Consider running /synthesize to consolidate older sessions -->")
 
 
 if __name__ == "__main__":
