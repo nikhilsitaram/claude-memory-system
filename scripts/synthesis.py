@@ -69,6 +69,7 @@ __all__ = [
     "_apply_delete",
     "_apply_noop",
     "_append_entry_to_section",
+    "_extract_fact_from_ltm_line",
     "_update_markdown_line",
     "_archive_markdown_line",
     "compute_offsets_from_extracts",
@@ -832,6 +833,16 @@ def _append_entry_to_section(filepath: Path, section_header: str, entry_line: st
     filepath.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _extract_fact_from_ltm_line(stripped: str) -> str | None:
+    """Extract the fact portion from an LTM markdown line.
+
+    Given '- (2024-01-01) [type] fact text', returns 'fact text'.
+    Returns None if the line doesn't match LTM entry format.
+    """
+    m = re.match(r'^-\s*\(\d{4}-\d{2}-\d{2}\)\s*\[[^\]]+\]\s*(.+)', stripped)
+    return m.group(1) if m else None
+
+
 def _update_markdown_line(
     filepath: Path, content_hash: str | None, old_content: str, new_content: str
 ) -> bool:
@@ -843,15 +854,29 @@ def _update_markdown_line(
     lines = text.split("\n")
     updated = False
 
-    # Try content_hash match first: find a line containing old_content exactly
+    # Try content_hash match first: extract the fact portion from each LTM
+    # line and hash it, since the DB stores content_hash = sha256(chunk_content)
+    # and chunk_content may be just the fact text (synthesis-created) or the
+    # full line (migration-created).
     if content_hash:
         import hashlib
         for idx, line in enumerate(lines):
             stripped = line.strip()
             if stripped.startswith("- "):
-                # Check if this line hashes to the known content_hash
-                # The chunk content stored in DB may differ from the markdown line format
-                # Try matching the last ] portion of the line
+                # Try hashing the fact portion (for synthesis-created chunks)
+                fact = _extract_fact_from_ltm_line(stripped)
+                if fact:
+                    fact_hash = hashlib.sha256(fact.encode("utf-8")).hexdigest()[:16]
+                    if fact_hash == content_hash:
+                        bracket_idx = stripped.rfind("]")
+                        if bracket_idx >= 0:
+                            prefix = stripped[:bracket_idx + 1]
+                            lines[idx] = line.replace(stripped, f"{prefix} {new_content}".replace("  ", " "))
+                        else:
+                            lines[idx] = line.replace(stripped, f"- {new_content}")
+                        updated = True
+                        break
+                # Fallback: hash the full line (for migration-created chunks)
                 line_hash = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
                 if line_hash == content_hash:
                     # Replace the descriptive text (after the last ]) with new_content
@@ -888,12 +913,19 @@ def _archive_markdown_line(
     lines = text.split("\n")
     found_idx = None
 
-    # Try content_hash match
+    # Try content_hash match: extract fact portion and hash it, then
+    # fall back to full-line hash (for migration-created chunks).
     if content_hash:
         import hashlib
         for idx, line in enumerate(lines):
             stripped = line.strip()
             if stripped.startswith("- "):
+                fact = _extract_fact_from_ltm_line(stripped)
+                if fact:
+                    fact_hash = hashlib.sha256(fact.encode("utf-8")).hexdigest()[:16]
+                    if fact_hash == content_hash:
+                        found_idx = idx
+                        break
                 line_hash = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
                 if line_hash == content_hash:
                     found_idx = idx
@@ -1051,11 +1083,16 @@ def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file:
         if node:
             related_node_ids.add(node.id)
 
+    # Only invalidate edges where BOTH source and target are in the chunk's
+    # entity set.  Generic entity names like "Python" or "pytest" appear across
+    # many memories; invalidating all edges for such nodes would over-invalidate
+    # unrelated facts.
     for node_id in related_node_ids:
         edges = query_edges_for_node(conn, node_id)
         for edge in edges:
             if edge.valid_to is None:
-                invalidate_edge(conn, edge.id, valid_to=session_date, expired_at=now_iso)
+                if edge.source in related_node_ids and edge.target in related_node_ids:
+                    invalidate_edge(conn, edge.id, valid_to=session_date, expired_at=now_iso)
 
     # Set chunk salience to 0
     update_chunk_salience(conn, chunk_id, 0.0)

@@ -45,7 +45,6 @@ from storage import (
     update_chunk_salience,
     update_node_access,
     batch_update_access,
-    update_chunk_salience,
     update_node_salience,
     _migrate_salience_data,
 )

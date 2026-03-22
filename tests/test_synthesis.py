@@ -2734,7 +2734,12 @@ class TestBitemporalEdges:
                 close_db(conn)
 
     def test_delete_only_invalidates_chunk_related_edges(self, tmp_path):
-        """Only edges connected to nodes matching chunk's entities are invalidated."""
+        """Only edges where both source AND target are chunk entities get invalidated.
+
+        Generic entities like "Python" appear across many memories, so we
+        require both endpoints of an edge to be in the deleted chunk's entity
+        set before invalidating.
+        """
         from unittest.mock import patch
         from storage import ensure_db, close_db, insert_chunk, insert_node, insert_edge, ChunkRow, NodeRow, EdgeRow, query_current_edges, query_node_by_name_and_type
         from synthesis import apply_memory_ops
@@ -2746,29 +2751,30 @@ class TestBitemporalEdges:
         with patch("storage.get_db_path", return_value=db_path):
             conn = ensure_db()
             try:
-                insert_node(conn, NodeRow(name="target-entity", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="entity-a", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="entity-b", type="entity", scope="global", created_at="2026-01-01"))
                 insert_node(conn, NodeRow(name="unrelated-entity", type="entity", scope="global", created_at="2026-01-01"))
-                insert_node(conn, NodeRow(name="other-node", type="entity", scope="global", created_at="2026-01-01"))
-                target_node = query_node_by_name_and_type(conn, "target-entity", "entity")
+                node_a = query_node_by_name_and_type(conn, "entity-a", "entity")
+                node_b = query_node_by_name_and_type(conn, "entity-b", "entity")
                 unrelated_node = query_node_by_name_and_type(conn, "unrelated-entity", "entity")
-                other_node = query_node_by_name_and_type(conn, "other-node", "entity")
-                target_edge_id = insert_edge(conn, EdgeRow(source=target_node.id, target=other_node.id, type="uses", created_at="2026-01-01"))
-                unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=other_node.id, type="uses", created_at="2026-01-01"))
+                both_in_chunk_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=node_b.id, type="uses", created_at="2026-01-01"))
+                one_outside_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=unrelated_node.id, type="uses", created_at="2026-01-01"))
+                fully_unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=unrelated_node.id, type="self", created_at="2026-01-01"))
                 chunk = ChunkRow(
-                    content="fact about target-entity only",
+                    content="fact about entity-a and entity-b",
                     source_file="global-long-term-memory.md",
                     source_type="ltm",
                     scope="global",
                     chunk_index=0,
                     created_at="2026-01-01",
-                    entities=json.dumps(["target-entity"]),
+                    entities=json.dumps(["entity-a", "entity-b"]),
                 )
                 chunk_id = insert_chunk(conn, chunk)
                 conn.commit()
             finally:
                 close_db(conn)
 
-        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about target-entity only\n")
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about entity-a and entity-b\n")
 
         with patch("storage.get_db_path", return_value=db_path), \
              patch("synthesis.get_global_memory_file", return_value=ltm_file), \
@@ -2781,8 +2787,9 @@ class TestBitemporalEdges:
             try:
                 current = query_current_edges(conn)
                 current_ids = [e.id for e in current]
-                assert target_edge_id not in current_ids
-                assert unrelated_edge_id in current_ids
+                assert both_in_chunk_edge_id not in current_ids, "edge between two chunk entities should be invalidated"
+                assert one_outside_edge_id in current_ids, "edge with one non-chunk endpoint should be kept"
+                assert fully_unrelated_edge_id in current_ids, "fully unrelated edge should be kept"
             finally:
                 close_db(conn)
 

@@ -625,7 +625,7 @@ def _retrieve_vector_memories(transcript_text: str) -> list | None:
         from synthesis_cron import retrieve_existing_memories
         memories = retrieve_existing_memories(transcript_text)
         return memories if memories else None
-    except (ImportError, Exception):
+    except (ImportError, AttributeError):
         return None
 
 
@@ -776,18 +776,15 @@ def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
             row = conn.execute(
                 "SELECT salience FROM nodes WHERE id = ?", (nid,)
             ).fetchone()
-            if row:
-                current = row[0] if row[0] is not None else 1.0
-                new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
-                update_node_salience(conn, nid, new_salience)
+            if not row:
+                continue
+            current = row[0] if row[0] is not None else 1.0
+            new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+            update_node_salience(conn, nid, new_salience)
 
             # Associative reinforcement: boost graph neighbors
-            accessed_row = conn.execute(
-                "SELECT salience FROM nodes WHERE id = ?", (nid,)
-            ).fetchone()
-            if not accessed_row:
-                continue
-            accessed_salience = accessed_row[0] if accessed_row[0] is not None else 1.0
+            # Use the already-computed new_salience instead of re-querying the DB
+            accessed_salience = new_salience
 
             neighbors = query_neighbor_nodes(conn, nid)
             for neighbor in neighbors:

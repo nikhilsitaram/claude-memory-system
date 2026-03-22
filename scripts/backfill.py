@@ -77,6 +77,10 @@ def extract_entities_batch(chunks: list[tuple[str, str]]) -> dict[str, list[str]
             return {}
 
         output = result.stdout.strip()
+        if output.startswith("```"):
+            output = output.split("\n", 1)[1] if "\n" in output else output[3:]
+        if output.endswith("```"):
+            output = output[:-3].rstrip()
         parsed = json.loads(output)
         return {
             r["chunk_id"]: r.get("entities", [])
