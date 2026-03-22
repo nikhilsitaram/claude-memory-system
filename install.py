@@ -305,7 +305,7 @@ def create_database(script_dir: Path) -> None:
             close_db(conn)
     except Exception as e:
         print(f"Warning: Could not create memory database: {e}")
-        print("  The markdown-based system continues to work without it.")
+        print("  Memory context will be empty until the database is created.")
 
 
 def install_systemd_units(script_dir: Path) -> None:

@@ -5,11 +5,10 @@ SessionStart hook - loads memory context for Claude Code.
 This script runs on: startup, resume, clear, compact
 
 It performs:
-1. Loads global long-term memory
-2. Loads project-specific long-term memory (if applicable)
-3. Loads global short-term memory (recent daily summaries, filtered to [global/*] tags)
-4. Loads project short-term memory (project history, filtered to [project/*] tags)
-5. Checks for pending transcripts and prompts for synthesis
+1. SQL-ranked loading from data_points (user profile, session continuity,
+   project memories, global knowledge, recent activity)
+2. Falls back to markdown LTM files if the database is unavailable
+3. Checks for pending transcripts and prompts for synthesis
 
 Output is printed to stdout and injected into Claude Code's context.
 
@@ -32,7 +31,6 @@ if str(script_dir) not in sys.path:
 from memory_utils import (
     DEFAULT_SETTINGS,
     check_python_version,
-    filter_daily_content,
     find_current_project,
     get_daily_dir,
     get_global_memory_file,
@@ -40,7 +38,6 @@ from memory_utils import (
     get_project_memory_dir,
     get_projects_index_file,
     get_synthesis_error_log,
-    get_working_days,
     load_json_file,
     load_settings,
     load_synthesis_state,
@@ -683,9 +680,9 @@ def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
     """Execute access tracking with BEGIN IMMEDIATE and retry on SQLITE_BUSY."""
     from storage import (
         batch_update_access,
+        query_neighbor_nodes,
         update_chunk_salience,
         update_node_salience,
-        query_neighbor_nodes,
     )
 
     for attempt in range(MAX_BUSY_RETRIES):
@@ -752,7 +749,7 @@ def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
         return
 
     try:
-        from storage import get_db, close_db
+        from storage import close_db, get_db
     except ImportError:
         return
 
@@ -799,7 +796,7 @@ def _load_from_db(project_scope: str) -> str | None:
     signal that the DB is not at v3 (caller should use legacy markdown loading).
     """
     try:
-        from storage import get_db, close_db
+        from storage import close_db, get_db
     except ImportError:
         return None
 

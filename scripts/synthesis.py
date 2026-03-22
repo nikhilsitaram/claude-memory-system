@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Synthesis output parser and applier for Claude Code Memory System.
+Synthesis output parser and DB apply pipeline for Claude Code Memory System.
 
-Parses structured output from the synthesis subagent and applies results:
-- Writes daily summary files
-- Appends routed entries to LTM files
-- Marks [routed] entries in daily files
+Parses MEMORY_OPS JSON from the synthesis subagent and applies results:
+- Writes data_points rows via apply_memory_ops_v3 (ADD/UPDATE/DELETE/NOOP)
+- Creates provenance edges between superseded and new data_points
 - Runs post-processing (state pruning, decay, validation, timestamp)
 
 Usage:
@@ -29,22 +28,16 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (  # noqa: E402
-    extract_entry_keywords,
-    get_daily_dir,
     get_global_memory_file,
     get_memory_dir,
     get_project_memory_dir,
     get_projects_dir,
-    is_routed_match,
-    parse_markdown_sections,
     prune_stale_state_entries,
     rebuild_projects_index_quiet,
-    update_synthesis_state,
 )
 
 __all__ = [
     "MemoryOp",
-    "SECTION_ORDER",
     "SynthesisResult",
     "MEMORY_OPS_HEADER",
     "parse_synthesis_output",
@@ -61,7 +54,6 @@ __all__ = [
     "run_post_processing",
     "run_validate_ltm",
     "run_decay",
-    "run_post_processing",
     "apply_memory_ops_v3",
     "_apply_add_v3",
     "_apply_update_v3",
@@ -352,9 +344,8 @@ def _apply_add(conn, op: dict, session_date: str, ltm_dir: Path, global_file: Pa
     entities = op.get("entities")
     entry_type = op.get("type") or "implement"
 
-    from storage import ChunkRow, insert_chunk
-
     from memory_utils import project_name_to_filename as _ptf
+    from storage import ChunkRow, insert_chunk
 
     chunk = ChunkRow(
         content=fact,
@@ -389,9 +380,8 @@ def _apply_update(conn, op: dict, ltm_dir: Path, global_file: Path) -> list:
         warnings.append("UPDATE: missing chunk id")
         return warnings
 
-    from storage import query_chunk_by_id, update_chunk_content
-
     from memory_utils import project_name_to_filename as _ptf
+    from storage import query_chunk_by_id, update_chunk_content
 
     existing = query_chunk_by_id(conn, chunk_id)
     if not existing:
@@ -431,6 +421,7 @@ def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file:
         warnings.append("DELETE: missing chunk id")
         return warnings
 
+    from memory_utils import project_name_to_filename as _ptf
     from storage import (
         invalidate_edge,
         query_chunk_by_id,
@@ -438,8 +429,6 @@ def _apply_delete(conn, op: dict, session_date: str, ltm_dir: Path, global_file:
         query_node_by_name_and_type,
         update_chunk_salience,
     )
-
-    from memory_utils import project_name_to_filename as _ptf
 
     existing = query_chunk_by_id(conn, chunk_id)
     if not existing:
@@ -596,7 +585,7 @@ def _reindex_after_synthesis() -> None:
     """
     try:
         from embeddings import reindex_all
-        from storage import get_db, close_db
+        from storage import close_db, get_db
 
         conn = get_db()
         try:
@@ -739,7 +728,7 @@ def _get_or_create_entity(conn, entity_name: str, scope: str | None) -> str:
 
     Uses content_hash to avoid duplicates across scopes.
     """
-    from storage import DataPointRow, insert_data_point, _content_hash  # noqa: F401 (private but stable)
+    from storage import DataPointRow, _content_hash, insert_data_point  # noqa: F401 (private but stable)
 
     content_hash = _content_hash(f"entity:{entity_name}")
     row = conn.execute(
@@ -758,7 +747,8 @@ def _get_or_create_entity(conn, entity_name: str, scope: str | None) -> str:
 def _apply_add_v3(conn, op: "MemoryOp") -> dict:
     """Apply an ADD operation — inserts a new data_point."""
     from datetime import datetime, timezone
-    from storage import DataPointRow, insert_data_point, create_provenance_edge, insert_edge, EdgeRow
+
+    from storage import DataPointRow, EdgeRow, create_provenance_edge, insert_data_point, insert_edge
 
     salience = op.salience if op.salience is not None else 0.5
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -831,7 +821,8 @@ def _apply_update_v3(conn, op: "MemoryOp") -> dict:
 def _apply_delete_v3(conn, op: "MemoryOp") -> dict:
     """Apply a DELETE operation — soft-deletes a data_point (salience=0) and records provenance."""
     from datetime import datetime, timezone
-    from storage import soft_delete_data_point, insert_edge, EdgeRow
+
+    from storage import EdgeRow, insert_edge, soft_delete_data_point
 
     if not op.id:
         return {"action": "DELETE", "status": "skipped", "reason": "missing id"}
@@ -883,7 +874,7 @@ def _apply_delete_v3(conn, op: "MemoryOp") -> dict:
 
 def _apply_noop_v3(conn, op: "MemoryOp") -> dict:
     """Apply a NOOP — increments evidence_count confirming the fact is still correct."""
-    from storage import update_data_point, query_data_point_by_id
+    from storage import query_data_point_by_id, update_data_point
 
     if not op.id:
         return {"action": "NOOP", "status": "skipped", "reason": "missing id"}
