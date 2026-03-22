@@ -18,7 +18,9 @@ Requirements: Python 3.9+
 
 import json
 import os
+import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -333,7 +335,41 @@ Maximum 5 [LTM] entries per project per synthesis run.
 
 **Compactness:** Final solutions only, one entry per concept, omit routine details.
 
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.'''
+**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.
+
+**Entity extraction:** Every CRUD operation in the MEMORY_OPS block should include an `entities` array listing structured data extracted from the fact:
+- Project names (e.g., "myproject", "claude-memory-system")
+- Library/tool names (e.g., "pytest", "sqlite-vec", "gRPC")
+- Concepts (e.g., "bi-temporal tracking", "WAL mode")
+- People (e.g., "John", "@username")
+- URLs (e.g., "https://github.com/...")
+- Dates (e.g., "2026-03-21")
+
+Be comprehensive but precise. Only include entities actually present in the fact.
+
+**Memory CRUD operations (Phase 2):** After the PROJECT blocks, output a MEMORY_OPS block with explicit decisions about existing memories:
+
+```
+===MEMORY_OPS===
+{{"ops": [
+  {{"action": "ADD", "fact": "description of new fact", "scope": "project-name", "section": "Key Decisions", "type": "design", "entities": ["entity1", "entity2"]}},
+  {{"action": "UPDATE", "id": "chunk_id_from_existing", "fact": "updated description", "entities": ["entity1"]}},
+  {{"action": "DELETE", "id": "chunk_id_from_existing", "reason": "Contradicted: explanation of why this is no longer true"}},
+  {{"action": "NOOP", "id": "chunk_id_from_existing", "reason": "Already accurately captured"}}
+]}}
+```
+
+**Actions:**
+- **ADD**: New fact not present in existing memories. Include scope, section, type, entities.
+- **UPDATE**: Existing memory needs modification (enrichment, correction). Reference by `id` from Existing Memories. Include updated fact and entities.
+- **DELETE**: Existing memory is contradicted by new evidence. Reference by `id`. Include reason explaining the contradiction.
+- **NOOP**: Existing memory is confirmed correct by new evidence. Reference by `id`. Optional.
+
+**Rules:**
+- Reference existing memories by their `[chunk_id]` prefix from the Existing Memories section.
+- Every ADD must include `entities` array with extracted structured data.
+- Prefer UPDATE over ADD+DELETE when a fact is being enriched (not contradicted).
+- MEMORY_OPS block is optional — omit it if no memory changes are needed.'''
 
 
 def _build_preextracted_prompt(
@@ -341,6 +377,7 @@ def _build_preextracted_prompt(
     extracted_files: dict[str, str],
     synthesis_instructions: str,
     embedded_files: dict | None = None,
+    vector_memories: list | None = None,
 ) -> str:
     """Build synthesis prompt with embedded content and structured output format.
 
@@ -352,6 +389,9 @@ def _build_preextracted_prompt(
             - "transcripts": dict[date, content] - transcript text per date
             - "global_ltm": str - global LTM file content
             - "project_ltms": dict[project, content] - project LTM content
+        vector_memories: Optional list of dicts with 'chunk_id' and 'content' from
+            vector search. When provided, replaces full LTM embedding with targeted
+            Existing Memories section using chunk IDs for CRUD reference.
     """
     if embedded_files is None:
         embedded_files = {}
@@ -377,13 +417,18 @@ def _build_preextracted_prompt(
     transcript_block = "\n\n".join(transcript_sections)
 
     # Build LTM sections for dedup context
-    ltm_sections = []
-    if global_ltm:
-        ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
-    for project, content in sorted(project_ltms.items()):
-        if content:
-            ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
-    ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
+    # When vector_memories is provided, use targeted retrieval instead of full LTM
+    if vector_memories:
+        memory_lines = [f"[{m['chunk_id']}] {m['content']}" for m in vector_memories]
+        ltm_block = "## Existing Memories (reference by [chunk_id] in MEMORY_OPS)\n\n" + "\n".join(memory_lines)
+    else:
+        ltm_sections = []
+        if global_ltm:
+            ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
+        for project, content in sorted(project_ltms.items()):
+            if content:
+                ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
+        ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
 
     # Build existing daily merge context (for incremental synthesis)
     existing_dailies = embedded_files.get("existing_dailies", {})
@@ -465,6 +510,7 @@ def _build_synthesis_prompt(
     pending_dates: list[str],
     extracted_files: dict[str, str],
     embedded_files: dict | None = None,
+    vector_memories: list | None = None,
 ) -> str:
     """
     Build the embedded synthesis prompt for the subagent.
@@ -476,12 +522,15 @@ def _build_synthesis_prompt(
         pending_dates: List of pending date strings (YYYY-MM-DD)
         extracted_files: Dict mapping date -> file path (pre-extracted)
         embedded_files: Pre-read content to embed inline (transcripts, LTM content)
+        vector_memories: Optional list of dicts with 'chunk_id' and 'content'
+            from vector search for targeted dedup context.
     """
     project_names_str = _get_project_names_str()
     synthesis_instructions = _build_synthesis_instructions(project_names_str)
 
     return _build_preextracted_prompt(
-        pending_dates, extracted_files, synthesis_instructions, embedded_files
+        pending_dates, extracted_files, synthesis_instructions, embedded_files,
+        vector_memories=vector_memories,
     )
 
 
@@ -563,6 +612,21 @@ def _build_embedded_files(
                     pass
     return embedded
 
+
+def _retrieve_vector_memories(transcript_text: str) -> list | None:
+    """Retrieve existing memories relevant to transcript via vector search.
+
+    Returns list of dicts with 'chunk_id' and 'content', or None if
+    embeddings are unavailable or transcript is empty.
+    """
+    if not transcript_text or not transcript_text.strip():
+        return None
+    try:
+        from synthesis_cron import retrieve_existing_memories
+        memories = retrieve_existing_memories(transcript_text)
+        return memories if memories else None
+    except (ImportError, AttributeError):
+        return None
 
 
 def pre_extract_transcripts_incremental(
@@ -659,12 +723,110 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
             daily_data=single_date_data,
         )
 
-        prompt = _build_synthesis_prompt([date], single_date_files, embedded)
+        vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
+
+        prompt = _build_synthesis_prompt([date], single_date_files, embedded, vector_memories=vector_memories)
 
         prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"
         Path(prompt_path).write_text(prompt, encoding="utf-8")
 
         print(f"prompt_file={prompt_path}")
+
+
+# Constants for access tracking
+REINFORCEMENT_ETA = 0.18  # Reinforcement rate (diminishing returns formula)
+MAX_BUSY_RETRIES = 3
+BUSY_RETRY_DELAY = 0.1  # seconds
+
+
+def _execute_with_retry(conn, chunk_ids: list, node_ids: list) -> None:
+    """Execute access tracking with BEGIN IMMEDIATE and retry on SQLITE_BUSY."""
+    from storage import (
+        batch_update_access,
+        update_chunk_salience,
+        update_node_salience,
+        query_neighbor_nodes,
+    )
+
+    for attempt in range(MAX_BUSY_RETRIES):
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            break
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < MAX_BUSY_RETRIES - 1:
+                time.sleep(BUSY_RETRY_DELAY)
+                continue
+            raise
+
+    try:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        batch_update_access(conn, chunk_ids, timestamp=now)
+
+        for cid in chunk_ids:
+            row = conn.execute(
+                "SELECT salience FROM chunks WHERE id = ?", (cid,)
+            ).fetchone()
+            if row:
+                current = row[0] if row[0] is not None else 1.0
+                new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+                update_chunk_salience(conn, cid, new_salience)
+
+        for nid in (node_ids or []):
+            row = conn.execute(
+                "SELECT salience FROM nodes WHERE id = ?", (nid,)
+            ).fetchone()
+            if not row:
+                continue
+            current = row[0] if row[0] is not None else 1.0
+            new_salience = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+            update_node_salience(conn, nid, new_salience)
+
+            # Associative reinforcement: boost graph neighbors
+            # Use the already-computed new_salience instead of re-querying the DB
+            accessed_salience = new_salience
+
+            neighbors = query_neighbor_nodes(conn, nid)
+            for neighbor in neighbors:
+                boost = REINFORCEMENT_ETA * neighbor.edge_weight * accessed_salience
+                new_neighbor_salience = min(1.0, neighbor.salience + boost)
+                update_node_salience(conn, neighbor.node_id, new_neighbor_salience)
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
+    """Record access for served chunks/nodes in the DB.
+
+    Best-effort: failures are logged to stderr but do not block SessionStart.
+    Uses BEGIN IMMEDIATE to prevent write conflicts with concurrent sessions.
+
+    Args:
+        chunk_ids: List of chunk IDs that were served this session.
+        node_ids: Optional list of node IDs that were served.
+    """
+    if not chunk_ids and not node_ids:
+        return
+
+    try:
+        from storage import get_db, close_db
+    except ImportError:
+        return
+
+    conn = None
+    try:
+        conn = get_db()
+        _execute_with_retry(conn, chunk_ids, node_ids or [])
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
+    finally:
+        if conn:
+            close_db(conn)
 
 
 def main() -> None:
@@ -741,8 +903,10 @@ def main() -> None:
                     daily_data=single_date_data,
                 )
 
+                vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
+
                 synth_prompt = _build_synthesis_prompt(
-                    [date], single_date_files, embedded
+                    [date], single_date_files, embedded, vector_memories=vector_memories
                 )
 
                 prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"

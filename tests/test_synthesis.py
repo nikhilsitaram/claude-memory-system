@@ -13,6 +13,7 @@ from synthesis import (
     SECTION_ORDER,  # noqa: F401
     TYPE_TO_SECTION,  # noqa: F401
     DailyFile,
+    MemoryOp,
     ProjectBlock,
     RouteEntry,  # noqa: F401
     SynthesisResult,  # noqa: F401
@@ -2363,3 +2364,663 @@ class TestApplyResultsProjectBlocks:
         for line in content.split("\n"):
             if "Normal entry" in line:
                 assert "[routed]" not in line
+
+
+# =============================================================================
+# C4: CRUD apply logic tests
+# =============================================================================
+
+
+def _make_ltm_file(tmp_path, scope="global"):
+    """Create a minimal LTM file with standard sections."""
+    content = f"""# {scope} Long-Term Memory
+
+## Key Actions
+<!-- recent actions -->
+
+## Key Decisions
+
+## Key Learnings
+
+"""
+    if scope == "global":
+        f = tmp_path / "global-long-term-memory.md"
+    else:
+        ltm_dir = tmp_path / "project-memory"
+        ltm_dir.mkdir(exist_ok=True)
+        f = ltm_dir / f"{scope}-long-term-memory.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content)
+    return f
+
+
+def _make_db(tmp_path):
+    """Create an in-memory DB with proper patching."""
+    from unittest.mock import patch
+    db_path = tmp_path / "memory.db"
+    return patch("storage.get_db_path", return_value=db_path)
+
+
+class TestApplyCrudOps:
+    """Tests for CRUD operation application from MEMORY_OPS."""
+
+    def test_add_inserts_chunk_and_appends_to_ltm(self, tmp_path):
+        """ADD: creates DB chunk and appends entry to LTM markdown."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "project uses gRPC for internal comms", "scope": "global", "section": "Key Actions", "type": "implement", "entities": ["gRPC"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert any("gRPC" in c.content for c in chunks)
+            finally:
+                close_db(conn)
+
+        content = ltm_file.read_text()
+        assert "gRPC for internal comms" in content
+
+    def test_add_with_design_type_produces_design_tag(self, tmp_path):
+        """ADD with type='design' should produce [design] in markdown, not [implement]."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "JWT over sessions for statelessness", "scope": "global", "section": "Key Decisions", "type": "design", "entities": ["JWT"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+
+        content = ltm_file.read_text()
+        assert "[design] JWT over sessions" in content
+        assert "[implement]" not in content or "JWT" not in content.split("[implement]")[-1]
+
+    def test_add_with_memoryop_type_produces_correct_tag(self, tmp_path):
+        """ADD via MemoryOp dataclass with type='design' should produce [design] tag."""
+        from unittest.mock import patch
+        from synthesis import MemoryOp, apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [MemoryOp(action="ADD", fact="chose gRPC over REST", scope="global", section="Key Decisions", type="design", entities=["gRPC", "REST"])]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            assert warnings == []
+
+        content = ltm_file.read_text()
+        assert "- (2026-03-21) [design] chose gRPC over REST" in content
+
+    def test_update_modifies_chunk_and_markdown_line(self, tmp_path):
+        """UPDATE: modifies DB chunk content and updates markdown line."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="project uses REST API for external", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        # Add the old content to the LTM file
+        old_text = ltm_file.read_text()
+        ltm_file.write_text(old_text + "- (2026-01-01) [implement] project uses REST API for external\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "project uses gRPC for external", "entities": ["gRPC"]}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("not found" in w for w in warnings)
+        content = ltm_file.read_text()
+        assert "gRPC for external" in content
+
+    def test_update_db_only_when_markdown_not_found(self, tmp_path):
+        """UPDATE: when no markdown match, applies DB change and logs warning."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="some unique content xyz", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new content for this chunk"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("DB-only" in w or "not found" in w for w in warnings)
+
+    def test_delete_sets_salience_zero_and_archives(self, tmp_path):
+        """DELETE: sets salience=0, archives in markdown."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="deprecated fact to delete here", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        # Add the content to the LTM
+        old = ltm_file.read_text()
+        ltm_file.write_text(old + "- (2026-01-01) [implement] deprecated fact to delete here\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("not found" in w for w in warnings)
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.salience == 0.0
+            finally:
+                close_db(conn)
+        content = ltm_file.read_text()
+        assert "Archived" in content
+
+    def test_noop_increments_evidence_count(self, tmp_path):
+        """NOOP: increments evidence_count on the chunk."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="confirmed fact", source_file="test.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", evidence_count=1)
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "NOOP", "id": chunk_id, "reason": "Already accurate"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert warnings == []
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.evidence_count == 2
+            finally:
+                close_db(conn)
+
+    def test_unknown_action_logged_as_warning(self, tmp_path):
+        """Unrecognized action produces warning, does not crash."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "MERGE", "fact": "something"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("MERGE" in w or "Unknown" in w for w in warnings)
+
+    def test_missing_chunk_id_on_update_logged(self, tmp_path):
+        """UPDATE with nonexistent chunk ID produces warning."""
+        from unittest.mock import patch
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": "nonexistent-id", "fact": "new fact"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert any("not found" in w or "nonexistent" in w for w in warnings)
+
+
+# =============================================================================
+# C5: Bi-temporal edge handling tests
+# =============================================================================
+
+
+class TestBitemporalEdges:
+    """Tests for bi-temporal edge invalidation on DELETE operations."""
+
+    def _setup_db(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, insert_node, insert_edge, ChunkRow, NodeRow, EdgeRow, query_node_by_name_and_type
+        import json
+
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            insert_node(conn, NodeRow(name="gRPC", type="entity", scope="global", created_at="2026-01-01"))
+            insert_node(conn, NodeRow(name="REST", type="entity", scope="global", created_at="2026-01-01"))
+            src = query_node_by_name_and_type(conn, "gRPC", "entity")
+            tgt = query_node_by_name_and_type(conn, "REST", "entity")
+            edge_id = insert_edge(conn, EdgeRow(source=src.id, target=tgt.id, type="replaces", created_at="2026-01-01"))
+            chunk = ChunkRow(
+                content="project uses gRPC instead of REST",
+                source_file="global-long-term-memory.md",
+                source_type="ltm",
+                scope="global",
+                chunk_index=0,
+                created_at="2026-01-01",
+                entities=json.dumps(["gRPC", "REST"]),
+            )
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
+            close_db(conn)
+        return db_path, chunk_id, edge_id, src.id, tgt.id
+
+    def test_delete_invalidates_edges_on_chunk(self, tmp_path):
+        """DELETE sets valid_to on all edges connected to the chunk's entity nodes."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_current_edges
+        from synthesis import apply_memory_ops
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] project uses gRPC instead of REST\n")
+        db_path, chunk_id, edge_id, _, _ = self._setup_db(tmp_path)
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Contradicted: no longer uses gRPC"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                current = query_current_edges(conn)
+                current_ids = [e.id for e in current]
+                assert edge_id not in current_ids
+            finally:
+                close_db(conn)
+
+    def test_delete_chunk_with_no_edges_is_safe(self, tmp_path):
+        """DELETE on a chunk with no associated edges completes without error."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+        import json
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(
+                    content="fact with no edges",
+                    source_file="global-long-term-memory.md",
+                    source_type="ltm",
+                    scope="global",
+                    chunk_index=0,
+                    created_at="2026-01-01",
+                    entities=json.dumps([]),
+                )
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact with no edges\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        assert not any("error" in w.lower() for w in warnings)
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                assert result.salience == 0.0
+            finally:
+                close_db(conn)
+
+    def test_delete_only_invalidates_chunk_related_edges(self, tmp_path):
+        """Only edges where both source AND target are chunk entities get invalidated.
+
+        Generic entities like "Python" appear across many memories, so we
+        require both endpoints of an edge to be in the deleted chunk's entity
+        set before invalidating.
+        """
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, insert_node, insert_edge, ChunkRow, NodeRow, EdgeRow, query_current_edges, query_node_by_name_and_type
+        from synthesis import apply_memory_ops
+        import json
+
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        db_path = tmp_path / "memory.db"
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                insert_node(conn, NodeRow(name="entity-a", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="entity-b", type="entity", scope="global", created_at="2026-01-01"))
+                insert_node(conn, NodeRow(name="unrelated-entity", type="entity", scope="global", created_at="2026-01-01"))
+                node_a = query_node_by_name_and_type(conn, "entity-a", "entity")
+                node_b = query_node_by_name_and_type(conn, "entity-b", "entity")
+                unrelated_node = query_node_by_name_and_type(conn, "unrelated-entity", "entity")
+                both_in_chunk_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=node_b.id, type="uses", created_at="2026-01-01"))
+                one_outside_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=unrelated_node.id, type="uses", created_at="2026-01-01"))
+                fully_unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=unrelated_node.id, type="self", created_at="2026-01-01"))
+                chunk = ChunkRow(
+                    content="fact about entity-a and entity-b",
+                    source_file="global-long-term-memory.md",
+                    source_type="ltm",
+                    scope="global",
+                    chunk_index=0,
+                    created_at="2026-01-01",
+                    entities=json.dumps(["entity-a", "entity-b"]),
+                )
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about entity-a and entity-b\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                current = query_current_edges(conn)
+                current_ids = [e.id for e in current]
+                assert both_in_chunk_edge_id not in current_ids, "edge between two chunk entities should be invalidated"
+                assert one_outside_edge_id in current_ids, "edge with one non-chunk endpoint should be kept"
+                assert fully_unrelated_edge_id in current_ids, "fully unrelated edge should be kept"
+            finally:
+                close_db(conn)
+
+
+# =============================================================================
+# C6: Entity extraction tests
+# =============================================================================
+
+
+class TestEntityExtraction:
+    """Tests for entity extraction via CRUD operations."""
+
+    def test_add_stores_entities_on_chunk(self, tmp_path):
+        """ADD op with entities array stores them in chunk's entities JSON column."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "uses gRPC for comms", "scope": "global", "section": "Key Actions", "entities": ["gRPC", "myproject", "internal services"]}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert len(chunks) == 1
+                stored_entities = json.loads(chunks[0].entities)
+                assert "gRPC" in stored_entities
+                assert "myproject" in stored_entities
+            finally:
+                close_db(conn)
+
+    def test_update_replaces_entities(self, tmp_path):
+        """UPDATE op with new entities replaces existing entities on chunk."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, insert_chunk, ChunkRow, query_chunk_by_id
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunk = ChunkRow(content="old lib usage", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", entities=json.dumps(["old-lib"]))
+                chunk_id = insert_chunk(conn, chunk)
+                conn.commit()
+            finally:
+                close_db(conn)
+
+        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] old lib usage\n")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new lib api-client usage", "entities": ["new-lib", "api-client"]}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                result = query_chunk_by_id(conn, chunk_id)
+                updated = json.loads(result.entities)
+                assert "new-lib" in updated
+                assert "api-client" in updated
+                assert "old-lib" not in updated
+            finally:
+                close_db(conn)
+
+    def test_add_without_entities_stores_null(self, tmp_path):
+        """ADD op without entities key stores NULL (not empty array)."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "simple fact without entities", "scope": "global", "section": "Key Actions"}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                assert chunks[0].entities is None
+            finally:
+                close_db(conn)
+
+    def test_entities_roundtrip_json(self, tmp_path):
+        """Entities survive JSON encode/decode roundtrip."""
+        from unittest.mock import patch
+        from storage import ensure_db, close_db, query_chunks_by_scope
+        from synthesis import apply_memory_ops
+        import json
+
+        db_path = tmp_path / "memory.db"
+        ltm_file = _make_ltm_file(tmp_path, "global")
+        entities = ["Python 3.13", "pytest", "https://example.com", "2026-03-21"]
+
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+            ops = [{"action": "ADD", "fact": "uses various entities", "scope": "global", "section": "Key Actions", "entities": entities}]
+            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+
+        with patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            try:
+                chunks = query_chunks_by_scope(conn, "global")
+                roundtripped = json.loads(chunks[0].entities)
+                assert roundtripped == entities
+            finally:
+                close_db(conn)
+
+    def test_synthesis_instructions_mention_entities(self):
+        """Synthesis prompt includes entity extraction guidance."""
+        from load_memory import _build_synthesis_instructions
+        instructions = _build_synthesis_instructions("test-project")
+        assert "entities" in instructions.lower()
+
+
+# =============================================================================
+# C3: MEMORY_OPS parsing tests
+# =============================================================================
+
+
+class TestMemoryOpsParsing:
+    """Tests for ===MEMORY_OPS=== block parsing in synthesis output."""
+
+    def test_parses_valid_memory_ops_json(self):
+        """Parses MEMORY_OPS JSON block into SynthesisResult.memory_ops."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{"ops": [
+  {"action": "ADD", "fact": "project uses gRPC", "scope": "myproject", "section": "Key Decisions", "entities": ["gRPC"]},
+  {"action": "UPDATE", "id": "chunk_abc123", "fact": "API client has retry logic", "entities": ["API client"]},
+  {"action": "DELETE", "id": "chunk_def456", "reason": "Contradicted: no longer uses REST"},
+  {"action": "NOOP", "id": "chunk_ghi789", "reason": "Already captured"}
+]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 4
+        assert result.memory_ops[0].action == "ADD"
+        assert result.memory_ops[1].action == "UPDATE"
+        assert result.memory_ops[2].action == "DELETE"
+        assert result.memory_ops[3].action == "NOOP"
+
+    def test_project_blocks_still_parsed_alongside_memory_ops(self):
+        """PROJECT blocks are parsed normally when MEMORY_OPS is present."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "test", "scope": "myproject", "section": "Key Actions", "entities": []}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.project_blocks) == 1
+        assert result.project_blocks[0].project == "myproject"
+
+    def test_missing_memory_ops_backward_compat(self):
+        """Output without MEMORY_OPS returns empty memory_ops list."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops == []
+
+    def test_malformed_json_produces_warning(self):
+        """Invalid JSON in MEMORY_OPS produces warning, rest of output still parsed."""
+        text = '''===PROJECT:myproject===
+- [implement] Built API endpoints
+===MEMORY_OPS===
+{this is not valid json}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops == []
+        assert any("MEMORY_OPS" in w for w in result.warnings)
+        assert len(result.project_blocks) == 1
+
+    def test_memory_ops_with_missing_optional_fields(self):
+        """Ops with missing optional fields (id, reason, entities) still parse."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "simple fact"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 1
+        assert result.memory_ops[0].id is None
+        assert result.memory_ops[0].entities is None
+
+    def test_memory_ops_before_project_blocks(self):
+        """MEMORY_OPS can appear before PROJECT blocks."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "test", "scope": "proj", "section": "Key Actions", "entities": []}]}
+===PROJECT:proj===
+- [implement] Something
+===END==='''
+        result = parse_synthesis_output(text)
+        assert len(result.memory_ops) == 1
+        assert len(result.project_blocks) == 1
+
+    def test_memory_op_fields_mapped_correctly(self):
+        """All MemoryOp fields are populated from JSON."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "uses gRPC", "scope": "proj", "section": "Key Decisions", "type": "design", "entities": ["gRPC", "proj"], "reason": "new info"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        op = result.memory_ops[0]
+        assert op.action == "ADD"
+        assert op.fact == "uses gRPC"
+        assert op.scope == "proj"
+        assert op.section == "Key Decisions"
+        assert op.type == "design"
+        assert op.entities == ["gRPC", "proj"]
+        assert op.reason == "new info"
+
+    def test_memory_op_type_defaults_to_none(self):
+        """MemoryOp.type is None when not provided in JSON."""
+        text = '''===MEMORY_OPS===
+{"ops": [{"action": "ADD", "fact": "simple fact"}]}
+===END==='''
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].type is None

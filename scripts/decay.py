@@ -17,6 +17,7 @@ import argparse
 import re
 import sys
 from datetime import date, datetime, timedelta
+from math import exp
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -37,6 +38,16 @@ from memory_utils import (
     project_name_to_filename,
     rebuild_projects_index_quiet,
 )
+
+# Tiered salience decay constants
+HOT_LAMBDA = 0.005
+WARM_LAMBDA = 0.02
+COLD_LAMBDA = 0.05
+HOT_DAYS_THRESHOLD = 6
+HOT_ACCESS_THRESHOLD = 5
+HOT_SALIENCE_THRESHOLD = 0.7
+WARM_SALIENCE_THRESHOLD = 0.4
+ARCHIVE_SALIENCE_THRESHOLD = 0.05
 
 # Default decay thresholds (used as fallbacks when settings.json missing)
 DEFAULT_AGE_DAYS = 30
@@ -65,6 +76,73 @@ DECAY_ELIGIBLE_SECTIONS = {
     "## Key Learnings",
     "## Key Lessons",
 }
+
+
+def days_since(last_accessed_iso: str | None, today: date | None = None) -> float:
+    """Calculate days since last_accessed timestamp.
+
+    Args:
+        last_accessed_iso: ISO timestamp string (e.g. '2026-03-16T12:00:00Z') or None.
+        today: Reference date for calculation. Defaults to local today.
+
+    Returns:
+        Float days elapsed. Returns 999.0 if last_accessed_iso is None or unparseable.
+    """
+    if not last_accessed_iso:
+        return 999.0
+    if today is None:
+        today = local_today()
+    try:
+        dt = datetime.fromisoformat(last_accessed_iso.replace("Z", "+00:00"))
+        delta = today - dt.date()
+        return max(0.0, float(delta.days))
+    except (ValueError, AttributeError):
+        return 999.0
+
+
+def pick_tier(
+    dt_days: float, access_count: int, salience: float
+) -> tuple[str, float]:
+    """Classify a chunk into hot/warm/cold tier based on recency and salience.
+
+    Args:
+        dt_days: Days since last access.
+        access_count: Number of times accessed.
+        salience: Current salience score.
+
+    Returns:
+        (tier_name, lambda_rate) tuple.
+    """
+    if dt_days < HOT_DAYS_THRESHOLD and (
+        access_count > HOT_ACCESS_THRESHOLD or salience > HOT_SALIENCE_THRESHOLD
+    ):
+        return "hot", HOT_LAMBDA
+    if dt_days < HOT_DAYS_THRESHOLD or salience > WARM_SALIENCE_THRESHOLD:
+        return "warm", WARM_LAMBDA
+    return "cold", COLD_LAMBDA
+
+
+def decay_salience(
+    current_salience: float, dt_days: float, lam: float
+) -> float:
+    """Apply exponential decay with salience-dependent rate (death spiral formula).
+
+    Formula: new = current * exp(-lambda * (dt / (current + 0.1)))
+    The (current + 0.1) divisor creates intentional death spiral:
+    low-salience chunks decay faster, accelerating archival.
+
+    Args:
+        current_salience: Current salience in [0.0, 1.0].
+        dt_days: Days elapsed since last access.
+        lam: Lambda rate for this tier.
+
+    Returns:
+        New salience value clamped to [0.0, 1.0].
+    """
+    if current_salience <= 0:
+        return 0.0
+    factor = exp(-lam * (dt_days / (current_salience + 0.1)))
+    return max(0.0, min(1.0, current_salience * factor))
 
 
 def parse_learning_date(line: str) -> date | None:
