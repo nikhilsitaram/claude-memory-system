@@ -3,10 +3,8 @@
 SQLite storage layer for Claude Code Memory System.
 
 Provides DB connection helpers, schema creation, and CRUD operations
-for the unified memory.db (graph nodes, edges, content chunks).
-
-The DB coexists with markdown files -- it is a read-optimized index,
-not a replacement for the markdown source of truth.
+for the unified memory.db (v3: data_points + edges, replacing markdown
+as the primary source of truth for structured memory).
 
 Requirements: Python 3.9+
 """
@@ -141,10 +139,16 @@ CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL REFERENCES data_points(id),
     target TEXT NOT NULL REFERENCES data_points(id),
-    relation TEXT NOT NULL,
+    type TEXT NOT NULL,
     reason TEXT,
+    fact TEXT,
+    properties TEXT,
+    created_at TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    expired_at TEXT,
     weight REAL DEFAULT 1.0,
-    created_at TEXT NOT NULL
+    source_sessions TEXT
 );
 
 -- Vector search layer for data_points
@@ -1096,6 +1100,7 @@ def query_data_points(
     scope: Optional[str] = None,
     min_salience: Optional[float] = None,
     limit: Optional[int] = None,
+    order_by: str = "salience DESC, created_at DESC",
 ) -> list[DataPointRow]:
     """Query data_points with optional filters.
 
@@ -1105,9 +1110,10 @@ def query_data_points(
         scope: Filter by scope (e.g., 'global', 'project-x').
         min_salience: Return only rows with salience >= this value.
         limit: Maximum number of rows to return.
+        order_by: ORDER BY clause (default: 'salience DESC, created_at DESC').
 
     Returns:
-        List of DataPointRow instances.
+        List of DataPointRow instances ordered by the given clause.
     """
     conditions = []
     params = []
@@ -1123,9 +1129,10 @@ def query_data_points(
         params.append(min_salience)
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order_clause = f"ORDER BY {order_by}" if order_by else ""
     limit_clause = f"LIMIT {limit}" if limit else ""
 
-    query = f"SELECT {_DP_COLUMNS} FROM data_points {where_clause} {limit_clause}"
+    query = f"SELECT {_DP_COLUMNS} FROM data_points {where_clause} {order_clause} {limit_clause}"
     rows = conn.execute(query, params).fetchall()
     return [_row_to_data_point(r) for r in rows]
 
@@ -1137,6 +1144,7 @@ def query_data_points_by_scope(
     dp_type: Optional[str] = None,
     min_salience: Optional[float] = None,
     limit: Optional[int] = None,
+    order_by: str = "salience DESC, created_at DESC",
 ) -> list[DataPointRow]:
     """Query data_points for a given scope with optional filters.
 
@@ -1146,12 +1154,14 @@ def query_data_points_by_scope(
         dp_type: Optional type filter.
         min_salience: Optional minimum salience threshold.
         limit: Optional maximum number of rows.
+        order_by: ORDER BY clause (default: 'salience DESC, created_at DESC').
 
     Returns:
-        List of DataPointRow instances.
+        List of DataPointRow instances ordered by the given clause.
     """
     return query_data_points(
-        conn, scope=scope, dp_type=dp_type, min_salience=min_salience, limit=limit
+        conn, scope=scope, dp_type=dp_type, min_salience=min_salience,
+        limit=limit, order_by=order_by
     )
 
 
@@ -1240,44 +1250,19 @@ def query_edges_for_data_point(
     else:  # "both"
         condition = "source = ? OR target = ?"
 
-    # Note: We're querying the v3 edges table which has (id, source, target, relation, reason, weight, created_at)
-    # But _EDGE_COLUMNS is for v2 schema. We need v3-compatible edge columns.
-    # For now, let's build a minimal EdgeRow with available v3 columns.
-
-    # V3 edges schema: id, source, target, relation, reason, weight, created_at
-    v3_edge_columns = "id, source, target, relation, reason, weight, created_at"
-
+    # V3 edges schema matches _EDGE_COLUMNS exactly; reuse it.
     if direction == "both":
         rows = conn.execute(
-            f"SELECT {v3_edge_columns} FROM edges WHERE {condition}",
+            f"SELECT {_EDGE_COLUMNS} FROM edges WHERE {condition}",
             (data_point_id, data_point_id),
         ).fetchall()
     else:
         rows = conn.execute(
-            f"SELECT {v3_edge_columns} FROM edges WHERE {condition}",
+            f"SELECT {_EDGE_COLUMNS} FROM edges WHERE {condition}",
             (data_point_id,),
         ).fetchall()
 
-    # Map v3 edge columns to EdgeRow (adapting v2 structure for compatibility)
-    # v3: (id, source, target, relation, reason, weight, created_at)
-    # v2 EdgeRow: (id, source, target, type, fact, properties, created_at, valid_from, valid_to, expired_at, weight, source_sessions)
-    edges = []
-    for r in rows:
-        edges.append(EdgeRow(
-            id=r[0],
-            source=r[1],
-            target=r[2],
-            type=r[3],  # relation -> type
-            fact=r[4],  # reason -> fact
-            properties=None,
-            created_at=r[6],
-            valid_from=None,
-            valid_to=None,
-            expired_at=None,
-            weight=r[5],
-            source_sessions=None,
-        ))
-    return edges
+    return [_row_to_edge(r) for r in rows]
 
 
 _LTM_ENTRY_RE = re.compile(

@@ -1208,10 +1208,16 @@ class TestV3Schema:
                         id TEXT PRIMARY KEY,
                         source TEXT NOT NULL REFERENCES data_points(id),
                         target TEXT NOT NULL REFERENCES data_points(id),
-                        relation TEXT NOT NULL,
+                        type TEXT NOT NULL,
                         reason TEXT,
+                        fact TEXT,
+                        properties TEXT,
+                        created_at TEXT NOT NULL,
+                        valid_from TEXT,
+                        valid_to TEXT,
+                        expired_at TEXT,
                         weight REAL DEFAULT 1.0,
-                        created_at TEXT NOT NULL
+                        source_sessions TEXT
                     );
                 """)
                 conn.commit()
@@ -1549,10 +1555,16 @@ class TestDataPointCRUD:
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL REFERENCES data_points(id),
                 target TEXT NOT NULL REFERENCES data_points(id),
-                relation TEXT NOT NULL,
+                type TEXT NOT NULL,
                 reason TEXT,
+                fact TEXT,
+                properties TEXT,
+                created_at TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                expired_at TEXT,
                 weight REAL DEFAULT 1.0,
-                created_at TEXT NOT NULL
+                source_sessions TEXT
             );
         """)
         conn.commit()
@@ -1570,11 +1582,11 @@ class TestDataPointCRUD:
 
         # A -> B, C -> A (so A is source once, target once)
         conn.execute(
-            "INSERT INTO edges (id, source, target, relation, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO edges (id, source, target, type, created_at) VALUES (?, ?, ?, ?, ?)",
             ("e1", dpA_id, dpB_id, "related_to", "2026-03-01"),
         )
         conn.execute(
-            "INSERT INTO edges (id, source, target, relation, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO edges (id, source, target, type, created_at) VALUES (?, ?, ?, ?, ?)",
             ("e2", dpC_id, dpA_id, "related_to", "2026-03-01"),
         )
         conn.commit()
@@ -1622,10 +1634,16 @@ class TestDataPointCRUD:
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL REFERENCES data_points(id),
                 target TEXT NOT NULL REFERENCES data_points(id),
-                relation TEXT NOT NULL,
+                type TEXT NOT NULL,
                 reason TEXT,
+                fact TEXT,
+                properties TEXT,
+                created_at TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                expired_at TEXT,
                 weight REAL DEFAULT 1.0,
-                created_at TEXT NOT NULL
+                source_sessions TEXT
             );
         """)
         conn.commit()
@@ -1855,10 +1873,16 @@ class TestMigrateProfiles:
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL REFERENCES data_points(id),
                 target TEXT NOT NULL REFERENCES data_points(id),
-                relation TEXT NOT NULL,
+                type TEXT NOT NULL,
                 reason TEXT,
+                fact TEXT,
+                properties TEXT,
+                created_at TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                expired_at TEXT,
                 weight REAL DEFAULT 1.0,
-                created_at TEXT NOT NULL
+                source_sessions TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
             CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
