@@ -6,6 +6,7 @@ Run with: python -m pytest tests/test_load_memory.py -v
 """
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -28,16 +29,27 @@ from load_memory import (
     write_synthesis_prompt,
 )
 from storage import (
+    SCHEMA_DDL,
     ChunkRow,
     EdgeRow,
     NodeRow,
     close_db,
-    ensure_db,
     insert_chunk,
     insert_edge,
     insert_node,
     query_chunks_with_salience,
 )
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing access tracking operations."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 # =============================================================================
 # _strip_profile_sections Tests
@@ -1563,19 +1575,19 @@ class TestAccessTracking:
     """Tests for track_memory_access() and access tracking at SessionStart."""
 
     def _make_db(self, tmp_path):
-        """Helper: create a DB with ensure_db() and return (conn, db_path)."""
+        """Helper: create a DB with v2 schema and return (conn, db_path)."""
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
         return conn, db_path
 
     def test_served_chunks_get_access_count_incremented(self, tmp_path):
         """When chunks are served, their access_count increments by 1."""
-        from load_memory import track_memory_access, REINFORCEMENT_ETA
+        from load_memory import track_memory_access
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             chunk = ChunkRow(content="test entry", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
             cid = insert_chunk(conn, chunk)
             conn.commit()
@@ -1583,7 +1595,7 @@ class TestAccessTracking:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([cid])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             results = query_chunks_with_salience(conn2)
             assert results[0].access_count == 1
             close_db(conn2)
@@ -1593,7 +1605,7 @@ class TestAccessTracking:
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             chunk = ChunkRow(content="timestamp test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
             cid = insert_chunk(conn, chunk)
             conn.commit()
@@ -1606,18 +1618,18 @@ class TestAccessTracking:
                 mock_dt.now.return_value = mock_now
                 from load_memory import track_memory_access
                 track_memory_access([cid])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             results = query_chunks_with_salience(conn2)
             assert results[0].last_accessed == fixed_ts
             close_db(conn2)
 
     def test_salience_reinforced_with_diminishing_returns(self, tmp_path):
         """Salience reinforcement: new = min(1.0, old + 0.18 * (1.0 - old))."""
-        from load_memory import track_memory_access, REINFORCEMENT_ETA
+        from load_memory import REINFORCEMENT_ETA, track_memory_access
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             chunk = ChunkRow(content="salience test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
             cid = insert_chunk(conn, chunk)
             conn.commit()
@@ -1625,7 +1637,7 @@ class TestAccessTracking:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([cid])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             results = query_chunks_with_salience(conn2)
             expected = 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5)
             assert abs(results[0].salience - expected) < 1e-9
@@ -1633,11 +1645,11 @@ class TestAccessTracking:
 
     def test_salience_near_1_converges(self, tmp_path):
         """Repeated access converges toward 1.0 without overshooting."""
-        from load_memory import track_memory_access, REINFORCEMENT_ETA
+        from load_memory import track_memory_access
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             chunk = ChunkRow(content="near-max salience", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.95)
             cid = insert_chunk(conn, chunk)
             conn.commit()
@@ -1645,7 +1657,7 @@ class TestAccessTracking:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([cid])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             results = query_chunks_with_salience(conn2)
             assert results[0].salience < 1.0
             assert results[0].salience > 0.95
@@ -1661,7 +1673,8 @@ class TestAccessTracking:
     def test_concurrent_write_retries_on_busy(self, tmp_path):
         """BEGIN IMMEDIATE with retry on SQLITE_BUSY."""
         import sqlite3
-        from load_memory import _execute_with_retry, MAX_BUSY_RETRIES
+
+        from load_memory import _execute_with_retry
 
         call_count = [0]
         mock_conn = mock.MagicMock()
@@ -1677,7 +1690,7 @@ class TestAccessTracking:
 
         mock_conn.execute.side_effect = patched_execute
 
-        with mock.patch("load_memory.time") as mock_time:
+        with mock.patch("load_memory.time"):
             with mock.patch("storage.batch_update_access"):
                 with mock.patch("storage.update_chunk_salience"):
                     with mock.patch("storage.update_node_salience"):
@@ -1696,11 +1709,11 @@ class TestAssociativeReinforcement:
 
     def test_neighbor_receives_boost_proportional_to_edge_weight(self, tmp_path):
         """Neighbor boost = 0.18 * edge_weight * accessed_node.salience."""
-        from load_memory import track_memory_access, REINFORCEMENT_ETA
+        from load_memory import REINFORCEMENT_ETA, track_memory_access
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             nA = insert_node(conn, NodeRow(name="nodeA", type="concept", scope="global", created_at="2026-01-01", salience=0.8))
             nB = insert_node(conn, NodeRow(name="nodeB", type="concept", scope="global", created_at="2026-01-01", salience=0.3))
             insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=0.5))
@@ -1709,7 +1722,7 @@ class TestAssociativeReinforcement:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([], node_ids=[nA])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
             accessed_row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nA,)).fetchone()
             accessed_salience_after = accessed_row[0]
@@ -1723,7 +1736,7 @@ class TestAssociativeReinforcement:
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             nA = insert_node(conn, NodeRow(name="nodeA2", type="concept", scope="global", created_at="2026-01-01", salience=1.0))
             nB = insert_node(conn, NodeRow(name="nodeB2", type="concept", scope="global", created_at="2026-01-01", salience=0.99))
             insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=1.0))
@@ -1732,7 +1745,7 @@ class TestAssociativeReinforcement:
 
         with mock.patch("storage.get_db_path", return_value=db_path):
             track_memory_access([], node_ids=[nA])
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
             assert row[0] <= 1.0
             close_db(conn2)
@@ -1743,7 +1756,7 @@ class TestAssociativeReinforcement:
 
         db_path = tmp_path / "memory.db"
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             nA = insert_node(conn, NodeRow(name="isolated2", type="concept", scope="global", created_at="2026-01-01", salience=0.7))
             conn.commit()
             close_db(conn)

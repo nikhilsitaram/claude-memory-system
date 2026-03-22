@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 """Tests for scripts/health.py."""
 
-import json
+import sqlite3
 from unittest import mock
 
 import pytest
-
 from health import (
-    COLD_RATIO_THRESHOLD,
     HealthReport,
     format_report,
     health_alerts,
     health_report,
 )
 from storage import (
-    SCHEMA_VERSION,
+    SCHEMA_DDL,
     ChunkRow,
     NodeRow,
     close_db,
-    ensure_db,
     insert_chunk,
     insert_node,
 )
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing health operations."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 
 @pytest.fixture
@@ -34,7 +42,8 @@ def db_dir(tmp_path):
 
 @pytest.fixture
 def db(db_dir):
-    conn = ensure_db()
+    db_path = db_dir / "memory.db"
+    conn = _make_v2_db(db_path)
     yield conn
     close_db(conn)
 
@@ -48,7 +57,8 @@ class TestHealthReport:
 
     def test_schema_version(self, db):
         report = health_report(db)
-        assert report.schema_version == SCHEMA_VERSION
+        # v2 DB for testing chunks/nodes tables
+        assert report.schema_version == 2
 
     def test_chunk_counts(self, db):
         for i in range(5):

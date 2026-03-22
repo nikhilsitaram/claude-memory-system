@@ -20,10 +20,12 @@ import pytest
 
 from storage import (
     ChunkRow,
+    DataPointRow,
     VEC_CHUNKS_DDL,
     close_db,
     ensure_db,
     insert_chunk,
+    insert_data_point,
 )
 
 from embeddings import (
@@ -36,14 +38,17 @@ from embeddings import (
     RECENCY_WEIGHT,
     SALIENCE_WEIGHT,
     ScoredChunk,
+    ScoredDataPoint,
     VEC_BOOST_RATE,
     VEC_SIM_WEIGHT,
     delete_vec_chunks,
+    delete_vec_data,
     embed_batch,
     embed_text,
     ensure_vec_table,
     index_chunks,
     index_chunks_by_source,
+    index_data_points,
     reindex_all,
     reindex_changed_files,
     score_memory,
@@ -339,3 +344,145 @@ class TestFastEmbedIntegration:
         vec = embed_text("memory system with sqlite storage")
         assert len(vec) == EMBEDDING_DIM
         assert all(isinstance(v, float) for v in vec)
+
+
+# ============================================================================
+# A5: ScoredDataPoint, index_data_points, search_similar (vec_data), etc.
+# ============================================================================
+
+
+class TestScoredDataPoint:
+    """Tests for the ScoredDataPoint dataclass and ScoredChunk alias."""
+
+    def test_scored_data_point_has_correct_fields(self):
+        """ScoredDataPoint wraps a DataPointRow with score and vec_similarity."""
+        dp = DataPointRow(type="memory", content="test fact", scope="global")
+        scored = ScoredDataPoint(data_point=dp, score=0.8, vec_similarity=0.7)
+        assert scored.data_point.content == "test fact"
+        assert scored.score == 0.8
+        assert scored.vec_similarity == 0.7
+
+    def test_scored_chunk_alias_still_works(self):
+        """ScoredChunk is a backward-compat alias for ScoredDataPoint."""
+        assert ScoredChunk is ScoredDataPoint
+
+    def test_scored_data_point_accepts_data_point_row(self):
+        """ScoredDataPoint.data_point stores a DataPointRow."""
+        dp = DataPointRow(type="entity", name="Python", scope="global")
+        scored = ScoredDataPoint(data_point=dp, score=0.5, vec_similarity=0.4)
+        assert isinstance(scored.data_point, DataPointRow)
+        assert scored.data_point.type == "entity"
+
+
+class TestIndexDataPoints:
+    """Tests for index_data_points (v3 schema)."""
+
+    @pytest.fixture
+    def db_v3_with_vec(self, db_dir):
+        """DB with v3 schema and sqlite-vec loaded; skips if vec unavailable."""
+        conn = ensure_db()
+        success = ensure_vec_table(conn)
+        if not success:
+            pytest.skip("sqlite-vec not available")
+        yield conn
+        close_db(conn)
+
+    @pytest.fixture
+    def sample_data_points(self, db_v3_with_vec):
+        """Insert sample data_points and return their IDs."""
+        conn = db_v3_with_vec
+        ids = []
+        for content in [
+            "Use pytest tmp_path for filesystem isolation",
+            "SQLite WAL mode enables concurrent reads",
+            "FastEmbed produces 384-dim CPU embeddings",
+        ]:
+            dp_id = insert_data_point(
+                conn,
+                DataPointRow(type="memory", content=content, scope="global"),
+            )
+            ids.append(dp_id)
+        conn.commit()
+        return ids
+
+    def test_index_data_points_inserts_to_vec_data(
+        self, db_v3_with_vec, mock_embedder, sample_data_points
+    ):
+        """index_data_points writes embeddings to vec_data table."""
+        index_data_points(db_v3_with_vec, sample_data_points)
+        count = db_v3_with_vec.execute("SELECT COUNT(*) FROM vec_data").fetchone()[0]
+        assert count == len(sample_data_points)
+
+    def test_index_data_points_skips_already_indexed(
+        self, db_v3_with_vec, mock_embedder, sample_data_points
+    ):
+        """Calling index_data_points twice does not create duplicates."""
+        index_data_points(db_v3_with_vec, sample_data_points[:2])
+        index_data_points(db_v3_with_vec, sample_data_points[:2])
+        count = db_v3_with_vec.execute("SELECT COUNT(*) FROM vec_data").fetchone()[0]
+        assert count == 2
+
+    def test_delete_vec_data_removes_rows(
+        self, db_v3_with_vec, mock_embedder, sample_data_points
+    ):
+        """delete_vec_data removes specified IDs from vec_data."""
+        index_data_points(db_v3_with_vec, sample_data_points)
+        delete_vec_data(db_v3_with_vec, sample_data_points[:1])
+        count = db_v3_with_vec.execute("SELECT COUNT(*) FROM vec_data").fetchone()[0]
+        assert count == len(sample_data_points) - 1
+
+    def test_search_similar_queries_vec_data(
+        self, db_v3_with_vec, mock_embedder, sample_data_points
+    ):
+        """search_similar returns ScoredDataPoint list from vec_data."""
+        index_data_points(db_v3_with_vec, sample_data_points)
+        results = search_similar(db_v3_with_vec, "pytest testing patterns")
+        assert len(results) > 0
+        assert all(isinstance(r, ScoredDataPoint) for r in results)
+        assert all(isinstance(r.data_point, DataPointRow) for r in results)
+
+    def test_ensure_vec_table_creates_vec_data(self, db_v3_with_vec):
+        """ensure_vec_table creates vec_data table."""
+        tables = {
+            row[0]
+            for row in db_v3_with_vec.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'shadow')"
+            ).fetchall()
+        }
+        assert "vec_data" in tables
+
+
+class TestBackwardCompatAliases:
+    """Tests that backward-compat aliases are preserved."""
+
+    def test_scored_chunk_is_scored_data_point(self):
+        """ScoredChunk must be the same class as ScoredDataPoint."""
+        assert ScoredChunk is ScoredDataPoint
+
+    def test_index_chunks_is_importable(self):
+        """index_chunks can still be imported (deprecated wrapper)."""
+        from embeddings import index_chunks
+        assert callable(index_chunks)
+
+    def test_delete_vec_chunks_is_importable(self):
+        """delete_vec_chunks can still be imported (deprecated wrapper)."""
+        from embeddings import delete_vec_chunks
+        assert callable(delete_vec_chunks)
+
+    def test_index_chunks_by_source_is_importable(self):
+        """index_chunks_by_source can still be imported (deprecated wrapper)."""
+        from embeddings import index_chunks_by_source
+        assert callable(index_chunks_by_source)
+
+    def test_score_memory_with_data_point_row(self):
+        """score_memory accepts DataPointRow (duck-typed alongside ChunkRow)."""
+        dp = DataPointRow(
+            type="memory",
+            content="test",
+            scope="global",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            salience=1.0,
+        )
+        score = score_memory(0.0, dp)
+        assert isinstance(score, float)
+        assert score > 0

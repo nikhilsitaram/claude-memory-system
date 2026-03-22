@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
 """Tests for markdown-to-DB migration pipeline in storage.py."""
 
+import sqlite3
 from unittest import mock
 
 import pytest
-
 from storage import (
+    SCHEMA_DDL,
     _parse_daily_entries,
     _parse_ltm_entries,
     close_db,
-    ensure_db,
     migrate_markdown_to_db,
     query_chunks_by_source,
 )
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing migration operations."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 
 @pytest.fixture
@@ -24,7 +35,8 @@ def db_dir(tmp_path):
 
 @pytest.fixture
 def db(db_dir):
-    conn = ensure_db()
+    db_path = db_dir / 'memory.db'
+    conn = _make_v2_db(db_path)
     yield conn
     close_db(conn)
 

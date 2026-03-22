@@ -704,7 +704,16 @@ class TestCreateDatabase:
         assert db_path.exists()
         import sqlite3
         conn = sqlite3.connect(str(db_path))
-        count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        # Schema-aware: query chunks for v2, data_points for v3+
+        tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if 'chunks' in tables:
+            count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        else:
+            count = conn.execute("SELECT COUNT(*) FROM data_points WHERE type = 'memory'").fetchone()[0]
         conn.close()
         assert count >= 1
 
