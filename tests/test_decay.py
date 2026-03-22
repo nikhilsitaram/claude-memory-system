@@ -5,6 +5,8 @@ Unit tests for decay.py
 Run with: python -m pytest tests/test_decay.py -v
 """
 
+import sqlite3
+import sys as _sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -36,10 +38,24 @@ from decay import (  # noqa: I001
     should_decay_entry,
 )
 from memory_utils import rebuild_projects_index_quiet
-import sys as _sys
+
 _SCRIPTS_DIR = str(__import__("pathlib").Path(__file__).parent.parent / "scripts")
 if _SCRIPTS_DIR not in _sys.path:
     _sys.path.insert(0, _SCRIPTS_DIR)
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing decay operations."""
+    from storage import SCHEMA_DDL
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
+
 
 # =============================================================================
 # Date Parsing Tests
@@ -686,7 +702,12 @@ class TestSalienceDecayIntegration:
         5. Verify: accessed entries have higher salience than unaccessed old entry
         6. Verify: cold old entry decays below archive threshold
         """
-        from storage import close_db, ensure_db, migrate_markdown_to_db, query_chunks_with_salience, update_chunk_salience
+        from storage import (
+            close_db,
+            migrate_markdown_to_db,
+            query_chunks_with_salience,
+            update_chunk_salience,
+        )
 
         db_path = tmp_path / "memory.db"
 
@@ -701,7 +722,7 @@ class TestSalienceDecayIntegration:
 
         with mock.patch("storage.get_db_path", return_value=db_path), \
              mock.patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
+            conn = _make_v2_db(db_path)
             stats = migrate_markdown_to_db(conn)
             assert stats.chunks_inserted == 3
             chunks_list = query_chunks_with_salience(conn)
@@ -717,7 +738,7 @@ class TestSalienceDecayIntegration:
             track_memory_access([recent_id, moderate_id])
 
         with mock.patch("storage.get_db_path", return_value=db_path):
-            conn2 = ensure_db()
+            conn2 = _make_v2_db(db_path)
             after_access = {c.id: c for c in query_chunks_with_salience(conn2)}
 
             from datetime import date as date_cls

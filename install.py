@@ -265,15 +265,31 @@ def create_database(script_dir: Path) -> None:
         if str(scripts_path) not in sys.path:
             sys.path.insert(0, str(scripts_path))
 
-        from storage import close_db, ensure_db, migrate_markdown_to_db
+        import sqlite3
 
-        conn = ensure_db()
+        from memory_utils import get_db_path
+        from storage import SCHEMA_DDL, _migrate_v2_to_v3, close_db, migrate_markdown_to_db
+
+        # Create v2 DB first (with chunks/nodes tables)
+        db_path = get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript(SCHEMA_DDL)
+        conn.execute('PRAGMA user_version=2')
+        conn.commit()
+
         try:
             stats = migrate_markdown_to_db(conn)
             print(f"Memory database: {stats.ltm_files_processed} LTM files, "
                   f"{stats.daily_files_processed} daily files, "
                   f"{stats.chunks_inserted} chunks indexed "
                   f"({stats.chunks_skipped} unchanged)")
+            # Migrate to v3 after population
+            _migrate_v2_to_v3(conn)
+            conn.commit()
         finally:
             close_db(conn)
     except Exception as e:

@@ -1343,13 +1343,34 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
     Scans global LTM, project LTMs, and daily files.
     Uses content_hash to skip chunks that already exist in the DB.
     Idempotent -- safe to run multiple times.
+    Schema-aware: queries chunks for v2, data_points for v3+.
     """
     stats = MigrationStats()
-    existing_hashes = {
+
+    # Check which table to query for existing hashes
+    tables = {
         row[0] for row in conn.execute(
-            'SELECT content_hash FROM chunks WHERE content_hash IS NOT NULL'
+            "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
+
+    if 'chunks' in tables:
+        # v2 schema
+        existing_hashes = {
+            row[0] for row in conn.execute(
+                'SELECT content_hash FROM chunks WHERE content_hash IS NOT NULL'
+            ).fetchall()
+        }
+    elif 'data_points' in tables:
+        # v3+ schema
+        existing_hashes = {
+            row[0] for row in conn.execute(
+                'SELECT content_hash FROM data_points WHERE type = \'memory\' AND content_hash IS NOT NULL'
+            ).fetchall()
+        }
+    else:
+        # Empty DB
+        existing_hashes = set()
 
     def _insert_chunks(chunks: list[ChunkRow]) -> None:
         for chunk in chunks:

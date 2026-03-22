@@ -1814,3 +1814,162 @@ class TestDataPointCRUD:
             conn.commit()
 
         conn.close()
+
+
+# ============================================================================
+# A4: Profile section migration
+# ============================================================================
+
+
+class TestMigrateProfiles:
+    """Tests for _migrate_profiles and migrate_profiles in storage.py."""
+
+    @pytest.fixture
+    def v3_conn(self, tmp_path):
+        """Return a bare v3-schema DB connection (without vec_data virtual table)."""
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL,
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+            CREATE TABLE IF NOT EXISTS edges (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL REFERENCES data_points(id),
+                target TEXT NOT NULL REFERENCES data_points(id),
+                relation TEXT NOT NULL,
+                reason TEXT,
+                weight REAL DEFAULT 1.0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
+            CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
+            CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_profile_sections_become_data_points(self, tmp_path, v3_conn):
+        """Profile sections in PROFILE_SECTIONS become data_points with type='profile'."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(
+            "# Global Long-Term Memory\n\n"
+            "## About Me\n- Senior dev\n- Likes Python\n\n"
+            "## Key Actions\n- stuff\n"
+        )
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+        assert "Senior dev" in profiles[0].content
+        assert profiles[0].salience == 1.0
+        assert profiles[0].consolidated == 1
+
+    def test_all_four_profile_sections_created(self, tmp_path, v3_conn):
+        """All four PROFILE_SECTIONS headers produce data_points when populated."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(
+            "# Global Long-Term Memory\n\n"
+            "## About Me\n- Python dev\n\n"
+            "## Current Projects\n- memory system\n\n"
+            "## Technical Environment\n- macOS\n\n"
+            "## Patterns & Preferences\n- TDD\n\n"
+            "## Other Section\n- ignored\n"
+        )
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 4
+        names = {p.name for p in profiles}
+        assert names == {"About Me", "Current Projects", "Technical Environment", "Patterns & Preferences"}
+
+    def test_empty_sections_skipped(self, tmp_path, v3_conn):
+        """Profile sections with no content produce no data_points."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text(
+            "# Global\n\n## About Me\n\n## Key Actions\n- stuff\n"
+        )
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 0
+
+    def test_missing_ltm_file_is_silent(self, tmp_path, v3_conn):
+        """If global LTM file does not exist, migration is a no-op (no error)."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        missing = tmp_path / "nonexistent.md"
+        _migrate_profiles(v3_conn, missing)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 0
+
+    def test_idempotent_profile_migration(self, tmp_path, v3_conn):
+        """Running migration twice does not create duplicate data_points."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text("# Global\n\n## About Me\n- Senior dev\n")
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+
+    def test_public_migrate_profiles_matches_private(self, tmp_path, v3_conn):
+        """migrate_profiles (public) delegates correctly to _migrate_profiles."""
+        from storage import migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text("# Global\n\n## About Me\n- Python dev\n")
+        migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+        assert profiles[0].scope == "user"
+        assert profiles[0].type == "profile"
+
+    def test_whitespace_only_section_skipped(self, tmp_path, v3_conn):
+        """Sections containing only whitespace/blank lines are skipped."""
+        from storage import _migrate_profiles, query_data_points_by_scope
+
+        ltm = tmp_path / "global-long-term-memory.md"
+        ltm.write_text("# Global\n\n## About Me\n   \n\n## Current Projects\n- active\n")
+        _migrate_profiles(v3_conn, ltm)
+        v3_conn.commit()
+
+        profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+        assert profiles[0].name == "Current Projects"
