@@ -23,23 +23,23 @@ if str(script_dir) not in sys.path:
 try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent
+    from mcp.types import TextContent, Tool
     HAS_MCP = True
 except ImportError:
     HAS_MCP = False
 
+from embeddings import _serialize_vector, embed_text, search_similar
 from storage import (
     DataPointRow,
     EdgeRow,
     ensure_db,
     insert_data_point,
     insert_edge,
+    invalidate_edge,
     query_data_point_by_id,
     query_edges_for_data_point,
     soft_delete_data_point,
-    invalidate_edge,
 )
-from embeddings import embed_text, _serialize_vector, search_similar
 
 TOOL_NAMES = ["search_memories", "write_memory", "delete_memory", "traverse_graph"]
 
