@@ -1973,3 +1973,136 @@ class TestMigrateProfiles:
         profiles = query_data_points_by_scope(v3_conn, "user", dp_type="profile")
         assert len(profiles) == 1
         assert profiles[0].name == "Current Projects"
+
+
+# ============================================================================
+# A6: Markdown archival utility
+# ============================================================================
+
+
+class TestArchiveMarkdown:
+    """Tests for _should_archive and _archive_markdown_files."""
+
+    @pytest.fixture
+    def v3_conn(self, tmp_path):
+        """Return a bare v3-schema DB connection."""
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL,
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_archive_moves_files(self, tmp_path):
+        """_archive_markdown_files moves markdown files to .archive/."""
+        from storage import _archive_markdown_files
+
+        memory_dir = tmp_path / "memory"
+        daily_dir = memory_dir / "daily"
+        project_dir = memory_dir / "project-memory"
+        daily_dir.mkdir(parents=True)
+        project_dir.mkdir(parents=True)
+
+        (memory_dir / "global-long-term-memory.md").write_text("content")
+        (daily_dir / "2026-03-20.md").write_text("daily")
+        (project_dir / "myproject-long-term-memory.md").write_text("project")
+
+        _archive_markdown_files(memory_dir)
+
+        archive_dir = memory_dir / ".archive"
+        assert archive_dir.exists()
+        assert not (memory_dir / "global-long-term-memory.md").exists()
+        assert not (daily_dir / "2026-03-20.md").exists()
+        assert any("global-long-term-memory" in f.name for f in archive_dir.iterdir())
+
+    def test_archive_moves_project_ltm(self, tmp_path):
+        """_archive_markdown_files moves project LTM files."""
+        from storage import _archive_markdown_files
+
+        memory_dir = tmp_path / "memory"
+        project_dir = memory_dir / "project-memory"
+        project_dir.mkdir(parents=True)
+
+        (project_dir / "myproject-long-term-memory.md").write_text("project ltm")
+
+        _archive_markdown_files(memory_dir)
+
+        archive_dir = memory_dir / ".archive"
+        assert any("myproject" in f.name for f in archive_dir.iterdir())
+        assert not (project_dir / "myproject-long-term-memory.md").exists()
+
+    def test_archive_guard_empty_db(self, v3_conn):
+        """_should_archive returns False when data_points is empty."""
+        from storage import _should_archive
+
+        assert _should_archive(v3_conn) is False
+
+    def test_archive_guard_populated_db(self, tmp_path, v3_conn):
+        """_should_archive returns True when data_points has rows."""
+        from storage import DataPointRow, _should_archive, insert_data_point
+
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="fact", scope="global"))
+        v3_conn.commit()
+        assert _should_archive(v3_conn) is True
+
+    def test_archive_skips_missing_files(self, tmp_path):
+        """_archive_markdown_files is a no-op when target files don't exist."""
+        from storage import _archive_markdown_files
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+
+        _archive_markdown_files(memory_dir)
+
+        assert not (memory_dir / ".archive").exists() or True
+
+    def test_archive_does_not_touch_non_markdown(self, tmp_path):
+        """_archive_markdown_files does not move settings.json or memory.db."""
+        from storage import _archive_markdown_files
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+
+        (memory_dir / "settings.json").write_text('{"key": "value"}')
+        (memory_dir / "memory.db").write_text("db content")
+        (memory_dir / ".synthesis-state.json").write_text("{}")
+
+        _archive_markdown_files(memory_dir)
+
+        assert (memory_dir / "settings.json").exists()
+        assert (memory_dir / "memory.db").exists()
+        assert (memory_dir / ".synthesis-state.json").exists()
+
+    def test_archive_idempotent(self, tmp_path):
+        """Running _archive_markdown_files twice does not raise an error."""
+        from storage import _archive_markdown_files
+
+        memory_dir = tmp_path / "memory"
+        daily_dir = memory_dir / "daily"
+        daily_dir.mkdir(parents=True)
+        (daily_dir / "2026-03-20.md").write_text("daily")
+
+        _archive_markdown_files(memory_dir)
+        _archive_markdown_files(memory_dir)

@@ -2499,26 +2499,24 @@ class TestApplyCrudOps:
         db_path = tmp_path / "memory.db"
         conn = _make_v2_db(db_path)
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                chunk = ChunkRow(content="project uses REST API for external", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
-                chunk_id = insert_chunk(conn, chunk)
-                conn.commit()
-            finally:
-                close_db(conn)
+        try:
+            chunk = ChunkRow(content="project uses REST API for external", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
 
-        # Add the old content to the LTM file
-        old_text = ltm_file.read_text()
-        ltm_file.write_text(old_text + "- (2026-01-01) [implement] project uses REST API for external\n")
+            # Add the old content to the LTM file
+            old_text = ltm_file.read_text()
+            ltm_file.write_text(old_text + "- (2026-01-01) [implement] project uses REST API for external\n")
 
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
-             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
-             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
-            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "project uses gRPC for external", "entities": ["gRPC"]}]
-            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
-        close_db(conn)
+            with patch("storage.get_db_path", return_value=db_path), \
+                 patch("storage.ensure_db", return_value=conn), \
+                 patch("storage.close_db"), \
+                 patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+                 patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+                ops = [{"action": "UPDATE", "id": chunk_id, "fact": "project uses gRPC for external", "entities": ["gRPC"]}]
+                warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+        finally:
+            close_db(conn)
 
         assert not any("not found" in w for w in warnings)
         content = ltm_file.read_text()
@@ -2565,35 +2563,28 @@ class TestApplyCrudOps:
         db_path = tmp_path / "memory.db"
         conn = _make_v2_db(db_path)
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                chunk = ChunkRow(content="deprecated fact to delete here", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
-                chunk_id = insert_chunk(conn, chunk)
-                conn.commit()
-            finally:
-                close_db(conn)
+        try:
+            chunk = ChunkRow(content="deprecated fact to delete here", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
 
-        # Add the content to the LTM
-        old = ltm_file.read_text()
-        ltm_file.write_text(old + "- (2026-01-01) [implement] deprecated fact to delete here\n")
+            # Add the content to the LTM
+            old = ltm_file.read_text()
+            ltm_file.write_text(old + "- (2026-01-01) [implement] deprecated fact to delete here\n")
 
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
-             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
-             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
-            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
-            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
-        close_db(conn)
+            with patch("storage.get_db_path", return_value=db_path), \
+                 patch("storage.ensure_db", return_value=conn), \
+                 patch("storage.close_db"), \
+                 patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+                 patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+                ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+                warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
 
-        assert not any("not found" in w for w in warnings)
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                result = query_chunk_by_id(conn, chunk_id)
-                assert result.salience == 0.0
-            finally:
-                close_db(conn)
+            assert not any("not found" in w for w in warnings)
+            result = query_chunk_by_id(conn, chunk_id)
+            assert result.salience == 0.0
+        finally:
+            close_db(conn)
         content = ltm_file.read_text()
         assert "Archived" in content
 
@@ -2761,41 +2752,35 @@ class TestBitemporalEdges:
         db_path = tmp_path / "memory.db"
         conn = _make_v2_db(db_path)
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                chunk = ChunkRow(
-                    content="fact with no edges",
-                    source_file="global-long-term-memory.md",
-                    source_type="ltm",
-                    scope="global",
-                    chunk_index=0,
-                    created_at="2026-01-01",
-                    entities=json.dumps([]),
-                )
-                chunk_id = insert_chunk(conn, chunk)
-                conn.commit()
-            finally:
-                close_db(conn)
+        try:
+            chunk = ChunkRow(
+                content="fact with no edges",
+                source_file="global-long-term-memory.md",
+                source_type="ltm",
+                scope="global",
+                chunk_index=0,
+                created_at="2026-01-01",
+                entities=json.dumps([]),
+            )
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
 
-        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact with no edges\n")
+            old_text = ltm_file.read_text()
+            ltm_file.write_text(old_text + "- (2026-01-01) [implement] fact with no edges\n")
 
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
-             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
-             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
-            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
-            warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
-        close_db(conn)
+            with patch("storage.get_db_path", return_value=db_path), \
+                 patch("storage.ensure_db", return_value=conn), \
+                 patch("storage.close_db"), \
+                 patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+                 patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+                ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+                warnings = apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
 
-        assert not any("error" in w.lower() for w in warnings)
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                result = query_chunk_by_id(conn, chunk_id)
-                assert result.salience == 0.0
-            finally:
-                close_db(conn)
+            assert not any("error" in w.lower() for w in warnings)
+            result = query_chunk_by_id(conn, chunk_id)
+            assert result.salience == 0.0
+        finally:
+            close_db(conn)
 
     def test_delete_only_invalidates_chunk_related_edges(self, tmp_path):
         """Only edges where both source AND target are chunk entities get invalidated.
@@ -2824,51 +2809,46 @@ class TestBitemporalEdges:
         db_path = tmp_path / "memory.db"
         conn = _make_v2_db(db_path)
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                insert_node(conn, NodeRow(name="entity-a", type="entity", scope="global", created_at="2026-01-01"))
-                insert_node(conn, NodeRow(name="entity-b", type="entity", scope="global", created_at="2026-01-01"))
-                insert_node(conn, NodeRow(name="unrelated-entity", type="entity", scope="global", created_at="2026-01-01"))
-                node_a = query_node_by_name_and_type(conn, "entity-a", "entity")
-                node_b = query_node_by_name_and_type(conn, "entity-b", "entity")
-                unrelated_node = query_node_by_name_and_type(conn, "unrelated-entity", "entity")
-                both_in_chunk_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=node_b.id, type="uses", created_at="2026-01-01"))
-                one_outside_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=unrelated_node.id, type="uses", created_at="2026-01-01"))
-                fully_unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=unrelated_node.id, type="self", created_at="2026-01-01"))
-                chunk = ChunkRow(
-                    content="fact about entity-a and entity-b",
-                    source_file="global-long-term-memory.md",
-                    source_type="ltm",
-                    scope="global",
-                    chunk_index=0,
-                    created_at="2026-01-01",
-                    entities=json.dumps(["entity-a", "entity-b"]),
-                )
-                chunk_id = insert_chunk(conn, chunk)
-                conn.commit()
-            finally:
-                close_db(conn)
+        try:
+            insert_node(conn, NodeRow(name="entity-a", type="entity", scope="global", created_at="2026-01-01"))
+            insert_node(conn, NodeRow(name="entity-b", type="entity", scope="global", created_at="2026-01-01"))
+            insert_node(conn, NodeRow(name="unrelated-entity", type="entity", scope="global", created_at="2026-01-01"))
+            node_a = query_node_by_name_and_type(conn, "entity-a", "entity")
+            node_b = query_node_by_name_and_type(conn, "entity-b", "entity")
+            unrelated_node = query_node_by_name_and_type(conn, "unrelated-entity", "entity")
+            both_in_chunk_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=node_b.id, type="uses", created_at="2026-01-01"))
+            one_outside_edge_id = insert_edge(conn, EdgeRow(source=node_a.id, target=unrelated_node.id, type="uses", created_at="2026-01-01"))
+            fully_unrelated_edge_id = insert_edge(conn, EdgeRow(source=unrelated_node.id, target=unrelated_node.id, type="self", created_at="2026-01-01"))
+            chunk = ChunkRow(
+                content="fact about entity-a and entity-b",
+                source_file="global-long-term-memory.md",
+                source_type="ltm",
+                scope="global",
+                chunk_index=0,
+                created_at="2026-01-01",
+                entities=json.dumps(["entity-a", "entity-b"]),
+            )
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
 
-        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] fact about entity-a and entity-b\n")
+            old_text = ltm_file.read_text()
+            ltm_file.write_text(old_text + "- (2026-01-01) [implement] fact about entity-a and entity-b\n")
 
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
-             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
-             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
-            ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
-            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            with patch("storage.get_db_path", return_value=db_path), \
+                 patch("storage.ensure_db", return_value=conn), \
+                 patch("storage.close_db"), \
+                 patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+                 patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+                ops = [{"action": "DELETE", "id": chunk_id, "reason": "Outdated"}]
+                apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                current = query_current_edges(conn)
-                current_ids = [e.id for e in current]
-                assert both_in_chunk_edge_id not in current_ids, "edge between two chunk entities should be invalidated"
-                assert one_outside_edge_id in current_ids, "edge with one non-chunk endpoint should be kept"
-                assert fully_unrelated_edge_id in current_ids, "fully unrelated edge should be kept"
-            finally:
-                close_db(conn)
+            current = query_current_edges(conn)
+            current_ids = [e.id for e in current]
+            assert both_in_chunk_edge_id not in current_ids, "edge between two chunk entities should be invalidated"
+            assert one_outside_edge_id in current_ids, "edge with one non-chunk endpoint should be kept"
+            assert fully_unrelated_edge_id in current_ids, "fully unrelated edge should be kept"
+        finally:
+            close_db(conn)
 
 
 # =============================================================================
@@ -2920,35 +2900,31 @@ class TestEntityExtraction:
 
         db_path = tmp_path / "memory.db"
         ltm_file = _make_ltm_file(tmp_path, "global")
+        conn = _make_v2_db(db_path)
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                chunk = ChunkRow(content="old lib usage", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", entities=json.dumps(["old-lib"]))
-                chunk_id = insert_chunk(conn, chunk)
-                conn.commit()
-            finally:
-                close_db(conn)
+        try:
+            chunk = ChunkRow(content="old lib usage", source_file="global-long-term-memory.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", entities=json.dumps(["old-lib"]))
+            chunk_id = insert_chunk(conn, chunk)
+            conn.commit()
 
-        ltm_file.write_text(ltm_file.read_text() + "- (2026-01-01) [implement] old lib usage\n")
+            old_text = ltm_file.read_text()
+            ltm_file.write_text(old_text + "- (2026-01-01) [implement] old lib usage\n")
 
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.ensure_db", return_value=conn), patch("storage.close_db"), \
-             patch("synthesis.get_global_memory_file", return_value=ltm_file), \
-             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
-            ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new lib api-client usage", "entities": ["new-lib", "api-client"]}]
-            apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
+            with patch("storage.get_db_path", return_value=db_path), \
+                 patch("storage.ensure_db", return_value=conn), \
+                 patch("storage.close_db"), \
+                 patch("synthesis.get_global_memory_file", return_value=ltm_file), \
+                 patch("synthesis.get_project_memory_dir", return_value=tmp_path / "project-memory"):
+                ops = [{"action": "UPDATE", "id": chunk_id, "fact": "new lib api-client usage", "entities": ["new-lib", "api-client"]}]
+                apply_memory_ops(ops, "2026-03-21", global_file=ltm_file, ltm_dir=tmp_path / "project-memory")
 
-        with patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            try:
-                result = query_chunk_by_id(conn, chunk_id)
-                updated = json.loads(result.entities)
-                assert "new-lib" in updated
-                assert "api-client" in updated
-                assert "old-lib" not in updated
-            finally:
-                close_db(conn)
+            result = query_chunk_by_id(conn, chunk_id)
+            updated = json.loads(result.entities)
+            assert "new-lib" in updated
+            assert "api-client" in updated
+            assert "old-lib" not in updated
+        finally:
+            close_db(conn)
 
     def test_add_without_entities_stores_null(self, tmp_path):
         """ADD op without entities key stores NULL (not empty array)."""

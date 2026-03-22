@@ -220,6 +220,8 @@ __all__ = [
     "PROFILE_SECTIONS",
     "_migrate_profiles",
     "migrate_profiles",
+    "_should_archive",
+    "_archive_markdown_files",
 ]
 
 
@@ -1509,3 +1511,49 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
 
     conn.commit()
     return stats
+
+
+# ============================================================================
+# A6: Markdown archival utility
+# ============================================================================
+
+
+def _should_archive(conn: sqlite3.Connection) -> bool:
+    """Return True if the data_points table has at least one row.
+
+    Used as a migration safety guard: archival should only proceed if the v3
+    migration successfully populated data_points.
+    """
+    count = conn.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
+    return count > 0
+
+
+def _archive_markdown_files(memory_dir: Path) -> None:
+    """Move markdown memory files to .archive/ subdirectory.
+
+    Moves:
+    - daily/*.md
+    - global-long-term-memory.md
+    - project-memory/*-long-term-memory.md
+
+    Preserves filenames with a timestamp prefix inside .archive/.
+    Skips files that don't exist. Non-markdown state files (settings.json,
+    memory.db, .synthesis-state.json) are never touched.
+    """
+    archive_dir = memory_dir / ".archive"
+    archive_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+    global_ltm = memory_dir / "global-long-term-memory.md"
+    if global_ltm.exists():
+        global_ltm.rename(archive_dir / f"global-long-term-memory-{timestamp}.md")
+
+    daily_dir = memory_dir / "daily"
+    if daily_dir.exists():
+        for f in daily_dir.glob("*.md"):
+            f.rename(archive_dir / f"daily-{f.name}")
+
+    project_dir = memory_dir / "project-memory"
+    if project_dir.exists():
+        for f in project_dir.glob("*-long-term-memory.md"):
+            f.rename(archive_dir / f"project-{f.name}")
