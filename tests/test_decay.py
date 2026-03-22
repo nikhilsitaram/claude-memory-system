@@ -686,7 +686,6 @@ class TestSalienceDecayIntegration:
         5. Verify: accessed entries have higher salience than unaccessed old entry
         6. Verify: cold old entry decays below archive threshold
         """
-        from unittest import mock  # noqa: I001
         from storage import close_db, ensure_db, migrate_markdown_to_db, query_chunks_with_salience, update_chunk_salience
 
         db_path = tmp_path / "memory.db"

@@ -105,6 +105,8 @@ def ensure_vec_table(conn) -> bool:
         sqlite_vec.load(conn)
     except Exception:
         return False
+    finally:
+        conn.enable_load_extension(False)
     conn.executescript(VEC_CHUNKS_DDL)
     conn.commit()
     return True

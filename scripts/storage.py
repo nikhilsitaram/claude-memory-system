@@ -819,13 +819,10 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
             _insert_chunks(chunks)
             stats.daily_files_processed += 1
 
-    # Backfill last_accessed for newly inserted chunks.
-    # _migrate_salience_data() runs in ensure_db() before chunks are inserted,
-    # so newly migrated chunks have last_accessed=NULL. Fix that here.
-    conn.execute(
-        "UPDATE chunks SET last_accessed = created_at "
-        "WHERE last_accessed IS NULL AND created_at IS NOT NULL"
-    )
+    # _migrate_salience_data() ran in ensure_db() before chunks were inserted,
+    # so newly migrated chunks have last_accessed=NULL. Re-run it now that
+    # chunks exist (idempotent: only rows with NULL are touched).
+    _migrate_salience_data(conn)
 
     conn.commit()
     return stats
