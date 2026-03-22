@@ -1053,3 +1053,403 @@ class TestV3Schema:
             assert fk[2] == 'data_points'  # table column
 
         conn.close()
+
+
+# ============================================================================
+# A2: DataPoint CRUD helpers
+# ============================================================================
+
+
+class TestDataPointCRUD:
+    """Tests for data_points table CRUD operations."""
+
+    def test_insert_and_query_by_id(self, tmp_path):
+        """insert_data_point inserts a row and query_data_point_by_id returns it."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import DataPointRow, insert_data_point, query_data_point_by_id
+
+            dp = DataPointRow(
+                type="observation",
+                content="User prefers pytest for testing",
+                scope="global",
+                entry_type="pattern",
+            )
+            dp_id = insert_data_point(conn, dp)
+            conn.commit()
+
+            result = query_data_point_by_id(conn, dp_id)
+            assert result is not None
+            assert result.id == dp_id
+            assert result.type == "observation"
+            assert result.content == "User prefers pytest for testing"
+            assert result.salience == 1.0
+            conn.close()
+
+    def test_query_data_points_with_type_filter(self, tmp_path):
+        """query_data_points filters by type and scope."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import DataPointRow, insert_data_point, query_data_points_by_scope
+
+            dp1 = DataPointRow(type="observation", content="A", scope="global")
+            dp2 = DataPointRow(type="entity", content="B", scope="global")
+            dp3 = DataPointRow(type="observation", content="C", scope="project-x")
+
+            insert_data_point(conn, dp1)
+            insert_data_point(conn, dp2)
+            insert_data_point(conn, dp3)
+            conn.commit()
+
+            results = query_data_points_by_scope(conn, "global", dp_type="observation")
+            assert len(results) == 1
+            assert results[0].content == "A"
+            conn.close()
+
+    def test_query_data_points_with_salience_filter(self, tmp_path):
+        """query_data_points filters by min_salience."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import DataPointRow, insert_data_point, query_data_points_by_scope
+
+            dp1 = DataPointRow(type="observation", content="A", scope="global", salience=1.0)
+            dp2 = DataPointRow(type="observation", content="B", scope="global", salience=0.3)
+            dp3 = DataPointRow(type="observation", content="C", scope="global", salience=0.6)
+
+            insert_data_point(conn, dp1)
+            insert_data_point(conn, dp2)
+            insert_data_point(conn, dp3)
+            conn.commit()
+
+            results = query_data_points_by_scope(conn, "global", min_salience=0.5)
+            assert len(results) == 2
+            contents = {r.content for r in results}
+            assert contents == {"A", "C"}
+            conn.close()
+
+    def test_soft_delete_data_point(self, tmp_path):
+        """soft_delete_data_point sets salience to 0.0."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import (
+                DataPointRow,
+                insert_data_point,
+                soft_delete_data_point,
+                query_data_point_by_id,
+            )
+
+            dp = DataPointRow(type="observation", content="Temporary", scope="global")
+            dp_id = insert_data_point(conn, dp)
+            conn.commit()
+
+            rowcount = soft_delete_data_point(conn, dp_id)
+            conn.commit()
+
+            assert rowcount == 1
+            result = query_data_point_by_id(conn, dp_id)
+            assert result.salience == 0.0
+            conn.close()
+
+    def test_query_data_point_by_id_nonexistent_returns_none(self, tmp_path):
+        """query_data_point_by_id returns None for nonexistent ID."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import query_data_point_by_id
+
+            result = query_data_point_by_id(conn, "nonexistent")
+            assert result is None
+            conn.close()
+
+    def test_update_data_point(self, tmp_path):
+        """update_data_point updates specified columns."""
+        db_path = tmp_path / "memory.db"
+        with mock.patch("storage.get_db_path", return_value=db_path):
+            conn = ensure_db()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS data_points (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    name TEXT,
+                    content TEXT,
+                    scope TEXT,
+                    entry_type TEXT,
+                    source_type TEXT,
+                    source_sessions TEXT,
+                    created_at TEXT NOT NULL,
+                    salience REAL DEFAULT 1.0,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    evidence_count INTEGER DEFAULT 1,
+                    consolidated INTEGER DEFAULT 0,
+                    content_hash TEXT,
+                    simhash INTEGER,
+                    entities TEXT,
+                    properties TEXT
+                );
+            """)
+            conn.commit()
+
+            from storage import (
+                DataPointRow,
+                insert_data_point,
+                update_data_point,
+                query_data_point_by_id,
+            )
+
+            dp = DataPointRow(type="observation", content="Old", scope="global")
+            dp_id = insert_data_point(conn, dp)
+            conn.commit()
+
+            rowcount = update_data_point(conn, dp_id, content="New", salience=0.8)
+            conn.commit()
+
+            assert rowcount == 1
+            result = query_data_point_by_id(conn, dp_id)
+            assert result.content == "New"
+            assert result.salience == 0.8
+            conn.close()
+
+    def test_query_edges_for_data_point_both_directions(self, tmp_path):
+        """query_edges_for_data_point returns edges where data_point is source or target."""
+        db_path = tmp_path / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript("""
+            CREATE TABLE data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL,
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+            CREATE TABLE edges (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL REFERENCES data_points(id),
+                target TEXT NOT NULL REFERENCES data_points(id),
+                relation TEXT NOT NULL,
+                reason TEXT,
+                weight REAL DEFAULT 1.0,
+                created_at TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+
+        from storage import (
+            DataPointRow,
+            insert_data_point,
+            query_edges_for_data_point,
+        )
+
+        dpA_id = insert_data_point(conn, DataPointRow(type="entity", name="A", scope="global"))
+        dpB_id = insert_data_point(conn, DataPointRow(type="entity", name="B", scope="global"))
+        dpC_id = insert_data_point(conn, DataPointRow(type="entity", name="C", scope="global"))
+        conn.commit()
+
+        # A -> B, C -> A (so A is source once, target once)
+        conn.execute(
+            "INSERT INTO edges (id, source, target, relation, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("e1", dpA_id, dpB_id, "related_to", "2026-03-01"),
+        )
+        conn.execute(
+            "INSERT INTO edges (id, source, target, relation, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("e2", dpC_id, dpA_id, "related_to", "2026-03-01"),
+        )
+        conn.commit()
+
+        edges = query_edges_for_data_point(conn, dpA_id, direction="both")
+        assert len(edges) == 2
+
+        edges_out = query_edges_for_data_point(conn, dpA_id, direction="outgoing")
+        assert len(edges_out) == 1
+        assert edges_out[0].source == dpA_id
+
+        edges_in = query_edges_for_data_point(conn, dpA_id, direction="incoming")
+        assert len(edges_in) == 1
+        assert edges_in[0].target == dpA_id
+
+        conn.close()
+
+    def test_query_edges_for_data_point_no_edges(self, tmp_path):
+        """query_edges_for_data_point returns empty list when no edges."""
+        db_path = tmp_path / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript("""
+            CREATE TABLE data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL,
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+            CREATE TABLE edges (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL REFERENCES data_points(id),
+                target TEXT NOT NULL REFERENCES data_points(id),
+                relation TEXT NOT NULL,
+                reason TEXT,
+                weight REAL DEFAULT 1.0,
+                created_at TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+
+        from storage import DataPointRow, insert_data_point, query_edges_for_data_point
+
+        dp_id = insert_data_point(conn, DataPointRow(type="entity", name="Isolated", scope="global"))
+        conn.commit()
+
+        edges = query_edges_for_data_point(conn, dp_id)
+        assert edges == []
+        conn.close()

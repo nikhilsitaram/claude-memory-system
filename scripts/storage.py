@@ -205,6 +205,14 @@ __all__ = [
     "query_current_edges",
     "query_edges_at_date",
     "query_edges_for_node",
+    "insert_data_point",
+    "query_data_point_by_id",
+    "query_data_points",
+    "query_data_points_by_scope",
+    "update_data_point",
+    "soft_delete_data_point",
+    "delete_data_point_soft",
+    "query_edges_for_data_point",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
@@ -790,6 +798,264 @@ def query_edges_for_node(
         (node_id, node_id),
     ).fetchall()
     return [_row_to_edge(r) for r in rows]
+
+
+# ============================================================================
+# DataPoint CRUD (v3 schema)
+# ============================================================================
+
+_DP_COLUMNS = (
+    "id, type, name, content, scope, entry_type, source_type, source_sessions, "
+    "created_at, salience, access_count, last_accessed, evidence_count, "
+    "consolidated, content_hash, simhash, entities, properties"
+)
+
+
+def _row_to_data_point(row: tuple) -> DataPointRow:
+    """Convert a raw SQLite row tuple to a DataPointRow dataclass.
+
+    Column order must match _DP_COLUMNS exactly.
+    """
+    return DataPointRow(
+        id=row[0], type=row[1], name=row[2], content=row[3],
+        scope=row[4], entry_type=row[5], source_type=row[6],
+        source_sessions=row[7], created_at=row[8], salience=row[9],
+        access_count=row[10], last_accessed=row[11], evidence_count=row[12],
+        consolidated=row[13], content_hash=row[14], simhash=row[15],
+        entities=row[16], properties=row[17],
+    )
+
+
+def insert_data_point(conn: sqlite3.Connection, row: DataPointRow) -> str:
+    """Insert a data_point row. Generates id, created_at, and content_hash.
+
+    Returns the data_point ID.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    dp_id = row.id or _generate_id()
+    created_at = row.created_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Generate content_hash from content or name
+    text_for_hash = row.content or row.name or ""
+    content_hash = row.content_hash or _content_hash(text_for_hash) if text_for_hash else None
+
+    conn.execute(
+        "INSERT INTO data_points "
+        "(id, type, name, content, scope, entry_type, source_type, source_sessions, "
+        "created_at, salience, access_count, last_accessed, evidence_count, "
+        "consolidated, content_hash, simhash, entities, properties) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            dp_id, row.type, row.name, row.content, row.scope, row.entry_type,
+            row.source_type, row.source_sessions, created_at, row.salience,
+            row.access_count, row.last_accessed, row.evidence_count,
+            row.consolidated, content_hash, row.simhash, row.entities,
+            row.properties,
+        ),
+    )
+    return dp_id
+
+
+def query_data_point_by_id(
+    conn: sqlite3.Connection, dp_id: str
+) -> Optional[DataPointRow]:
+    """Query a single data_point by ID. Returns None if not found."""
+    row = conn.execute(
+        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id = ?", (dp_id,)
+    ).fetchone()
+    return _row_to_data_point(row) if row else None
+
+
+def query_data_points(
+    conn: sqlite3.Connection,
+    *,
+    dp_type: Optional[str] = None,
+    scope: Optional[str] = None,
+    min_salience: Optional[float] = None,
+    limit: Optional[int] = None,
+) -> list[DataPointRow]:
+    """Query data_points with optional filters.
+
+    Args:
+        conn: Database connection.
+        dp_type: Filter by type (e.g., 'observation', 'entity').
+        scope: Filter by scope (e.g., 'global', 'project-x').
+        min_salience: Return only rows with salience >= this value.
+        limit: Maximum number of rows to return.
+
+    Returns:
+        List of DataPointRow instances.
+    """
+    conditions = []
+    params = []
+
+    if dp_type:
+        conditions.append("type = ?")
+        params.append(dp_type)
+    if scope:
+        conditions.append("scope = ?")
+        params.append(scope)
+    if min_salience is not None:
+        conditions.append("salience >= ?")
+        params.append(min_salience)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    limit_clause = f"LIMIT {limit}" if limit else ""
+
+    query = f"SELECT {_DP_COLUMNS} FROM data_points {where_clause} {limit_clause}"
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_data_point(r) for r in rows]
+
+
+def query_data_points_by_scope(
+    conn: sqlite3.Connection,
+    scope: str,
+    *,
+    dp_type: Optional[str] = None,
+    min_salience: Optional[float] = None,
+    limit: Optional[int] = None,
+) -> list[DataPointRow]:
+    """Query data_points for a given scope with optional filters.
+
+    Args:
+        conn: Database connection.
+        scope: Scope to filter by (e.g., 'global', 'project-x').
+        dp_type: Optional type filter.
+        min_salience: Optional minimum salience threshold.
+        limit: Optional maximum number of rows.
+
+    Returns:
+        List of DataPointRow instances.
+    """
+    return query_data_points(
+        conn, scope=scope, dp_type=dp_type, min_salience=min_salience, limit=limit
+    )
+
+
+def update_data_point(conn: sqlite3.Connection, dp_id: str, **kwargs) -> int:
+    """Update specified columns of a data_point row.
+
+    Args:
+        conn: Database connection.
+        dp_id: ID of the data_point to update.
+        **kwargs: Column-value pairs to update (e.g., content="new", salience=0.8).
+
+    Returns:
+        Number of rows affected (0 if not found, 1 if updated).
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    if not kwargs:
+        return 0
+
+    # Valid columns for update (exclude id and created_at)
+    valid_cols = {
+        "type", "name", "content", "scope", "entry_type", "source_type",
+        "source_sessions", "salience", "access_count", "last_accessed",
+        "evidence_count", "consolidated", "content_hash", "simhash",
+        "entities", "properties",
+    }
+
+    updates = []
+    params = []
+    for col, val in kwargs.items():
+        if col in valid_cols:
+            updates.append(f"{col} = ?")
+            params.append(val)
+
+    if not updates:
+        return 0
+
+    params.append(dp_id)
+    query = f"UPDATE data_points SET {', '.join(updates)} WHERE id = ?"
+    cursor = conn.execute(query, params)
+    return cursor.rowcount
+
+
+def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
+    """Soft-delete a data_point by setting salience to 0.0.
+
+    Args:
+        conn: Database connection.
+        dp_id: ID of the data_point to soft-delete.
+
+    Returns:
+        Number of rows affected (0 if not found, 1 if deleted).
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    cursor = conn.execute(
+        "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+    )
+    return cursor.rowcount
+
+
+# Alias for compatibility
+delete_data_point_soft = soft_delete_data_point
+
+
+def query_edges_for_data_point(
+    conn: sqlite3.Connection, data_point_id: str, direction: str = "both"
+) -> list[EdgeRow]:
+    """Query edges connected to a data_point.
+
+    Args:
+        conn: Database connection.
+        data_point_id: ID of the data_point.
+        direction: 'both' (default), 'outgoing' (source), or 'incoming' (target).
+
+    Returns:
+        List of EdgeRow instances.
+
+    Note: This function works with the v3 schema where edges reference data_points.
+          For v2 schema (edges reference nodes), use query_edges_for_node instead.
+    """
+    if direction == "outgoing":
+        condition = "source = ?"
+    elif direction == "incoming":
+        condition = "target = ?"
+    else:  # "both"
+        condition = "source = ? OR target = ?"
+
+    # Note: We're querying the v3 edges table which has (id, source, target, relation, reason, weight, created_at)
+    # But _EDGE_COLUMNS is for v2 schema. We need v3-compatible edge columns.
+    # For now, let's build a minimal EdgeRow with available v3 columns.
+
+    # V3 edges schema: id, source, target, relation, reason, weight, created_at
+    v3_edge_columns = "id, source, target, relation, reason, weight, created_at"
+
+    if direction == "both":
+        rows = conn.execute(
+            f"SELECT {v3_edge_columns} FROM edges WHERE {condition}",
+            (data_point_id, data_point_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {v3_edge_columns} FROM edges WHERE {condition}",
+            (data_point_id,),
+        ).fetchall()
+
+    # Map v3 edge columns to EdgeRow (adapting v2 structure for compatibility)
+    # v3: (id, source, target, relation, reason, weight, created_at)
+    # v2 EdgeRow: (id, source, target, type, fact, properties, created_at, valid_from, valid_to, expired_at, weight, source_sessions)
+    edges = []
+    for r in rows:
+        edges.append(EdgeRow(
+            id=r[0],
+            source=r[1],
+            target=r[2],
+            type=r[3],  # relation -> type
+            fact=r[4],  # reason -> fact
+            properties=None,
+            created_at=r[6],
+            valid_from=None,
+            valid_to=None,
+            expired_at=None,
+            weight=r[5],
+            source_sessions=None,
+        ))
+    return edges
 
 
 _LTM_ENTRY_RE = re.compile(
