@@ -743,3 +743,235 @@ class TestSessionContext:
         ).fetchall()
         edge_types = {e[0] for e in edges}
         assert "context_for" in edge_types
+
+
+# =============================================================================
+# TestV3PromptCleanup — HIGH-1: v3 prompt strips v2-only sections
+# =============================================================================
+
+
+class TestV3PromptCleanup:
+    """Tests that _run_synthesis_v3 removes v2-only sections before calling LLM."""
+
+    def _make_v2_prompt(self, tmp_path, date_label="synthesis-prompt-2026-03-22-12345"):
+        """Create a realistic v2-style prompt file with all three v2 sections."""
+        content = (
+            "You are a structured data extractor.\n\n"
+            "## Output Format\n\n"
+            "===PROJECT:myproject===\n"
+            "- [implement] Built something\n"
+            "===END===\n\n"
+            "## Delivery\n\n"
+            "Only use the Write and Bash tools — no other tools.\n\n"
+            "1. Write(`/tmp/synthesis-output-1234.txt`, <your structured output>)\n"
+            "2. Bash: `python3 ~/.claude/scripts/synthesis.py apply ...`\n\n"
+            "## Synthesis Instructions\n\n"
+            "Old v2 instructions here.\n\n"
+            "## Existing Long-Term Memory (for dedup)\n\n"
+            "(no existing LTM content)\n\n"
+            "## Session Transcripts\n\n"
+            "**Pending dates:** 2026-03-22\n\n"
+            "### Transcript: 2026-03-22\nSome transcript content.\n\n"
+            "## Reminder\n\n"
+            "Output only the structured format shown above. Start with ===PROJECT:...===.\n"
+        )
+        prompt_file = tmp_path / f"{date_label}.txt"
+        prompt_file.write_text(content)
+        return prompt_file
+
+    def test_output_format_section_removed(self, tmp_path):
+        """v3 prompt must not contain ## Output Format (v2 PROJECT block instructions)."""
+        from synthesis_cron import _run_synthesis_v3
+        prompt_file = self._make_v2_prompt(tmp_path)
+        captured_prompts = []
+
+        def fake_run(cmd, stdin, **kwargs):
+            captured_prompts.append(stdin.read())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", side_effect=fake_run), \
+             patch("synthesis_cron._log_error"):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert len(captured_prompts) == 1
+        assert "## Output Format" not in captured_prompts[0]
+
+    def test_delivery_section_removed(self, tmp_path):
+        """v3 prompt must not contain ## Delivery (Write/Bash tool instructions)."""
+        from synthesis_cron import _run_synthesis_v3
+        prompt_file = self._make_v2_prompt(tmp_path)
+        captured_prompts = []
+
+        def fake_run(cmd, stdin, **kwargs):
+            captured_prompts.append(stdin.read())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", side_effect=fake_run), \
+             patch("synthesis_cron._log_error"):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert len(captured_prompts) == 1
+        assert "## Delivery" not in captured_prompts[0]
+
+    def test_reminder_section_removed(self, tmp_path):
+        """v3 prompt must not contain ## Reminder (tells LLM to use PROJECT blocks)."""
+        from synthesis_cron import _run_synthesis_v3
+        prompt_file = self._make_v2_prompt(tmp_path)
+        captured_prompts = []
+
+        def fake_run(cmd, stdin, **kwargs):
+            captured_prompts.append(stdin.read())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", side_effect=fake_run), \
+             patch("synthesis_cron._log_error"):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert len(captured_prompts) == 1
+        assert "## Reminder" not in captured_prompts[0]
+
+    def test_synthesis_instructions_and_transcripts_retained(self, tmp_path):
+        """After stripping v2 sections, Synthesis Instructions and Transcripts must remain."""
+        from synthesis_cron import _run_synthesis_v3
+        prompt_file = self._make_v2_prompt(tmp_path)
+        captured_prompts = []
+
+        def fake_run(cmd, stdin, **kwargs):
+            captured_prompts.append(stdin.read())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", side_effect=fake_run), \
+             patch("synthesis_cron._log_error"):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert len(captured_prompts) == 1
+        prompt = captured_prompts[0]
+        assert "## Synthesis Instructions" in prompt
+        assert "## Session Transcripts" in prompt
+        assert "MEMORY_OPS" in prompt
+
+    def test_no_project_block_example_in_v3_prompt(self, tmp_path):
+        """v3 prompt must not instruct LLM to produce ===PROJECT:name=== blocks."""
+        from synthesis_cron import _run_synthesis_v3
+        prompt_file = self._make_v2_prompt(tmp_path)
+        captured_prompts = []
+
+        def fake_run(cmd, stdin, **kwargs):
+            captured_prompts.append(stdin.read())
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", side_effect=fake_run), \
+             patch("synthesis_cron._log_error"):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert len(captured_prompts) == 1
+        assert "===PROJECT:" not in captured_prompts[0]
+
+
+# =============================================================================
+# TestV3SessionContextScope — HIGH-2: session_context scope from MEMORY_OPS
+# =============================================================================
+
+
+class TestV3SessionContextScope:
+    """Tests that _run_synthesis_v3 uses the actual project scope, not date_label."""
+
+    def _make_prompt_file(self, tmp_path, date_label="synthesis-prompt-2026-03-22-99999"):
+        content = (
+            "## Synthesis Instructions\n\nv3 instructions\n\n"
+            "## Session Transcripts\n\n**Pending dates:** 2026-03-22\n\n"
+            "### Transcript: 2026-03-22\nSome work on myproject.\n"
+        )
+        prompt_file = tmp_path / f"{date_label}.txt"
+        prompt_file.write_text(content)
+        return prompt_file
+
+    def _make_memory_op(self, scope, action="ADD"):
+        from synthesis import MemoryOp
+        return MemoryOp(action=action, fact="some fact", scope=scope, entities=[])
+
+    def test_scope_taken_from_most_common_op_scope(self, tmp_path):
+        """session_context.scope should be the most frequent non-global op scope."""
+        from synthesis_cron import _run_synthesis_v3
+        from synthesis import SynthesisResult
+
+        prompt_file = self._make_prompt_file(tmp_path)
+        ops = [
+            self._make_memory_op("myproject"),
+            self._make_memory_op("myproject"),
+            self._make_memory_op("otherproject"),
+        ]
+        synth_result = SynthesisResult(memory_ops=ops)
+
+        written_scopes = []
+
+        def fake_write_session_context(conn, project_name, topics, session_id, entities=None):
+            written_scopes.append(project_name)
+            return "fake-dp-id"
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")), \
+             patch("synthesis.parse_synthesis_output", return_value=synth_result), \
+             patch("synthesis.apply_memory_ops_v3", return_value=[]), \
+             patch("synthesis_cron._write_session_context", side_effect=fake_write_session_context):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert written_scopes == ["myproject"]
+
+    def test_scope_falls_back_to_global_when_no_project_ops(self, tmp_path):
+        """When all ops have scope='global' or None, session_context uses 'global'."""
+        from synthesis_cron import _run_synthesis_v3
+        from synthesis import SynthesisResult
+
+        prompt_file = self._make_prompt_file(tmp_path)
+        ops = [
+            self._make_memory_op("global"),
+            self._make_memory_op(None),
+        ]
+        synth_result = SynthesisResult(memory_ops=ops)
+
+        written_scopes = []
+
+        def fake_write_session_context(conn, project_name, topics, session_id, entities=None):
+            written_scopes.append(project_name)
+            return "fake-dp-id"
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")), \
+             patch("synthesis.parse_synthesis_output", return_value=synth_result), \
+             patch("synthesis.apply_memory_ops_v3", return_value=[]), \
+             patch("synthesis_cron._write_session_context", side_effect=fake_write_session_context):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert written_scopes == ["global"]
+
+    def test_scope_not_prompt_filename_stem(self, tmp_path):
+        """session_context scope must never be the prompt file stem (date_label)."""
+        from synthesis_cron import _run_synthesis_v3
+        from synthesis import SynthesisResult
+
+        date_label = "synthesis-prompt-2026-03-22-99999"
+        prompt_file = self._make_prompt_file(tmp_path, date_label)
+        ops = [self._make_memory_op("myproject")]
+        synth_result = SynthesisResult(memory_ops=ops)
+
+        written_scopes = []
+
+        def fake_write_session_context(conn, project_name, topics, session_id, entities=None):
+            written_scopes.append(project_name)
+            return "fake-dp-id"
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        with patch("synthesis_cron.subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")), \
+             patch("synthesis.parse_synthesis_output", return_value=synth_result), \
+             patch("synthesis.apply_memory_ops_v3", return_value=[]), \
+             patch("synthesis_cron._write_session_context", side_effect=fake_write_session_context):
+            _run_synthesis_v3(conn, "sonnet", [str(prompt_file)])
+
+        assert written_scopes[0] != date_label
+        assert written_scopes[0] == "myproject"

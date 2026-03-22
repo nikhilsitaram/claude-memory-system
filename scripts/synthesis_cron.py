@@ -377,6 +377,23 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
                     rest = ""
                 prompt_text = parts[0] + "## Synthesis Instructions\n\n" + v3_instructions + rest
 
+        # Strip v2-only sections that contradict v3 MEMORY_OPS-only output.
+        # ## Output Format (shows ===PROJECT:name=== example),
+        # ## Delivery (tells LLM to use Write/Bash tools),
+        # ## Reminder (says to start with ===PROJECT:===).
+        # These sections appear before ## Synthesis Instructions so they may
+        # still be present in the reconstructed prompt_text above.
+        for section_header in ("## Output Format", "## Delivery", "## Reminder"):
+            if section_header in prompt_text:
+                sec_parts = prompt_text.split(section_header, 1)
+                if len(sec_parts) == 2:
+                    after = sec_parts[1]
+                    next_sec = after.find("\n## ")
+                    if next_sec != -1:
+                        prompt_text = sec_parts[0] + after[next_sec + 1:]
+                    else:
+                        prompt_text = sec_parts[0]
+
         import tempfile
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -419,6 +436,14 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
             apply_results = apply_memory_ops_v3(conn, synthesis_result.memory_ops)
             print(f"Applied {len(apply_results)} memory ops for {date_label}")
 
+            # Extract the most common non-global project scope from ops.
+            # date_label (prompt filename stem) is NOT the project name.
+            scope_counts = Counter(
+                op.scope for op in synthesis_result.memory_ops
+                if op.scope and op.scope != "global"
+            )
+            project_scope = scope_counts.most_common(1)[0][0] if scope_counts else "global"
+
             # Write session_context data_point
             topics = extract_topics(prompt_text)
             entities = [
@@ -426,7 +451,7 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
                 if op.entities for e in op.entities
             ]
             session_id = date_label
-            _write_session_context(conn, date_label, topics, session_id, entities)
+            _write_session_context(conn, project_scope, topics, session_id, entities)
         else:
             print(f"No MEMORY_OPS in v3 synthesis output for {date_label}")
 
