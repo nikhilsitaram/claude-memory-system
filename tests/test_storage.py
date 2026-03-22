@@ -983,3 +983,73 @@ class TestV3Schema:
                 raise
         finally:
             conn.close()
+
+    def test_v3_schema_adds_reason_to_edges(self, db_dir):
+        """SCHEMA_V3_DDL creates edges table with reason column and data_points refs."""
+        from storage import SCHEMA_V3_DDL
+
+        db_path = db_dir / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Execute v3 DDL (skip vec_data if sqlite-vec not available)
+        try:
+            conn.executescript(SCHEMA_V3_DDL)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "no such module: vec0" in str(e):
+                # sqlite-vec not available - create just data_points and edges
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS data_points (
+                        id TEXT PRIMARY KEY,
+                        type TEXT NOT NULL,
+                        name TEXT,
+                        content TEXT,
+                        scope TEXT,
+                        entry_type TEXT,
+                        source_type TEXT,
+                        source_sessions TEXT,
+                        created_at TEXT NOT NULL,
+                        salience REAL DEFAULT 1.0,
+                        access_count INTEGER DEFAULT 0,
+                        last_accessed TEXT,
+                        evidence_count INTEGER DEFAULT 1,
+                        consolidated INTEGER DEFAULT 0,
+                        content_hash TEXT,
+                        simhash INTEGER,
+                        entities TEXT,
+                        properties TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS edges (
+                        id TEXT PRIMARY KEY,
+                        source TEXT NOT NULL REFERENCES data_points(id),
+                        target TEXT NOT NULL REFERENCES data_points(id),
+                        relation TEXT NOT NULL,
+                        reason TEXT,
+                        weight REAL DEFAULT 1.0,
+                        created_at TEXT NOT NULL
+                    );
+                """)
+                conn.commit()
+            else:
+                raise
+
+        # Check edges table exists
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='edges'"
+        ).fetchone()
+        assert result is not None
+
+        # Check reason column exists in edges
+        cols = conn.execute("PRAGMA table_info(edges)").fetchall()
+        col_names = {col[1] for col in cols}
+        assert 'reason' in col_names
+
+        # Check that edges references data_points (verify foreign keys)
+        fk_list = conn.execute("PRAGMA foreign_key_list(edges)").fetchall()
+        # Should have 2 FKs (source and target) both referencing data_points
+        assert len(fk_list) == 2
+        for fk in fk_list:
+            # fk format: (id, seq, table, from, to, on_update, on_delete, match)
+            assert fk[2] == 'data_points'  # table column
+
+        conn.close()

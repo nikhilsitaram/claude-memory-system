@@ -136,6 +136,17 @@ CREATE TABLE IF NOT EXISTS data_points (
     properties TEXT
 );
 
+-- Edges table for relationships between data_points
+CREATE TABLE IF NOT EXISTS edges (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL REFERENCES data_points(id),
+    target TEXT NOT NULL REFERENCES data_points(id),
+    relation TEXT NOT NULL,
+    reason TEXT,
+    weight REAL DEFAULT 1.0,
+    created_at TEXT NOT NULL
+);
+
 -- Vector search layer for data_points
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
     embedding float[384],
@@ -150,6 +161,10 @@ CREATE INDEX IF NOT EXISTS idx_dp_salience ON data_points(salience);
 CREATE INDEX IF NOT EXISTS idx_dp_created ON data_points(created_at);
 CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
 CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
+
+-- Indexes for edges
+CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
+CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
 """
 
 __all__ = [
@@ -254,7 +269,7 @@ class EdgeRow:
     id: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class DataPointRow:
     """Represents a row in the data_points table (v3 schema)."""
     type: str
