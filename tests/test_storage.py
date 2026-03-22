@@ -1806,6 +1806,7 @@ class TestDataPointCRUD:
                 source TEXT NOT NULL REFERENCES data_points(id),
                 target TEXT NOT NULL REFERENCES data_points(id),
                 type TEXT NOT NULL,
+                reason TEXT,
                 fact TEXT,
                 properties TEXT,
                 created_at TEXT NOT NULL,
@@ -2130,3 +2131,114 @@ class TestArchiveMarkdown:
 
         _archive_markdown_files(memory_dir)
         _archive_markdown_files(memory_dir)
+
+
+# =============================================================================
+# TestProvenanceEdges — C4: Provenance edge creation helpers
+# =============================================================================
+
+import pytest
+
+
+class TestProvenanceEdges:
+    def _make_v3_db(self, tmp_path):
+        """Create a minimal v3 schema DB (data_points + edges) without vec0."""
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+            CREATE TABLE IF NOT EXISTS edges (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL REFERENCES data_points(id),
+                target TEXT NOT NULL REFERENCES data_points(id),
+                type TEXT NOT NULL,
+                reason TEXT,
+                fact TEXT,
+                properties TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                valid_from TEXT,
+                valid_to TEXT,
+                expired_at TEXT,
+                weight REAL DEFAULT 1.0,
+                source_sessions TEXT
+            );
+        """)
+        conn.commit()
+        return conn
+
+    def test_create_supersedes_edge(self, tmp_path):
+        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        conn = self._make_v3_db(tmp_path)
+        id_old = insert_data_point(conn, DataPointRow(type="memory", content="old"))
+        id_new = insert_data_point(conn, DataPointRow(type="memory", content="new"))
+        conn.commit()
+        create_provenance_edge(conn, id_new, id_old, "supersedes", "updated info")
+        conn.commit()
+        edges = conn.execute("SELECT type, reason FROM edges WHERE source=?", (id_new,)).fetchall()
+        assert len(edges) == 1
+        assert edges[0][0] == "supersedes"
+        assert edges[0][1] == "updated info"
+
+    def test_provenance_chain_multi_hop(self, tmp_path):
+        from storage import DataPointRow, insert_data_point, create_provenance_edge, query_provenance_chain
+        conn = self._make_v3_db(tmp_path)
+        id_a = insert_data_point(conn, DataPointRow(type="memory", content="A", id="a"))
+        id_b = insert_data_point(conn, DataPointRow(type="memory", content="B", id="b"))
+        id_c = insert_data_point(conn, DataPointRow(type="memory", content="C", id="c"))
+        conn.commit()
+        create_provenance_edge(conn, "b", "a", "supersedes", "B replaces A")
+        create_provenance_edge(conn, "c", "b", "supersedes", "C replaces B")
+        conn.commit()
+        chain = query_provenance_chain(conn, "c")
+        assert len(chain) >= 2
+        ids_in_chain = [c["target_id"] for c in chain]
+        assert "b" in ids_in_chain
+        assert "a" in ids_in_chain
+
+    def test_empty_chain(self, tmp_path):
+        from storage import DataPointRow, insert_data_point, query_provenance_chain
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="solo", id="solo"))
+        conn.commit()
+        chain = query_provenance_chain(conn, "solo")
+        assert len(chain) == 0
+
+    def test_self_reference_rejected(self, tmp_path):
+        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="self", id="x"))
+        conn.commit()
+        with pytest.raises(ValueError):
+            create_provenance_edge(conn, "x", "x", "supersedes", "self-ref")
+
+    @pytest.mark.parametrize("edge_type", ["supersedes", "contradicts", "led_to", "refines", "supports"])
+    def test_all_edge_types_valid(self, tmp_path, edge_type):
+        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="src", id="src"))
+        insert_data_point(conn, DataPointRow(type="memory", content="tgt", id="tgt"))
+        conn.commit()
+        create_provenance_edge(conn, "src", "tgt", edge_type, "test")
+        conn.commit()
+        row = conn.execute("SELECT type FROM edges WHERE source='src'").fetchone()
+        assert row[0] == edge_type

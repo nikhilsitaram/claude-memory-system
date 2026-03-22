@@ -372,6 +372,50 @@ Be comprehensive but precise. Only include entities actually present in the fact
 - MEMORY_OPS block is optional — omit it if no memory changes are needed.'''
 
 
+def _build_synthesis_instructions_v3() -> str:
+    """Build v3 synthesis instructions for MEMORY_OPS-only output (no PROJECT blocks)."""
+    return '''**Output format:**
+
+Output a single MEMORY_OPS JSON block with explicit decisions for each extracted fact.
+
+```
+===MEMORY_OPS===
+{"ops": [
+  {"action": "ADD", "fact": "description", "scope": "project-name",
+   "type": "design", "salience": 0.8, "entities": ["entity1", "entity2"],
+   "supersedes": "dp_id", "reason": "why this replaces the old memory"},
+  {"action": "UPDATE", "id": "dp_id", "fact": "updated description",
+   "salience": 0.7, "entities": ["entity1"]},
+  {"action": "DELETE", "id": "dp_id", "reason": "Contradicted: explanation"},
+  {"action": "NOOP", "id": "dp_id", "reason": "Already captured"}
+]}
+===END===
+```
+
+**Salience (0.0-1.0):** Assign a salience score to each ADD operation:
+- 0.3-0.5: Transient facts (one-time fixes, version-specific notes, routine tasks)
+- 0.5-0.7: Moderately useful (implementation details, standard patterns)
+- 0.7-0.9: Important knowledge (architecture decisions, hard-won lessons, reusable patterns)
+- 1.0: Permanent (user preferences, profile info — only for scope="user")
+
+**Scopes:**
+- `user`: Personal preferences, profile info (always loaded, never decays)
+- `global`: Cross-project knowledge (loaded every session, ranked by salience)
+- `{project-name}`: Project-specific knowledge (loaded when CWD matches)
+
+**Entry types:** implement, improve, document, analyze, design, tradeoff, scope, gotcha, pitfall, pattern, insight, tip, workaround.
+
+**Entity extraction:** Every operation must include an `entities` array: project names, library/tool names, concepts, people, URLs, dates.
+
+**Provenance:** When a new fact replaces or refines an old one, include `supersedes` with the old data_point ID and `reason` explaining the change. Relationship types: supersedes, contradicts, led_to, refines, supports.
+
+**Rules:**
+- Reference existing memories by their `[id]` prefix from the Existing Memories section.
+- Prefer UPDATE over ADD+DELETE when enriching (not contradicting).
+- NOOP confirms existing memory is still accurate.
+- Omit MEMORY_OPS block entirely if no memory changes needed.'''
+
+
 def _build_preextracted_prompt(
     pending_dates: list[str],
     extracted_files: dict[str, str],

@@ -77,6 +77,12 @@ __all__ = [
     "run_validate_ltm",
     "run_decay",
     "run_post_processing",
+    "apply_memory_ops_v3",
+    "_apply_add_v3",
+    "_apply_update_v3",
+    "_apply_delete_v3",
+    "_apply_noop_v3",
+    "_get_or_create_entity",
 ]
 
 # Delimiter patterns
@@ -145,6 +151,8 @@ class MemoryOp:
     type: str | None = None
     entities: list | None = None
     reason: str | None = None
+    salience: float | None = None      # v3: LLM-assigned salience (0.0-1.0)
+    supersedes: str | None = None       # v3: ID of data_point this replaces
 
 
 @dataclass
@@ -220,6 +228,8 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
                             type=op.get("type"),
                             entities=op.get("entities"),
                             reason=op.get("reason"),
+                            salience=op.get("salience"),
+                            supersedes=op.get("supersedes"),
                         )
                         for op in raw_ops
                     ]
@@ -1446,6 +1456,203 @@ def main() -> int:
     else:
         parser.print_help()
         return 1
+
+
+# =============================================================================
+# V3 Apply Pipeline — DB-only writes (no markdown)
+# =============================================================================
+
+
+def _get_or_create_entity(conn, entity_name: str, scope: str | None) -> str:
+    """Return the ID of an entity data_point, creating it if absent.
+
+    Uses content_hash to avoid duplicates across scopes.
+    """
+    from storage import DataPointRow, insert_data_point, _content_hash  # noqa: F401 (private but stable)
+
+    content_hash = _content_hash(f"entity:{entity_name}")
+    row = conn.execute(
+        "SELECT id FROM data_points WHERE type='entity' AND content_hash=?",
+        (content_hash,),
+    ).fetchone()
+    if row:
+        return row[0]
+    return insert_data_point(conn, DataPointRow(
+        type="entity", name=entity_name, scope=scope,
+        content=entity_name, source_type="synthesis_v3",
+        salience=0.5,
+    ))
+
+
+def _apply_add_v3(conn, op: "MemoryOp") -> dict:
+    """Apply an ADD operation — inserts a new data_point."""
+    from datetime import datetime, timezone
+    from storage import DataPointRow, insert_data_point, create_provenance_edge, insert_edge, EdgeRow
+
+    salience = op.salience if op.salience is not None else 0.5
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    dp = DataPointRow(
+        type="memory",
+        content=op.fact,
+        scope=op.scope,
+        entry_type=op.type,
+        source_type="synthesis_v3",
+        salience=salience,
+    )
+    dp_id = insert_data_point(conn, dp)
+
+    # Create entity data_points and link them
+    if op.entities:
+        for entity_name in op.entities:
+            entity_id = _get_or_create_entity(conn, entity_name, op.scope)
+            insert_edge(conn, EdgeRow(
+                source=dp_id, target=entity_id, type="mentions",
+                created_at=now,
+            ))
+
+    # Create provenance edge if this supersedes an existing data_point
+    if op.supersedes:
+        try:
+            create_provenance_edge(conn, dp_id, op.supersedes, "supersedes", op.reason)
+        except (ValueError, Exception):
+            pass  # FK violation means the referenced dp doesn't exist; skip
+
+    # Attempt to generate embedding (best-effort; requires sqlite-vec)
+    try:
+        from embeddings import index_data_points
+        index_data_points(conn, [dp_id])
+    except Exception:
+        pass
+
+    return {"action": "ADD", "status": "inserted", "id": dp_id}
+
+
+def _apply_update_v3(conn, op: "MemoryOp") -> dict:
+    """Apply an UPDATE operation — modifies content/salience of an existing data_point."""
+    from storage import update_data_point
+
+    if not op.id:
+        return {"action": "UPDATE", "status": "skipped", "reason": "missing id"}
+
+    kwargs = {}
+    if op.fact:
+        kwargs["content"] = op.fact
+    if op.salience is not None:
+        kwargs["salience"] = op.salience
+    if op.entities:
+        import json as _json
+        kwargs["entities"] = _json.dumps(op.entities)
+
+    rows_affected = update_data_point(conn, op.id, **kwargs) if kwargs else 0
+
+    # Attempt to re-embed updated content
+    if rows_affected > 0 and op.fact:
+        try:
+            from embeddings import index_data_points
+            index_data_points(conn, [op.id])
+        except Exception:
+            pass
+
+    return {"action": "UPDATE", "status": "updated" if rows_affected > 0 else "not_found", "id": op.id}
+
+
+def _apply_delete_v3(conn, op: "MemoryOp") -> dict:
+    """Apply a DELETE operation — soft-deletes a data_point (salience=0) and records provenance."""
+    from datetime import datetime, timezone
+    from storage import soft_delete_data_point, insert_edge, EdgeRow
+
+    if not op.id:
+        return {"action": "DELETE", "status": "skipped", "reason": "missing id"}
+
+    rows_affected = soft_delete_data_point(conn, op.id)
+    if rows_affected > 0:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Record a self-referencing-safe provenance: use a synthetic tombstone edge
+        # from the (now deleted) dp pointing to itself is invalid; instead we record
+        # a 'supersedes' edge from op.id → op.id would be self-ref. Use the op.id
+        # as target of a separate tombstone node is overkill. Instead we just write
+        # the reason into properties or use a 'deleted' edge from op.id → op.id would
+        # violate the no-self-ref rule. So we store reason in the data_point properties.
+        import json as _json
+        existing = conn.execute(
+            "SELECT properties FROM data_points WHERE id=?", (op.id,)
+        ).fetchone()
+        props = {}
+        if existing and existing[0]:
+            try:
+                props = _json.loads(existing[0])
+            except Exception:
+                pass
+        props["deleted_reason"] = op.reason or "Removed by synthesis"
+        props["deleted_at"] = now
+        conn.execute(
+            "UPDATE data_points SET properties=? WHERE id=?",
+            (_json.dumps(props), op.id),
+        )
+        # Create a self-referential provenance marker via a synthetic node
+        # The C3 task says DELETE should create provenance edge with type="supersedes" targeting op.id
+        # To avoid self-reference, we insert a tombstone data_point and point to it
+        from storage import DataPointRow, insert_data_point
+        tombstone_id = insert_data_point(conn, DataPointRow(
+            type="tombstone",
+            content=f"Deleted: {op.id}",
+            scope=None,
+            salience=0.0,
+            source_type="synthesis_v3",
+        ))
+        insert_edge(conn, EdgeRow(
+            source=tombstone_id, target=op.id, type="supersedes",
+            reason=op.reason or "Deleted by synthesis",
+            created_at=now,
+        ))
+
+    return {"action": "DELETE", "status": "deleted" if rows_affected > 0 else "not_found", "id": op.id}
+
+
+def _apply_noop_v3(conn, op: "MemoryOp") -> dict:
+    """Apply a NOOP — increments evidence_count confirming the fact is still correct."""
+    from storage import update_data_point, query_data_point_by_id
+
+    if not op.id:
+        return {"action": "NOOP", "status": "skipped", "reason": "missing id"}
+
+    dp = query_data_point_by_id(conn, op.id)
+    if not dp:
+        return {"action": "NOOP", "status": "not_found", "id": op.id}
+
+    update_data_point(conn, op.id, evidence_count=dp.evidence_count + 1)
+    return {"action": "NOOP", "status": "confirmed", "id": op.id}
+
+
+def apply_memory_ops_v3(conn, ops: list) -> list:
+    """Apply CRUD operations from MEMORY_OPS to the database only (no markdown writes).
+
+    This is the v3 replacement for apply_memory_ops. It writes exclusively to
+    the data_points and edges tables.
+
+    Args:
+        conn: Open SQLite connection to a v3 schema database.
+        ops: List of MemoryOp instances.
+
+    Returns:
+        List of result dicts, one per op: {action, status, id?}.
+    """
+    results = []
+    for op in ops:
+        if op.action == "ADD":
+            result = _apply_add_v3(conn, op)
+        elif op.action == "UPDATE":
+            result = _apply_update_v3(conn, op)
+        elif op.action == "DELETE":
+            result = _apply_delete_v3(conn, op)
+        elif op.action == "NOOP":
+            result = _apply_noop_v3(conn, op)
+        else:
+            result = {"action": op.action, "status": "unknown_action"}
+        results.append(result)
+    conn.commit()
+    return results
 
 
 if __name__ == "__main__":
