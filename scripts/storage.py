@@ -27,7 +27,7 @@ if str(script_dir) not in sys.path:
 
 from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_DDL = """\
 -- Graph layer
@@ -183,6 +183,7 @@ __all__ = [
     "close_db",
     "_get_schema_version",
     "_migrate_salience_data",
+    "_migrate_v2_to_v3",
     "insert_chunk",
     "query_chunks_by_scope",
     "query_chunks_by_source",
@@ -332,9 +333,221 @@ def _migrate_salience_data(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate from v2 schema (chunks+nodes) to v3 schema (unified data_points).
+
+    Steps:
+    1. Create data_points table
+    2. Copy chunks → data_points with type='memory'
+    3. Copy nodes → data_points with type='entity'
+    4. Add reason column to edges
+    5. Migrate vec_chunks → vec_data (if sqlite-vec available)
+    6. Verify edge integrity
+    7. Drop old chunks, nodes, vec_chunks tables
+    8. Set SCHEMA_VERSION=3
+
+    Idempotent: safe to run multiple times.
+    """
+    import json
+
+    # Guard: if data_points already exists, migration already done
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "data_points" in tables:
+        return
+
+    # Step 1: Create data_points table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS data_points (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            name TEXT,
+            content TEXT,
+            scope TEXT,
+            entry_type TEXT,
+            source_type TEXT,
+            source_sessions TEXT,
+            created_at TEXT NOT NULL,
+            salience REAL DEFAULT 1.0,
+            access_count INTEGER DEFAULT 0,
+            last_accessed TEXT,
+            evidence_count INTEGER DEFAULT 1,
+            consolidated INTEGER DEFAULT 0,
+            content_hash TEXT,
+            simhash INTEGER,
+            entities TEXT,
+            properties TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
+        CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
+        CREATE INDEX IF NOT EXISTS idx_dp_salience ON data_points(salience);
+        CREATE INDEX IF NOT EXISTS idx_dp_created ON data_points(created_at);
+        CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
+    """)
+
+    # Step 2: Copy chunks → data_points with type='memory'
+    # Build properties JSON from source_file and chunk_index
+    chunks = conn.execute(
+        "SELECT id, content, source_file, source_type, section, scope, entry_type, "
+        "chunk_index, created_at, content_hash, simhash, salience, access_count, "
+        "last_accessed, source_sessions, evidence_count, entities FROM chunks"
+    ).fetchall()
+
+    for chunk in chunks:
+        (
+            chunk_id, content, source_file, source_type, section, scope, entry_type,
+            chunk_index, created_at, content_hash, simhash, salience, access_count,
+            last_accessed, source_sessions, evidence_count, entities
+        ) = chunk
+
+        # Build properties JSON
+        properties = {}
+        if source_file:
+            properties["source_file"] = source_file
+        if chunk_index is not None:
+            properties["chunk_index"] = chunk_index
+        if section:
+            properties["section"] = section
+
+        properties_json = json.dumps(properties) if properties else None
+
+        conn.execute(
+            "INSERT INTO data_points "
+            "(id, type, content, scope, entry_type, source_type, created_at, "
+            "salience, access_count, last_accessed, content_hash, simhash, "
+            "source_sessions, evidence_count, entities, properties) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                chunk_id, "memory", content, scope, entry_type, source_type, created_at,
+                salience, access_count, last_accessed, content_hash, simhash,
+                source_sessions, evidence_count, entities, properties_json
+            )
+        )
+
+    # Step 3: Copy nodes → data_points with type='entity'
+    nodes = conn.execute(
+        "SELECT id, name, type, description, scope, access_count, last_accessed, "
+        "salience, created_at, content_hash, simhash, source_sessions, evidence_count, "
+        "consolidated FROM nodes"
+    ).fetchall()
+
+    for node in nodes:
+        (
+            node_id, name, node_type, description, scope, access_count, last_accessed,
+            salience, created_at, content_hash, simhash, source_sessions, evidence_count,
+            consolidated
+        ) = node
+
+        conn.execute(
+            "INSERT INTO data_points "
+            "(id, type, name, content, scope, created_at, salience, access_count, "
+            "last_accessed, content_hash, simhash, source_sessions, evidence_count, "
+            "consolidated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                node_id, "entity", name, description, scope, created_at, salience,
+                access_count, last_accessed, content_hash, simhash, source_sessions,
+                evidence_count, consolidated
+            )
+        )
+
+    # Step 4: Recreate edges table with data_points references and reason column
+    # Save existing edges data
+    edges_data = conn.execute(
+        "SELECT id, source, target, type, fact, properties, created_at, "
+        "valid_from, valid_to, expired_at, weight, source_sessions FROM edges"
+    ).fetchall()
+
+    # Drop old edges table (this will also drop its indexes)
+    conn.execute("DROP TABLE edges")
+
+    # Create new edges table with data_points references and reason column
+    conn.executescript("""
+        CREATE TABLE edges (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL REFERENCES data_points(id),
+            target TEXT NOT NULL REFERENCES data_points(id),
+            type TEXT NOT NULL,
+            reason TEXT,
+            fact TEXT,
+            properties TEXT,
+            created_at TEXT NOT NULL,
+            valid_from TEXT,
+            valid_to TEXT,
+            expired_at TEXT,
+            weight REAL DEFAULT 1.0,
+            source_sessions TEXT
+        );
+        CREATE INDEX idx_edges_source ON edges(source);
+        CREATE INDEX idx_edges_target ON edges(target);
+        CREATE INDEX idx_edges_valid ON edges(valid_to);
+    """)
+
+    # Restore edges data
+    for edge in edges_data:
+        conn.execute(
+            "INSERT INTO edges (id, source, target, type, fact, properties, created_at, "
+            "valid_from, valid_to, expired_at, weight, source_sessions) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            edge
+        )
+
+    # Step 5: Verify edge integrity
+    orphan_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE "
+        "source NOT IN (SELECT id FROM data_points) OR "
+        "target NOT IN (SELECT id FROM data_points)"
+    ).fetchone()[0]
+
+    if orphan_count > 0:
+        raise ValueError(
+            f"Migration integrity error: {orphan_count} edges reference "
+            "non-existent data_points"
+        )
+
+    # Step 6: Migrate vec_chunks → vec_data (if sqlite-vec available)
+    if "vec_chunks" in tables:
+        try:
+            # Create vec_data virtual table
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+                    embedding float[384],
+                    +data_point_id TEXT,
+                    +type TEXT
+                )
+            """)
+            # Copy data: chunk_id → data_point_id, source_type → type
+            conn.execute(
+                "INSERT INTO vec_data(embedding, data_point_id, type) "
+                "SELECT embedding, chunk_id, source_type FROM vec_chunks"
+            )
+            # Drop old vec_chunks table
+            conn.execute("DROP TABLE vec_chunks")
+        except sqlite3.OperationalError as e:
+            # sqlite-vec may not be available, skip vector migration
+            if "no such module: vec0" not in str(e):
+                raise
+
+    # Step 7: Drop old tables
+    conn.execute("DROP TABLE IF EXISTS chunks")
+    conn.execute("DROP TABLE IF EXISTS nodes")
+
+    # Step 8: Set schema version to 3
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
     if current_version < 2:
         _migrate_salience_data(conn)
+    if current_version < 3:
+        _migrate_v2_to_v3(conn)
 
 
 def ensure_db() -> sqlite3.Connection:
