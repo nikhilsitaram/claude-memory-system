@@ -156,6 +156,7 @@ def link_scripts(script_dir: Path) -> None:
         "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
         "backfill.py",  # One-time entity re-extraction for existing chunks
+        "web_app.py",  # Web frontend for browsing and managing memory
     ]
 
     for script_name in scripts_to_link:
@@ -235,6 +236,15 @@ def copy_templates(script_dir: Path) -> None:
         if src.exists():
             shutil.copy2(src, templates_dir / template_name)
     print("Copied templates to ~/.claude/memory/templates/")
+
+    # Copy web frontend templates
+    web_templates_src = script_dir / "templates" / "web"
+    web_templates_dest = templates_dir / "web"
+    if web_templates_src.exists():
+        web_templates_dest.mkdir(parents=True, exist_ok=True)
+        for f in web_templates_src.iterdir():
+            shutil.copy2(f, web_templates_dest / f.name)
+        print("Copied web frontend templates")
 
     # Copy global-long-term-memory.md to memory root if it doesn't exist
     long_term_file = memory_dir / "global-long-term-memory.md"
@@ -625,6 +635,9 @@ def print_success_message() -> None:
     print("  - daily/                      (recent session summaries)")
     print()
     print("Settings file: ~/.claude/memory/settings.json")
+    print()
+    print("  Web UI:     python3 ~/.claude/scripts/web_app.py")
+    print("              Opens http://localhost:8742")
     print()
     print("Start a new Claude Code session to activate the memory system.")
 
