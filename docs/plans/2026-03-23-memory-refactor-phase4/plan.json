@@ -1,0 +1,427 @@
+{
+  "schema": 1,
+  "status": "Not Yet Started",
+  "workflow": "create-pr",
+  "goal": "Fix broken salience lifecycle (reinforcement + decay on data_points), deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory injection, daily memory consolidation, enhanced health monitoring, epistemic metadata, secret sanitization, v2 dead code cleanup, and retrieval benchmarking.",
+  "architecture": "Four sequential phases: (A) Salience lifecycle fix + search foundation + health + v2 cleanup -- port reinforcement and decay to v3 data_points, add FTS5 virtual table + RRF hybrid search, secret sanitization, hamming distance fix, extended health monitoring, remove dead v2 code. (B) Proactive retrieval -- UserPromptSubmit hook for per-prompt memory injection, epistemic metadata columns (certainty, validity_context), certainty integration into decay/scoring/synthesis. (C) Consolidation -- batch supersession pipeline with edge-aware clustering, LLM merge/skip decisions, daily scheduling piggybacked on synthesis_cron. (D) Benchmarking -- retrieval benchmark harness with precision@5, recall@5, NDCG@10, MRR, regression detection.",
+  "tech_stack": "Python 3.9+, SQLite WAL mode (FTS5 + sqlite-vec), FastEmbed, pytest, headless claude -p for LLM merge decisions",
+  "phases": [
+    {
+      "letter": "A",
+      "name": "Salience Lifecycle + Search Foundation + Health + V2 Cleanup",
+      "status": "Not Started",
+      "depends_on": [],
+      "rationale": "Everything else depends on working salience (B needs decay rates for certainty, C needs decay to avoid consolidating already-dead memories), hybrid search (B's prompt_recall uses it, C's clustering uses vector KNN), and clean v2 removal (dead code paths confuse consumers). No LLM dependency -- pure DB/code work.",
+      "tasks": [
+        {
+          "id": "A1",
+          "name": "Port salience reinforcement to v3 data_points",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/load_memory.py"
+            ],
+            "test": [
+              "tests/test_load_memory.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_load_memory.py -v -k 'reinforcement or associative'",
+          "done_when": "_batch_update_data_point_access applies diminishing-returns salience reinforcement (REINFORCEMENT_ETA=0.18) and associative graph-neighbor boosting on entity data_points via edges. Tests verify salience increases on access, associative boost propagates to connected entities, and capped at 1.0."
+        },
+        {
+          "id": "A2",
+          "name": "Port tiered decay to v3 data_points",
+          "status": "pending",
+          "depends_on": [
+            "A1"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/decay.py",
+              "scripts/synthesis_cron.py"
+            ],
+            "test": [
+              "tests/test_decay.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_decay.py -v -k 'data_points'",
+          "done_when": "New decay_data_points(conn, dry_run=False) function applies tiered exponential decay (hot/warm/cold) to data_points with type='memory' and salience > 0.05. Protected types: profile, consolidated=1, scope='user'. Integrated into synthesis_cron.py as a post-step (runs on every invocation, no interval gate). Tests verify tier classification, decay formula, protection rules, and dry_run mode."
+        },
+        {
+          "id": "A3",
+          "name": "Remove v2 dead code from synthesis.py, embeddings.py, load_memory.py, and backfill.py",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/synthesis.py",
+              "scripts/embeddings.py",
+              "scripts/load_memory.py",
+              "scripts/backfill.py",
+              "scripts/decay.py"
+            ],
+            "test": [
+              "tests/test_synthesis.py",
+              "tests/test_embeddings.py",
+              "tests/test_load_memory.py",
+              "tests/test_backfill.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis.py tests/test_embeddings.py tests/test_load_memory.py tests/test_backfill.py -v",
+          "done_when": "synthesis.py: _apply_add/_apply_update/_apply_delete/_apply_noop/apply_memory_ops/run_decay removed from code and __all__. embeddings.py: index_chunks/index_chunks_by_source/delete_vec_chunks removed from code and __all__. load_memory.py: _execute_with_retry/track_memory_access removed, imports of batch_update_access/update_chunk_salience/update_node_salience/query_neighbor_nodes removed. backfill.py: file emptied or deleted (dead code targeting chunks table). decay.py: markdown-only run()/decay_file()/append_to_archive()/purge_old_archives() marked deprecated with warnings. Tests for removed functions deleted or updated. Full test suite passes."
+        },
+        {
+          "id": "A4",
+          "name": "Add FTS5 virtual table with migration backfill",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/storage.py"
+            ],
+            "test": [
+              "tests/test_storage.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_storage.py -v -k 'fts'",
+          "done_when": "storage.py defines FTS5_DDL constant creating fts_data virtual table (content, data_point_id UNINDEXED, scope UNINDEXED, tokenize='porter unicode61'). ensure_db() creates fts_data table. Migration backfills existing data_points content into fts_data. FTS5 helper functions: fts_insert(conn, dp_id, content, scope), fts_delete(conn, dp_id), fts_search(conn, query, scope, limit). Tests verify: table creation, insert/search round-trip, porter stemming works, delete removes from index, migration backfill populates existing data_points, scope filtering."
+        },
+        {
+          "id": "A5",
+          "name": "Implement RRF hybrid search in embeddings.py",
+          "status": "pending",
+          "depends_on": [
+            "A4"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/embeddings.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_embeddings.py -v -k 'hybrid or rrf or fts'",
+          "done_when": "New search_hybrid(conn, query, scope, top_k) function: runs FTS5 BM25 query via fts_search(), runs vec_data KNN via existing search_similar(), fuses via RRF formula (1/(k+rank_bm25) + 1/(k+rank_vec), k=60), applies recency + salience weights, returns top_k ScoredDataPoint results. Fallback chain: both->RRF, vector-only->vector, FTS5-only->BM25, neither->SQL ranked. Tests verify: RRF fusion with both sources, each fallback tier, graceful degradation, score ordering."
+        },
+        {
+          "id": "A6",
+          "name": "Wire hybrid search into memory_server.py",
+          "status": "pending",
+          "depends_on": [
+            "A5"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/memory_server.py"
+            ],
+            "test": [
+              "tests/test_memory_server.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_memory_server.py -v -k 'search'",
+          "done_when": "_search_memories uses search_hybrid() instead of search_similar() directly. SQL fallback (_sql_ranked_search) still works when hybrid returns nothing. Tests verify: hybrid path called when available, fallback to SQL ranked, result format unchanged."
+        },
+        {
+          "id": "A7",
+          "name": "Add FTS5 sync to write and delete paths",
+          "status": "pending",
+          "depends_on": [
+            "A4"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/memory_server.py",
+              "scripts/synthesis.py",
+              "scripts/storage.py"
+            ],
+            "test": [
+              "tests/test_memory_server.py",
+              "tests/test_synthesis.py",
+              "tests/test_storage.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_memory_server.py tests/test_synthesis.py tests/test_storage.py -v -k 'fts'",
+          "done_when": "FTS5 index stays in sync: memory_server._write_memory calls fts_insert after data_point insert. synthesis._apply_add_v3 calls fts_insert. synthesis._apply_update_v3 calls fts_delete + fts_insert. storage.soft_delete_data_point calls fts_delete. Tests verify: write creates FTS entry, update replaces FTS entry, delete removes FTS entry."
+        },
+        {
+          "id": "A8",
+          "name": "Implement secret sanitization",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/memory_utils.py",
+              "scripts/memory_server.py",
+              "scripts/synthesis.py",
+              "scripts/load_memory.py"
+            ],
+            "test": [
+              "tests/test_memory_utils.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_memory_utils.py -v -k 'sanitize'",
+          "done_when": "New sanitize_secrets(text) function in memory_utils.py detects and replaces: AWS keys (AKIA...), API keys (sk-..., sk_live_, sk_test_), connection strings (postgres://...), JWTs (eyJ...), private key headers, generic secret patterns (token=..., password=...). Returns text with [REDACTED:<type>] replacements. Integrated at: write_memory (before store), apply_memory_ops_v3 (before DB write), load_memory.py (before SessionStart injection). Tests verify each pattern detected, non-secret text passes through unchanged, edge cases (partial matches, embedded in URLs)."
+        },
+        {
+          "id": "A9",
+          "name": "Fix hamming distance signed integer bug",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/simhash.py"
+            ],
+            "test": [
+              "tests/test_simhash.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_simhash.py -v -k 'signed or guard or negative'",
+          "done_when": "hamming_distance(a, b) raises ValueError when either argument is negative, with message explaining SQLite signed int issue and cast instruction (val & 0xFFFFFFFFFFFFFFFF). are_near_duplicates also protected via hamming_distance. Tests verify: negative a raises, negative b raises, both negative raises, error message includes cast hint, non-negative values still work correctly."
+        },
+        {
+          "id": "A10",
+          "name": "Extend health monitoring with new metrics and SessionStart alerts",
+          "status": "pending",
+          "depends_on": [
+            "A2"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/health.py",
+              "scripts/load_memory.py",
+              "scripts/web_app.py",
+              "templates/web/index.html"
+            ],
+            "test": [
+              "tests/test_health.py",
+              "tests/test_web_app.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_health.py tests/test_web_app.py -v",
+          "done_when": "HealthReport dataclass extended with: memories_by_scope (dict), memories_by_type (dict), consolidated_count (int), last_consolidation (str|None), last_synthesis (str|None), synthesis_errors_7d (int), never_accessed_pct (float), oldest_memory_days (int), edges_per_entity (float). health_report() populates all new fields via SQL queries. health_alerts() adds: 80%+ cold ratio, no synthesis in 7+ days, empty DB, no new edges in 7+ days. load_memory.py appends '## Health Alerts' section to SessionStart output when alerts exist. web_app._get_stats() returns extended stats. Dashboard HTML shows health summary row. Tests verify all new fields populated correctly and alerts trigger at correct thresholds."
+        }
+      ]
+    },
+    {
+      "letter": "B",
+      "name": "Proactive Retrieval + Epistemic Metadata",
+      "status": "Not Started",
+      "depends_on": [
+        "A"
+      ],
+      "rationale": "Depends on Phase A for hybrid search (prompt_recall uses search_hybrid) and working decay (certainty modulates decay rates). Epistemic metadata columns must exist before consolidation (Phase C) can inherit max certainty from merged members.",
+      "tasks": [
+        {
+          "id": "B1",
+          "name": "Add epistemic metadata columns (certainty, validity_context) with migration",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/storage.py"
+            ],
+            "test": [
+              "tests/test_storage.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_storage.py -v -k 'certainty or epistemic'",
+          "done_when": "storage.py adds two columns to data_points via ALTER TABLE in migration: certainty INTEGER DEFAULT NULL, validity_context TEXT DEFAULT NULL. DataPointRow dataclass gains certainty and validity_context fields. SCHEMA_V3_DDL updated for fresh installs. Migration detects missing columns and adds them idempotently. Tests verify: columns exist after migration, DataPointRow round-trips with certainty values, fresh DB has columns, migration is idempotent."
+        },
+        {
+          "id": "B2",
+          "name": "Integrate certainty into decay, scoring, synthesis, and write_memory",
+          "status": "pending",
+          "depends_on": [
+            "B1"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/decay.py",
+              "scripts/embeddings.py",
+              "scripts/synthesis.py",
+              "scripts/memory_server.py"
+            ],
+            "test": [
+              "tests/test_decay.py",
+              "tests/test_embeddings.py",
+              "tests/test_synthesis.py",
+              "tests/test_memory_server.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_decay.py tests/test_embeddings.py tests/test_synthesis.py tests/test_memory_server.py -v -k 'certainty'",
+          "done_when": "decay_data_points: certainty 4-5 immune to decay, certainty 1-2 decay at 2x rate. score_memory/search_hybrid: salience modulated by certainty (salience * (0.6 + 0.1 * certainty)). synthesis: MemoryOp gains certainty field, _apply_add_v3 writes certainty from LLM output (default 2). write_memory MCP tool: accepts optional certainty param (default 3). Tests verify each integration point."
+        },
+        {
+          "id": "B3",
+          "name": "Create prompt_recall.py UserPromptSubmit hook",
+          "status": "pending",
+          "depends_on": [
+            "B2"
+          ],
+          "files": {
+            "create": [
+              "scripts/prompt_recall.py"
+            ],
+            "modify": [],
+            "test": [
+              "tests/test_prompt_recall.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_prompt_recall.py -v",
+          "done_when": "New scripts/prompt_recall.py reads stdin JSON with prompt field. Relevance gate skips: prompts <15 chars, >500 chars, confirmation patterns (yes/ok/go ahead/looks good), skill invocations (starts with /). Calls search_hybrid() for relevant prompts. Session-scoped dedup via state file (~/.claude/memory/.prompt-recall-state-{session_id}) tracking last 5 injected IDs -- skips if top result already injected within last 3 prompts. Output: 1-3 memories as '[memory] Related context:' lines with certainty and scope, ~500 token budget. Stale state files (>24h) cleaned up. Tests verify: relevance gate (each skip condition), search integration (mocked), dedup logic, output format, state file lifecycle."
+        },
+        {
+          "id": "B4",
+          "name": "Register UserPromptSubmit hook in install.py",
+          "status": "pending",
+          "depends_on": [
+            "B3"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "install.py"
+            ],
+            "test": [
+              "tests/test_install.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_install.py -v -k 'hook or prompt_recall'",
+          "done_when": "install.py merge_hooks() adds UserPromptSubmit hook entry that runs prompt_recall.py with timeout 2s (must be fast). link_scripts() includes prompt_recall.py. Tests verify: hook registered in settings, correct command path, timeout set, prompt_recall.py in linked scripts list."
+        }
+      ]
+    },
+    {
+      "letter": "C",
+      "name": "Memory Consolidation Pipeline",
+      "status": "Not Started",
+      "depends_on": [
+        "A",
+        "B"
+      ],
+      "rationale": "Depends on Phase A for hybrid search (clustering uses vector KNN), working decay (avoids consolidating already-dead memories), and FTS5 sync (new merged data_points need FTS entries). Depends on Phase B for certainty (merged result inherits max certainty). This is the most complex phase with LLM dependency.",
+      "tasks": [
+        {
+          "id": "C1",
+          "name": "Implement consolidation pipeline core (clustering, scoring, LLM merge/skip)",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [
+              "scripts/consolidation.py"
+            ],
+            "modify": [],
+            "test": [
+              "tests/test_consolidation.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_consolidation.py -v",
+          "done_when": "New scripts/consolidation.py with: find_clusters(conn, similarity_threshold, max_clusters) -- queries active memories, gets embeddings from vec_data, builds KNN similarity graph, extracts connected components, excludes pairs with contradicts/supersedes edges, enforces min_size=2 and max_size=15 (splits by removing weakest edges). score_clusters(clusters) -- ranks by 0.6*count + 0.3*max_recency + 0.1*avg_salience. merge_cluster(cluster_members) -- calls headless claude -p with merge prompt including ISO datetimes, parses MERGE/SKIP JSON response. write_merge_result(conn, merged_fact, members, entities, certainty) -- inserts new data_point with source_type='consolidation', creates supersedes edges to each original, soft-deletes originals, syncs FTS5. run_consolidation(conn, settings, backfill=False) -- orchestrates full pipeline with cluster cap (15 incremental, 30 backfill). Tests verify: clustering with similarity threshold, edge-aware exclusion, cluster scoring, merge result DB writes, supersedes edge creation, soft-delete of originals, backfill mode, SKIP handling."
+        },
+        {
+          "id": "C2",
+          "name": "Integrate consolidation into synthesis_cron.py with daily gate",
+          "status": "pending",
+          "depends_on": [
+            "C1"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/synthesis_cron.py",
+              "scripts/storage.py"
+            ],
+            "test": [
+              "tests/test_synthesis_cron.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis_cron.py -v -k 'consolidation'",
+          "done_when": "synthesis_cron.py calls run_consolidation() as a post-step after synthesis completes. Gated by: consolidation.intervalHours (default 24) elapsed since last_consolidation metadata key in DB, AND at least consolidation.minMemories (default 5) active unconsolidated memories. First-ever run detected by missing last_consolidation key -- uses backfill mode (higher cluster cap of 30). Updates last_consolidation timestamp in DB metadata after successful run. Tests verify: gate respects interval, gate respects min memories, first-run backfill detection, metadata timestamp updated, skips when gate not met."
+        },
+        {
+          "id": "C3",
+          "name": "Add consolidation settings to DEFAULT_SETTINGS and install.py",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/memory_utils.py",
+              "install.py"
+            ],
+            "test": [
+              "tests/test_memory_utils.py",
+              "tests/test_install.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_memory_utils.py tests/test_install.py -v -k 'consolidation or settings'",
+          "done_when": "DEFAULT_SETTINGS in memory_utils.py gains 'consolidation' key with: intervalHours=24, minMemories=5, similarityThreshold=0.80, maxClusters=15, backfillMaxClusters=30, model='sonnet'. Also gains 'recall' key with: maxPromptLength=500, minPromptLength=15, maxInjectionsPerPrompt=3, maxTokenBudget=500. install.py links consolidation.py in link_scripts(). Tests verify: defaults present in loaded settings, consolidation.py in link list."
+        },
+        {
+          "id": "C4",
+          "name": "Create /consolidate skill for manual trigger",
+          "status": "pending",
+          "depends_on": [
+            "C1"
+          ],
+          "files": {
+            "create": [
+              "skills/consolidate/SKILL.md"
+            ],
+            "modify": [
+              "install.py"
+            ],
+            "test": [
+              "tests/test_install.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_install.py -v -k 'skill'",
+          "done_when": "skills/consolidate/SKILL.md exists with frontmatter (name, description, instructions to call run_consolidation with --force flag). install.py link_skills() includes 'consolidate' in skills list. Tests verify: skill in link list, SKILL.md has required frontmatter fields."
+        }
+      ]
+    },
+    {
+      "letter": "D",
+      "name": "Retrieval Benchmarking",
+      "status": "Not Started",
+      "depends_on": [
+        "B"
+      ],
+      "rationale": "Depends on Phase B for prompt_recall (benchmark measures proactive retrieval quality) and epistemic metadata (certainty affects scoring). Independent of Phase C (consolidation). Can run after B completes.",
+      "tasks": [
+        {
+          "id": "D1",
+          "name": "Create retrieval benchmark harness with seed data and regression detection",
+          "status": "pending",
+          "depends_on": [],
+          "files": {
+            "create": [
+              "tests/benchmark_retrieval.py",
+              "tests/benchmark_baseline.json"
+            ],
+            "modify": [],
+            "test": [
+              "tests/benchmark_retrieval.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/benchmark_retrieval.py -v",
+          "done_when": "tests/benchmark_retrieval.py contains: seed_benchmark_db(conn) populating ~50 diverse test memories with known entities, scopes, and certainty levels. BenchmarkQuery dataclass with query text and expected relevant IDs. Suite of ~20 benchmark queries covering scope filtering, certainty weighting, RRF fusion, entity relationships. Metrics: precision@5, recall@5, NDCG@10, MRR computed per query and averaged. compare_baseline(current, baseline_path) loads benchmark_baseline.json and flags regressions (>5% drop in any metric). Tests: benchmark runs without error, metrics are within expected ranges, regression detection catches intentional degradation."
+        }
+      ]
+    }
+  ]
+}
