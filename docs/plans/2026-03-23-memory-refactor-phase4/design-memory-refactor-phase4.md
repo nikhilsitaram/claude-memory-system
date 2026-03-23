@@ -8,7 +8,7 @@
 
 Phase 3 established the DB as the sole store with a unified `data_points` schema, MCP server, and web frontend. Eight operational gaps remain:
 
-1. **Salience lifecycle is broken.** Access tracking in `load_memory.py` queries v2 `chunks`/`nodes` tables that don't exist in v3. Result: salience reinforcement on access is silently failing — frequently-served memories don't get boosted. Additionally, no time-based decay exists for `data_points` — `decay.py` only operates on markdown files. A mistakenly high-salience memory permanently occupies top slots with no corrective force.
+1. **Salience lifecycle is broken.** The v3 `_load_from_db` path performs access tracking (count + timestamp) on `data_points` via `_batch_update_data_point_access`, but does NOT apply salience reinforcement (the diminishing-returns formula) or associative graph-neighbor boosting. The legacy v2 `_execute_with_retry` path does perform salience reinforcement, but only on the dead `chunks`/`nodes` tables. Additionally, no time-based decay exists for `data_points` — `decay.py` only operates on markdown files. A mistakenly high-salience memory permanently occupies top slots with no corrective force.
 
 2. **Search is broken.** fastembed and sqlite_vec aren't installed in most environments; `search_memories` silently falls back to `ORDER BY salience DESC` with no semantic understanding. No FTS5 tables exist for keyword matching.
 
@@ -36,7 +36,7 @@ Fix the broken salience lifecycle (reinforcement + decay on `data_points`), deli
 
 2. **Salience decay works.** A scheduled decay pass applies tiered exponential decay (hot λ=0.005, warm λ=0.02, cold λ=0.05) to `data_points` based on time since last access. Memories that are never accessed naturally lose salience. Piggybacked on synthesis_cron.
 
-3. **Hybrid search works.** Memory search returns semantically relevant results via RRF fusion of FTS5 BM25 + vector KNN, outperforming the current salience-ranked fallback. Graceful degradation when fastembed or sqlite-vec are unavailable.
+3. **Hybrid search works.** Memory search consults both FTS5 BM25 and vector KNN when available, fused via RRF. Graceful degradation: vector-only, FTS5-only, or SQL-ranked fallback when dependencies are missing. Quantitative comparison deferred to criterion #13 (benchmark).
 
 4. **Proactive mid-session recall.** Relevant memories are surfaced during a session via UserPromptSubmit hook without Claude needing to call a tool. Latency < 800ms per prompt.
 
@@ -58,9 +58,9 @@ Fix the broken salience lifecycle (reinforcement + decay on `data_points`), deli
 
 13. **Retrieval benchmarking.** A benchmark harness measures precision@5, recall@5, NDCG@10, and MRR with regression detection.
 
-14. **V2 dead code removed.** Legacy v2 functions (`_apply_add`, `_apply_update`, `_apply_delete`, `_apply_noop`, `run_decay`, deprecated `index_chunks*`) cleaned up from synthesis.py and embeddings.py. Markdown-only decay.py deprecated.
+14. **V2 dead code removed.** No code paths write to or read from the v2 `chunks` or `nodes` tables. Calling synthesis or decay operates exclusively on the v3 `data_points` table.
 
-15. **Hamming distance guard.** `hamming_distance()` raises `ValueError` on negative inputs.
+15. **Hamming distance guard.** SimHash comparison rejects signed integers from SQLite, preventing silent wrong results from sign-extension (#70).
 
 16. **No regressions.** All new public functions tested. Test baseline: 1024 passed, 18 skipped.
 
@@ -73,6 +73,7 @@ Fix the broken salience lifecycle (reinforcement + decay on `data_points`), deli
 - Obsidian/markdown file compatibility (we're SQL-first)
 - HDBSCAN clustering for pattern discovery
 - Cross-encoder reranking (RRF is sufficient for our corpus size)
+- File-read context injection — future enhancement; prompt-based recall addresses the primary mid-session gap
 
 ## Architecture
 
@@ -82,15 +83,15 @@ The v3 schema broke both directions of salience movement. This section restores 
 
 #### Salience Reinforcement (port to v3)
 
-Rewrite `_execute_access_tracking` in `load_memory.py` to operate on `data_points` instead of `chunks`/`nodes`:
+Extend `_batch_update_data_point_access` in `load_memory.py` to add salience reinforcement and associative boosting (currently it only increments access_count and last_accessed). Remove the dead v2 `_execute_with_retry` function and its `track_memory_access` wrapper which query `chunks`/`nodes` tables.
 
 ```python
-def _execute_access_tracking_v3(conn, dp_ids: list[str]) -> None:
-    """Reinforce salience for served data_points and their graph neighbors."""
+def _batch_update_data_point_access(conn, dp_ids: list[str]) -> None:
+    """Increment access counts AND reinforce salience for served data_points."""
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     for dp_id in dp_ids:
-        # Increment access count
+        # Increment access count + timestamp
         conn.execute(
             "UPDATE data_points SET access_count = access_count + 1, "
             "last_accessed = ? WHERE id = ?", (now, dp_id)
@@ -107,28 +108,24 @@ def _execute_access_tracking_v3(conn, dp_ids: list[str]) -> None:
                 (new_sal, dp_id)
             )
 
-    # Associative reinforcement: boost entities connected via edges
-    if dp_ids:
-        placeholders = ",".join("?" for _ in dp_ids)
-        neighbors = conn.execute(
-            f"SELECT DISTINCT e.target, dp.salience, e.weight FROM edges e "
-            f"JOIN data_points dp ON dp.id = e.target "
-            f"WHERE e.source IN ({placeholders}) AND e.valid_to IS NULL "
-            f"AND dp.type = 'entity'",
-            dp_ids
-        ).fetchall()
-        for target_id, neighbor_sal, edge_weight in neighbors:
-            boost = REINFORCEMENT_ETA * (edge_weight or 1.0) * new_sal
-            new_neighbor_sal = min(1.0, (neighbor_sal or 0.5) + boost)
-            conn.execute(
-                "UPDATE data_points SET salience = ? WHERE id = ?",
-                (new_neighbor_sal, target_id)
-            )
-
-    conn.commit()
+            # Associative reinforcement: boost entities connected via edges
+            neighbors = conn.execute(
+                "SELECT DISTINCT e.target, dp2.salience, e.weight FROM edges e "
+                "JOIN data_points dp2 ON dp2.id = e.target "
+                "WHERE e.source = ? AND e.valid_to IS NULL "
+                "AND dp2.type = 'entity'",
+                (dp_id,)
+            ).fetchall()
+            for target_id, neighbor_sal, edge_weight in neighbors:
+                boost = REINFORCEMENT_ETA * (edge_weight or 1.0) * new_sal
+                new_neighbor_sal = min(1.0, (neighbor_sal or 0.5) + boost)
+                conn.execute(
+                    "UPDATE data_points SET salience = ? WHERE id = ?",
+                    (new_neighbor_sal, target_id)
+                )
 ```
 
-Replaces the broken v2 path. Called from `_load_from_db()` after serving memories.
+Extends the existing v3 function already called from `_load_from_db()` at line 916.
 
 #### Tiered Salience Decay (port to v3)
 
@@ -206,12 +203,11 @@ def decay_data_points(conn, dry_run=False) -> int:
 - Add `decay_data_points()` as the new v3 entry point
 
 **backfill.py:**
-- Update to query `data_points WHERE type='memory'` instead of `chunks`
-- Update to write `UPDATE data_points SET entities = ?` instead of `UPDATE chunks`
+- Remove entirely — entity extraction is now handled by synthesis (`apply_memory_ops_v3`) and `write_memory` MCP tool. All v3 data_points already have entities populated at creation time. A one-time backfill script for the dead `chunks` table is dead code.
 
 **load_memory.py:**
-- Remove `_execute_access_tracking` (v2 path querying chunks/nodes)
-- Replace with `_execute_access_tracking_v3` (queries data_points)
+- Remove `_execute_with_retry` (v2 path querying chunks/nodes) and `track_memory_access` wrapper
+- Extend `_batch_update_data_point_access` with salience reinforcement + associative boosting
 - Remove imports of `batch_update_access`, `update_chunk_salience`, `update_node_salience`, `query_neighbor_nodes`
 
 ### Search Foundation
@@ -335,17 +331,6 @@ Certainty scale:
 
 `validity_context` is informational — stored and displayed but not used in scoring.
 
-#### Per-File-Read Context Injection
-
-Piggybacks on the `prompt_recall.py` hook with a deferred lookup:
-
-1. **PreToolUse hook** (existing): When tool is `Read` and path matches a code file, append the file path to a session state file (`~/.claude/memory/.recent-reads`).
-2. **UserPromptSubmit hook** (`prompt_recall.py`): On each prompt, check `.recent-reads` for new file paths since last check. Extract keywords from file paths (split camelCase/snake_case, filter stop words), run FTS5 keyword search, merge results with prompt-based search, dedup, and inject.
-
-**Filter:** only `.py`, `.js`, `.ts`, `.rs`, `.go`, `.java`, `.rb`, `.c`, `.cpp`, `.h` — skip configs, docs, images, vendor dirs.
-
-**Session cap:** max 5 file-context injections per session (separate from prompt recall cap).
-
 ### Memory Consolidation Pipeline
 
 Consolidation is **batch supersession** — it finds groups of redundant memories and merges them using the same `supersedes` edge infrastructure from Phase 3. No new edge types or data_point types.
@@ -362,10 +347,12 @@ synthesis_cron.py (daily gate: interval + min memories)
 2. EMBED: get embeddings from vec_data (or embed if missing)
   |
   v
-3. CLUSTER: group by cosine similarity >= threshold
+3. CLUSTER: for each memory, query vec_data KNN for top-10 nearest
+     neighbors with cosine similarity >= threshold. Build a graph of
+     similarity edges and extract connected components.
      - Exclude pairs with existing contradicts/supersedes edges
      - Min cluster size: 2 (singletons skip)
-     - Max cluster size: 15 (split larger clusters)
+     - Max cluster size: 15 (if larger, split by removing weakest edges)
   |
   v
 4. SCORE: rank clusters by 0.6 * count + 0.3 * max_recency + 0.1 * avg_salience
@@ -525,6 +512,7 @@ Plus test covering the guard.
 | Edge-aware clustering | Exclude contradicts/supersedes pairs | These edges mean synthesis already detected evolution. Don't cluster what's already marked as non-redundant. |
 | Include ISO datetime in merge prompt | Full datetime per cluster member | Enables LLM to identify which insight came last within the same day. Temporal ordering prevents merging corrections with the thing being corrected. |
 | Soft-delete originals on consolidation | salience=0 via existing supersession | Consistent with Phase 3 delete_memory behavior. Provenance chain preserved via edges. |
+| 0.80 cosine similarity threshold | Configurable default | Standard threshold for semantic near-duplicates in sentence-transformer literature. Lower (0.75) risks merging related-but-distinct facts; higher (0.90) misses paraphrases. The LLM provides a second gate (MERGE/SKIP), so the threshold can be slightly aggressive. |
 | Secret sanitization bundled here | Touches same write/inject paths | Orthogonal to search quality, but same code paths. Bundled for implementation convenience. |
 | Custom benchmark over LongMemEval | LongMemEval assumes conversational memory | Our system stores factual data_points with graph edges. Custom benchmark tests scope filtering, certainty weighting, and RRF fusion specifically. |
 
@@ -578,7 +566,6 @@ New settings in `settings.json`:
 | `recall.minPromptLength` | 15 | Skip recall for prompts shorter than this (chars) |
 | `recall.maxInjectionsPerPrompt` | 3 | Max memories injected per prompt |
 | `recall.maxTokenBudget` | 500 | Max tokens per injection |
-| `recall.fileContext.maxPerSession` | 5 | Max file-read context injections per session |
 
 ## Implementation Approach
 
@@ -607,9 +594,8 @@ New settings in `settings.json`:
 - C3: `/consolidate` skill for manual trigger
 - C4: Settings defaults in `memory_utils.py` + `install.py` updates
 
-**Phase D: File Context + Benchmarking** (depends on B for prompt_recall)
-- D1: File-read context injection (deferred lookup in `prompt_recall.py`, PreToolUse file path recording)
-- D2: Retrieval benchmark harness (`tests/benchmark_retrieval.py`) with seed data, metrics, regression detection
+**Phase D: Benchmarking** (depends on B for prompt_recall)
+- D1: Retrieval benchmark harness (`tests/benchmark_retrieval.py`) with seed data, metrics, regression detection
 
 ### New Files
 
@@ -627,18 +613,15 @@ New settings in `settings.json`:
 
 | File | Phases | Changes |
 |---|---|---|
-| `scripts/load_memory.py` | A | Replace `_execute_access_tracking` with v3 version (data_points queries + salience reinforcement), SessionStart health alerts, sanitize output, stale state cleanup |
-| `scripts/decay.py` | A | Add `decay_data_points()` v3 entry point, deprecate markdown-only `run()` |
+| `scripts/load_memory.py` | A | Extend `_batch_update_data_point_access` with salience reinforcement + associative boosting, remove dead `_execute_with_retry` + `track_memory_access`, sanitize output, SessionStart health alerts, stale state cleanup |
+| `scripts/decay.py` | A, B | Add `decay_data_points()` v3 entry point, deprecate markdown-only `run()`, certainty-aware decay rates (Phase B) |
 | `scripts/synthesis.py` | A, B | Remove v2 `_apply_*` functions + `run_decay()` + `apply_memory_ops()`, sanitize in apply ops, FTS5 sync, parse certainty from MEMORY_OPS |
 | `scripts/embeddings.py` | A | Remove deprecated `index_chunks*`, add `search_hybrid()`, `search_fts5()`, FTS5 insert/delete helpers |
-| `scripts/backfill.py` | A | Update to query `data_points WHERE type='memory'` instead of `chunks` |
+| `scripts/backfill.py` | A | Remove (dead code — entity extraction handled by synthesis + write_memory) |
 | `scripts/storage.py` | A, B | FTS5 DDL, migration backfill, delete sync, certainty/validity_context columns |
 | `scripts/memory_server.py` | A, B | Wire hybrid search, accept certainty in write_memory, sanitize writes |
 | `scripts/memory_utils.py` | A, C | `sanitize_secrets()`, consolidation + recall defaults in DEFAULT_SETTINGS |
-| `scripts/synthesis.py` | A, B | Sanitize in apply ops, FTS5 sync, parse certainty from MEMORY_OPS |
-| `scripts/load_memory.py` | A | Sanitize output, SessionStart health alerts, stale state cleanup |
-| `scripts/decay.py` | B | Certainty-aware decay rates |
-| `scripts/synthesis_cron.py` | C | Consolidation post-step with daily gate |
+| `scripts/synthesis_cron.py` | A, C | Tiered decay post-step (Phase A), consolidation post-step with daily gate (Phase C) |
 | `scripts/health.py` | A | Extended HealthReport + new alerts |
 | `scripts/web_app.py` | A | Extended `/api/stats` response |
 | `scripts/simhash.py` | A | Hamming distance guard |
@@ -650,5 +633,6 @@ New settings in `settings.json`:
 | `tests/test_simhash.py` | A | Hamming distance guard test |
 | `tests/test_health.py` | A | Extended health metrics tests |
 | `tests/test_web_app.py` | A | Extended stats endpoint test |
-| `tests/test_decay.py` | B | Certainty-aware decay tests |
-| `tests/test_synthesis.py` | B | Certainty in MEMORY_OPS tests |
+| `tests/test_load_memory.py` | A | Tests for salience reinforcement + associative boosting |
+| `tests/test_decay.py` | A, B | Tests for `decay_data_points()`, certainty-aware decay |
+| `tests/test_synthesis.py` | A, B | Tests for v2 removal, certainty in MEMORY_OPS |
