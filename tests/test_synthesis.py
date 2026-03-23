@@ -166,6 +166,7 @@ class TestComputeOffsetsFromExtracts:
     def test_multiple_sessions_across_extracts(self, tmp_path):
         """Handles multiple sessions across multiple extract files."""
         from unittest.mock import patch
+
         from synthesis import compute_offsets_from_extracts
 
         extract1 = tmp_path / "e1.txt"
@@ -195,6 +196,7 @@ class TestComputeOffsetsFromExtracts:
     def test_empty_extracts_returns_empty(self, tmp_path):
         """No extract paths returns empty dict."""
         from unittest.mock import patch
+
         from synthesis import compute_offsets_from_extracts
 
         with patch("synthesis.get_projects_dir", return_value=tmp_path):
@@ -203,6 +205,7 @@ class TestComputeOffsetsFromExtracts:
     def test_session_not_found_on_disk_skipped(self, tmp_path):
         """Session ID in extract but no matching JSONL returns empty for that session."""
         from unittest.mock import patch
+
         from synthesis import compute_offsets_from_extracts
 
         extract = tmp_path / "extract.txt"
@@ -220,6 +223,7 @@ class TestComputeOffsetsFromExtracts:
     def test_missing_extract_file_skipped(self, tmp_path):
         """Missing extract file path is silently skipped."""
         from unittest.mock import patch
+
         from synthesis import compute_offsets_from_extracts
 
         with patch("synthesis.get_projects_dir", return_value=tmp_path):
@@ -1220,8 +1224,8 @@ def _make_v3_db_for_synthesis(tmp_path):
 
 class TestApplyV3:
     def test_add_creates_data_point(self, tmp_path):
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         ops = [MemoryOp(action="ADD", fact="gRPC for services", scope="proj",
                         type="design", salience=0.8, entities=["gRPC"])]
@@ -1234,7 +1238,7 @@ class TestApplyV3:
         assert dp.type == "memory"
 
     def test_add_creates_entity_data_points(self, tmp_path):
-        from synthesis import apply_memory_ops_v3, MemoryOp
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         ops = [MemoryOp(action="ADD", fact="uses gRPC", scope="proj",
                         entities=["gRPC", "internal services"])]
@@ -1247,10 +1251,10 @@ class TestApplyV3:
         assert "internal services" in names
 
     def test_update_modifies_content(self, tmp_path):
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
-        dp_id = insert_data_point(conn, DataPointRow(
+        insert_data_point(conn, DataPointRow(
             type="memory", content="old fact", scope="proj", id="dp_old"))
         conn.commit()
         ops = [MemoryOp(action="UPDATE", id="dp_old", fact="new fact", entities=["JWT"])]
@@ -1259,8 +1263,8 @@ class TestApplyV3:
         assert dp.content == "new fact"
 
     def test_delete_creates_provenance(self, tmp_path):
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         insert_data_point(conn, DataPointRow(
             type="memory", content="wrong fact", scope="proj", id="dp_wrong"))
@@ -1275,8 +1279,8 @@ class TestApplyV3:
         assert any(e[0] == "supersedes" for e in edges)
 
     def test_noop_increments_evidence(self, tmp_path):
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         insert_data_point(conn, DataPointRow(
             type="memory", content="confirmed", scope="proj", id="dp_ok"))
@@ -1288,8 +1292,9 @@ class TestApplyV3:
 
     def test_no_filesystem_writes(self, tmp_path):
         """V3 apply does not write to any markdown files."""
-        from synthesis import apply_memory_ops_v3, MemoryOp
         import os
+
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         ops = [MemoryOp(action="ADD", fact="test", scope="proj")]
         md_files_before = set()
@@ -1303,8 +1308,8 @@ class TestApplyV3:
 
     def test_add_default_salience(self, tmp_path):
         """ADD without salience defaults to 0.5."""
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         ops = [MemoryOp(action="ADD", fact="no salience", scope="proj")]
         results = apply_memory_ops_v3(conn, ops)
@@ -1313,8 +1318,8 @@ class TestApplyV3:
 
     def test_add_with_nonexistent_supersedes_skips_gracefully(self, tmp_path):
         """ADD with supersedes pointing to a nonexistent ID is skipped without crashing."""
-        from synthesis import apply_memory_ops_v3, MemoryOp
         from storage import query_data_point_by_id
+        from synthesis import MemoryOp, apply_memory_ops_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         ops = [MemoryOp(action="ADD", fact="new fact", scope="proj",
                         supersedes="nonexistent-dp-id", reason="replaced old")]
@@ -1329,13 +1334,13 @@ class TestApplyV3:
         This can't happen in practice (dp_id is generated after insert), but the
         except clause should only catch ValueError and sqlite3.IntegrityError.
         """
-        from synthesis import _apply_add_v3, MemoryOp
+
         from storage import DataPointRow, insert_data_point
-        import sqlite3 as _sqlite3
+        from synthesis import MemoryOp, _apply_add_v3
 
         conn = _make_v3_db_for_synthesis(tmp_path)
 
-        dp_id = insert_data_point(conn, DataPointRow(
+        insert_data_point(conn, DataPointRow(
             type="memory", content="existing", scope="proj", id="dp-self"))
         conn.commit()
 
@@ -1354,8 +1359,9 @@ class TestApplyAddV3ExceptionHandling:
 
     def test_value_error_from_provenance_is_silenced(self, tmp_path):
         """ValueError from create_provenance_edge (e.g., self-ref) is silenced."""
-        from synthesis import _apply_add_v3, MemoryOp
         from unittest.mock import patch
+
+        from synthesis import MemoryOp, _apply_add_v3
 
         conn = _make_v3_db_for_synthesis(tmp_path)
         op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")
@@ -1368,8 +1374,9 @@ class TestApplyAddV3ExceptionHandling:
     def test_integrity_error_from_provenance_is_silenced(self, tmp_path):
         """sqlite3.IntegrityError from create_provenance_edge (FK miss) is silenced."""
         import sqlite3
-        from synthesis import _apply_add_v3, MemoryOp
         from unittest.mock import patch
+
+        from synthesis import MemoryOp, _apply_add_v3
 
         conn = _make_v3_db_for_synthesis(tmp_path)
         op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")
@@ -1382,9 +1389,10 @@ class TestApplyAddV3ExceptionHandling:
 
     def test_unexpected_exception_from_provenance_propagates(self, tmp_path):
         """Unexpected exceptions from create_provenance_edge are NOT silenced."""
-        import pytest
-        from synthesis import _apply_add_v3, MemoryOp
         from unittest.mock import patch
+
+        import pytest
+        from synthesis import MemoryOp, _apply_add_v3
 
         conn = _make_v3_db_for_synthesis(tmp_path)
         op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")

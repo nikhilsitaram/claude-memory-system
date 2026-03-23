@@ -90,7 +90,7 @@ def retrieve_existing_memories(
     """
     try:
         from embeddings import search_similar
-        from storage import get_db, close_db
+        from storage import close_db, get_db
     except ImportError:
         return []
 
@@ -206,7 +206,8 @@ def _write_session_context(
         The data_point ID of the session_context.
     """
     import json as _json
-    from storage import DataPointRow, insert_data_point, insert_edge, EdgeRow
+
+    from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
 
     # Idempotency check: escape LIKE wildcards in session_id to prevent injection
     safe_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -267,7 +268,7 @@ def _get_or_create_entity_in_db(conn, entity_name: str, scope: str | None) -> st
 
     Separate from synthesis._get_or_create_entity to avoid circular import.
     """
-    from storage import DataPointRow, insert_data_point, _content_hash  # noqa: F401
+    from storage import DataPointRow, _content_hash, insert_data_point  # noqa: F401
 
     content_hash = _content_hash(f"entity:{entity_name}")
     row = conn.execute(
@@ -347,7 +348,7 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
     Returns True on success, False if any date failed.
     """
     from load_memory import _build_synthesis_instructions_v3
-    from synthesis import parse_synthesis_output, apply_memory_ops_v3
+    from synthesis import apply_memory_ops_v3, parse_synthesis_output
 
     cmd_base = build_claude_command(model)
     env = os.environ.copy()
@@ -511,7 +512,7 @@ def run_synthesis(force: bool = False) -> int:
     # Detect schema version and dispatch
     conn = None
     try:
-        from storage import get_db, close_db
+        from storage import close_db, get_db
         conn = get_db()
         version = _get_schema_version(conn)
     except Exception:

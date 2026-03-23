@@ -8,15 +8,13 @@ Run with: python3 -m pytest tests/test_memory_server.py -v
 
 import asyncio
 import json
-import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
 from storage import (
     DataPointRow,
     EdgeRow,
@@ -26,7 +24,6 @@ from storage import (
     insert_edge,
     query_data_point_by_id,
 )
-
 
 # ===========================================================================
 # Fixtures
@@ -355,7 +352,7 @@ class TestWriteMemory:
         import memory_server
         memory_server._db_conn = db
         with patch("memory_server.embed_text", return_value=None):
-            result = self._run(memory_server._write_memory(
+            self._run(memory_server._write_memory(
                 "fact about JWT and OAuth",
                 scope="proj-x",
                 entities=["JWT", "OAuth"],

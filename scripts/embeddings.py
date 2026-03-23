@@ -25,13 +25,11 @@ if str(script_dir) not in sys.path:
 
 from storage import (  # noqa: E402
     _CHUNK_COLUMNS,
-    VEC_CHUNKS_DDL,
+    _DP_COLUMNS,
     VEC_DATA_DDL,
-    ChunkRow,
     DataPointRow,
     _row_to_chunk,
     _row_to_data_point,
-    _DP_COLUMNS,
 )
 
 try:

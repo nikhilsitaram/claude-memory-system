@@ -18,10 +18,7 @@ Run with: python -m pytest tests/test_integration_git_subdir.py -v
 
 import copy
 import json
-import os
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -42,7 +39,6 @@ from memory_utils import (  # noqa: E402
     DEFAULT_SETTINGS,
     _calculate_token_limits,
     find_current_project,
-    resolve_worktree_to_main_repo,
 )
 
 # =============================================================================
@@ -57,6 +53,7 @@ needs_resolve_session_path = pytest.mark.xfail(
 
 # find_current_project must accept exactly 2 args
 import inspect as _inspect
+
 _FCP_TWO_ARGS = len(_inspect.signature(find_current_project).parameters) == 2
 
 # Wiring checks: callers must import resolve_session_path (not just that it exists)

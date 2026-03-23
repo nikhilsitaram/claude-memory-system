@@ -11,7 +11,6 @@ Run with: python3 -m pytest tests/test_storage.py -v
 import hashlib
 import json
 import sqlite3
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -22,6 +21,8 @@ from storage import (
     ChunkRow,
     EdgeRow,
     NodeRow,
+    _migrate_salience_data,
+    batch_update_access,
     close_db,
     delete_chunks_by_source,
     ensure_db,
@@ -33,23 +34,20 @@ from storage import (
     query_chunk_by_id,
     query_chunks_by_scope,
     query_chunks_by_source,
-    query_chunks_with_salience,
-    query_neighbor_nodes,
     query_chunks_for_retrieval,
+    query_chunks_with_salience,
     query_current_edges,
+    query_data_point_by_id,
     query_edges_at_date,
     query_edges_for_node,
+    query_neighbor_nodes,
     query_node_by_name_and_type,
     query_nodes_by_scope,
     update_chunk_content,
     update_chunk_salience,
     update_node_access,
-    batch_update_access,
     update_node_salience,
-    _migrate_salience_data,
-    query_data_point_by_id,
 )
-
 
 # ============================================================================
 # Fixtures
@@ -516,48 +514,6 @@ class TestBatchUpdateAccess:
         close_db(conn)
 
 
-class TestUpdateChunkSalience:
-    """Tests for update_chunk_salience() helper."""
-
-    def test_updates_salience_value(self, tmp_path):
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
-            chunk = ChunkRow(content="test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            update_chunk_salience(conn, cid, 0.42)
-            conn.commit()
-            rows = query_chunks_with_salience(conn)
-            assert abs(rows[0].salience - 0.42) < 1e-9
-            close_db(conn)
-
-    def test_clamps_salience_to_0_1(self, tmp_path):
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
-            chunk = ChunkRow(content="test clamp", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            update_chunk_salience(conn, cid, 1.5)
-            conn.commit()
-            rows = query_chunks_with_salience(conn)
-            assert rows[0].salience == 1.0
-            update_chunk_salience(conn, cid, -0.5)
-            conn.commit()
-            rows = query_chunks_with_salience(conn)
-            assert rows[0].salience == 0.0
-            close_db(conn)
-
-    def test_missing_chunk_id_is_noop(self, tmp_path):
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = ensure_db()
-            update_chunk_salience(conn, "nonexistent", 0.5)
-            conn.commit()
-            close_db(conn)
-
-
 class TestUpdateNodeSalience:
     """Tests for update_node_salience() helper."""
 
@@ -765,7 +721,7 @@ class TestMigrateV2ToV3:
 
     def test_chunks_become_memory_data_points(self, tmp_path):
         """Chunks are copied to data_points with type='memory'."""
-        from storage import _migrate_v2_to_v3, query_data_point_by_id
+        from storage import _migrate_v2_to_v3
 
         conn = self._make_v2_db(tmp_path)
         _migrate_v2_to_v3(conn)
@@ -779,7 +735,7 @@ class TestMigrateV2ToV3:
 
     def test_nodes_become_entity_data_points(self, tmp_path):
         """Nodes are copied to data_points with type='entity'."""
-        from storage import _migrate_v2_to_v3, query_data_point_by_id
+        from storage import _migrate_v2_to_v3
 
         conn = self._make_v2_db(tmp_path)
         _migrate_v2_to_v3(conn)
@@ -826,7 +782,7 @@ class TestMigrateV2ToV3:
 
     def test_migration_idempotent(self, tmp_path):
         """Running migration twice is safe."""
-        from storage import _migrate_v2_to_v3, query_data_point_by_id
+        from storage import _migrate_v2_to_v3
 
         conn = self._make_v2_db(tmp_path)
         _migrate_v2_to_v3(conn)
@@ -939,7 +895,7 @@ class TestUpdateChunkContent:
         assert row[1] == "ltm"
 
 
-class TestUpdateChunkSalience:
+class TestUpdateChunkSalienceClamping:
     """Tests for update_chunk_salience() clamping and setting."""
 
     def _insert_chunk(self, db_v2):
@@ -1425,8 +1381,8 @@ class TestDataPointCRUD:
             from storage import (
                 DataPointRow,
                 insert_data_point,
-                soft_delete_data_point,
                 query_data_point_by_id,
+                soft_delete_data_point,
             )
 
             dp = DataPointRow(type="observation", content="Temporary", scope="global")
@@ -1508,8 +1464,8 @@ class TestDataPointCRUD:
             from storage import (
                 DataPointRow,
                 insert_data_point,
-                update_data_point,
                 query_data_point_by_id,
+                update_data_point,
             )
 
             dp = DataPointRow(type="observation", content="Old", scope="global")
@@ -1888,7 +1844,7 @@ class TestQueryDataPointsOrderByValidation:
 
     def test_invalid_order_by_falls_back_to_default(self, v3_conn):
         """An invalid order_by string falls back to the default ordering."""
-        from storage import DataPointRow, insert_data_point, query_data_points, _DEFAULT_ORDER_BY
+        from storage import _DEFAULT_ORDER_BY, DataPointRow, insert_data_point, query_data_points
 
         insert_data_point(v3_conn, DataPointRow(type="memory", content="a", scope="global", salience=0.3))
         insert_data_point(v3_conn, DataPointRow(type="memory", content="b", scope="global", salience=0.9))
@@ -2349,7 +2305,7 @@ class TestProvenanceEdges:
         return conn
 
     def test_create_supersedes_edge(self, tmp_path):
-        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        from storage import DataPointRow, create_provenance_edge, insert_data_point
         conn = self._make_v3_db(tmp_path)
         id_old = insert_data_point(conn, DataPointRow(type="memory", content="old"))
         id_new = insert_data_point(conn, DataPointRow(type="memory", content="new"))
@@ -2362,11 +2318,11 @@ class TestProvenanceEdges:
         assert edges[0][1] == "updated info"
 
     def test_provenance_chain_multi_hop(self, tmp_path):
-        from storage import DataPointRow, insert_data_point, create_provenance_edge, query_provenance_chain
+        from storage import DataPointRow, create_provenance_edge, insert_data_point, query_provenance_chain
         conn = self._make_v3_db(tmp_path)
-        id_a = insert_data_point(conn, DataPointRow(type="memory", content="A", id="a"))
-        id_b = insert_data_point(conn, DataPointRow(type="memory", content="B", id="b"))
-        id_c = insert_data_point(conn, DataPointRow(type="memory", content="C", id="c"))
+        insert_data_point(conn, DataPointRow(type="memory", content="A", id="a"))
+        insert_data_point(conn, DataPointRow(type="memory", content="B", id="b"))
+        insert_data_point(conn, DataPointRow(type="memory", content="C", id="c"))
         conn.commit()
         create_provenance_edge(conn, "b", "a", "supersedes", "B replaces A")
         create_provenance_edge(conn, "c", "b", "supersedes", "C replaces B")
@@ -2386,7 +2342,7 @@ class TestProvenanceEdges:
         assert len(chain) == 0
 
     def test_self_reference_rejected(self, tmp_path):
-        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        from storage import DataPointRow, create_provenance_edge, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="self", id="x"))
         conn.commit()
@@ -2395,7 +2351,7 @@ class TestProvenanceEdges:
 
     @pytest.mark.parametrize("edge_type", ["supersedes", "contradicts", "led_to", "refines", "supports"])
     def test_all_edge_types_valid(self, tmp_path, edge_type):
-        from storage import DataPointRow, insert_data_point, create_provenance_edge
+        from storage import DataPointRow, create_provenance_edge, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="src", id="src"))
         insert_data_point(conn, DataPointRow(type="memory", content="tgt", id="tgt"))

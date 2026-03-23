@@ -11,36 +11,19 @@ Run with: python3 -m pytest tests/test_embeddings.py -v
 """
 
 import math
-import sqlite3
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest import mock
 
 import pytest
-
-from storage import (
-    ChunkRow,
-    DataPointRow,
-    VEC_CHUNKS_DDL,
-    close_db,
-    ensure_db,
-    insert_chunk,
-    insert_data_point,
-)
-
 from embeddings import (
-    DEFAULT_TOP_K,
     EMBEDDING_DIM,
-    EMBEDDING_MODEL,
     HAS_FASTEMBED,
-    HAS_SQLITE_VEC,
-    RECENCY_DECAY,
     RECENCY_WEIGHT,
     SALIENCE_WEIGHT,
-    ScoredChunk,
-    ScoredDataPoint,
     VEC_BOOST_RATE,
     VEC_SIM_WEIGHT,
+    ScoredChunk,
+    ScoredDataPoint,
     delete_vec_chunks,
     delete_vec_data,
     embed_batch,
@@ -53,6 +36,14 @@ from embeddings import (
     reindex_changed_files,
     score_memory,
     search_similar,
+)
+from storage import (
+    ChunkRow,
+    DataPointRow,
+    close_db,
+    ensure_db,
+    insert_chunk,
+    insert_data_point,
 )
 
 
@@ -305,7 +296,7 @@ class TestSearchSimilar:
     def test_scope_filtering(self, db_with_vec, mock_embedder, sample_chunks):
         index_chunks(db_with_vec, sample_chunks)
         results = search_similar(db_with_vec, "testing", scope="global")
-        assert all(r.chunk.scope == "global" for r in results)
+        assert all(r.data_point.scope == "global" for r in results)
 
     def test_respects_top_k(self, db_with_vec, mock_embedder, sample_chunks):
         index_chunks(db_with_vec, sample_chunks)

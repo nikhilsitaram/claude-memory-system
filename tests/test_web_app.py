@@ -1,32 +1,27 @@
 """Tests for web_app.py — HTTP server, read-only API, and write/delete API."""
-import json
-import sqlite3
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from storage import (
+    DataPointRow,
+    EdgeRow,
     ensure_db,
     insert_data_point,
-    DataPointRow,
-    query_data_point_by_id,
     insert_edge,
-    EdgeRow,
+    query_data_point_by_id,
 )
 from web_app import (
-    HOST,
     DEFAULT_PORT,
+    HOST,
     MAX_PORT,
-    generate_csrf_token,
-    _get_stats,
-    _get_data_points,
-    _search,
-    _get_graph,
-    _get_data_point_detail,
-    _edit_data_point,
     _delete_data_point,
+    _edit_data_point,
+    _get_data_point_detail,
+    _get_data_points,
+    _get_graph,
+    _get_stats,
+    _search,
+    generate_csrf_token,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,7 +29,7 @@ from web_app import (
 
 def _make_db(tmp_path):
     """Create a v3 in-memory DB and insert a few data_points for testing."""
-    db_path = tmp_path / "memory.db"
+    tmp_path / "memory.db"
     with patch("storage.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
     return conn
@@ -352,6 +347,7 @@ class TestWriteDeleteAPI:
             ensure_vec_table=mock_ensure_vec,
         )}):
             import importlib
+
             import web_app
             importlib.reload(web_app)
             with patch("web_app._db_conn", conn):
@@ -363,7 +359,7 @@ class TestWriteDeleteAPI:
     def test_csrf_required_for_edit(self, tmp_path):
         """POST without X-CSRF-Token header returns 403."""
         from io import BytesIO
-        from unittest.mock import MagicMock
+
         import web_app
 
         with patch("storage.get_memory_dir", return_value=tmp_path):
@@ -391,7 +387,6 @@ class TestWriteDeleteAPI:
 
     def test_csrf_required_for_delete(self, tmp_path):
         """DELETE without X-CSRF-Token header returns 403."""
-        from io import BytesIO
         import web_app
 
         with patch("storage.get_memory_dir", return_value=tmp_path):

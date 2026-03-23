@@ -642,6 +642,7 @@ class TestSynthesisCronV3:
     def test_get_schema_version_returns_0_for_fresh_db(self, tmp_path):
         """Fresh DB has schema version 0."""
         import sqlite3
+
         from synthesis_cron import _get_schema_version
         conn = sqlite3.connect(str(tmp_path / "fresh.db"))
         assert _get_schema_version(conn) == 0
@@ -656,6 +657,7 @@ class TestSynthesisCronV3:
     def test_v2_path_invoked_for_old_schema(self, tmp_path):
         """When schema version < 3, run_synthesis calls _run_synthesis_v2."""
         import sqlite3
+
         from synthesis_cron import _get_schema_version
         conn = sqlite3.connect(str(tmp_path / "v2.db"))
         conn.execute("PRAGMA user_version = 2")
@@ -713,6 +715,7 @@ class TestSessionContext:
     def test_properties_include_session_metadata(self, tmp_path):
         """session_context properties JSON has session_id."""
         import json
+
         from synthesis_cron import _write_session_context
         conn = _make_v3_db_for_cron(tmp_path)
         dp_id = _write_session_context(conn, "proj", ["topic"], "sess-unique-123")
@@ -944,8 +947,8 @@ class TestV3SessionContextScope:
 
     def test_scope_taken_from_most_common_op_scope(self, tmp_path):
         """session_context.scope should be the most frequent non-global op scope."""
-        from synthesis_cron import _run_synthesis_v3
         from synthesis import SynthesisResult
+        from synthesis_cron import _run_synthesis_v3
 
         prompt_file = self._make_prompt_file(tmp_path)
         ops = [
@@ -972,8 +975,8 @@ class TestV3SessionContextScope:
 
     def test_scope_falls_back_to_global_when_no_project_ops(self, tmp_path):
         """When all ops have scope='global' or None, session_context uses 'global'."""
-        from synthesis_cron import _run_synthesis_v3
         from synthesis import SynthesisResult
+        from synthesis_cron import _run_synthesis_v3
 
         prompt_file = self._make_prompt_file(tmp_path)
         ops = [
@@ -999,8 +1002,8 @@ class TestV3SessionContextScope:
 
     def test_scope_not_prompt_filename_stem(self, tmp_path):
         """session_context scope must never be the prompt file stem (date_label)."""
-        from synthesis_cron import _run_synthesis_v3
         from synthesis import SynthesisResult
+        from synthesis_cron import _run_synthesis_v3
 
         date_label = "synthesis-prompt-2026-03-22-99999"
         prompt_file = self._make_prompt_file(tmp_path, date_label)

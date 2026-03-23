@@ -1899,7 +1899,7 @@ class TestSmartLoading:
 
     def test_access_tracking_fires(self, tmp_path):
         """All served data_point IDs have access_count incremented."""
-        from storage import DataPointRow, insert_data_point, query_data_point_by_id
+        from storage import DataPointRow, insert_data_point
 
         conn = _make_v3_db(tmp_path)
         dp_id = insert_data_point(
