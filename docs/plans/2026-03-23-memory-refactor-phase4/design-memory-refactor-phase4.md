@@ -505,7 +505,6 @@ Plus test covering the guard.
 | RRF over learned fusion | k=60 constant, proven | Simple, no training needed. Standard constant works well at our corpus size. |
 | Push-based recall (hook) alongside pull-based (MCP) | UserPromptSubmit hook + MCP tools | Hook handles the common case (Claude doesn't think to search); MCP handles targeted searches. Complementary. |
 | Certainty as integer 1-5, not float | Discrete scale | Easier for LLMs to assign consistently. Maps to established patterns (memento-vault). |
-| File-read context via deferred UserPromptSubmit | PreToolUse records reads, next prompt surfaces context | PreToolUse hooks can only return permission decisions, not context text. Deferred lookup is the only mechanism. |
 | No new edge types for consolidation | Use existing `supersedes` | Consolidation IS batch supersession. No structural distinction needed. |
 | Daily not weekly consolidation | Piggybacked on synthesis_cron | User's work is day-structured. Daily catches redundancy before it accumulates. Eliminates need for separate timer. |
 | LLM can refuse to merge | SKIP decision | Critical for preserving evolving knowledge, decision reversals, and reasoning journey. |
@@ -572,7 +571,7 @@ New settings in `settings.json`:
 ### Four Sequential Phases
 
 **Phase A: Salience Lifecycle + Search Foundation + Health** (no LLM dependency)
-- A1: Port salience reinforcement to v3 — rewrite `_execute_access_tracking` in `load_memory.py` to query/update `data_points`
+- A1: Port salience reinforcement to v3 — extend `_batch_update_data_point_access` in `load_memory.py` with salience reinforcement + associative boosting, remove dead v2 `_execute_with_retry`
 - A2: Port tiered decay to v3 — add `decay_data_points()` function, integrate into `synthesis_cron.py`
 - A3: V2 dead code cleanup — remove legacy apply functions from synthesis.py, deprecated index functions from embeddings.py, fix backfill.py, deprecate markdown decay in decay.py
 - A4: FTS5 virtual table + migration backfill in `storage.py`
