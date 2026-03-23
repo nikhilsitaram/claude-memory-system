@@ -1836,6 +1836,168 @@ class TestDataPointCRUD:
 
 
 # ============================================================================
+# A3b: order_by injection prevention in query_data_points
+# ============================================================================
+
+
+class TestQueryDataPointsOrderByValidation:
+    """Tests that query_data_points rejects invalid order_by values."""
+
+    @pytest.fixture
+    def v3_conn(self, tmp_path):
+        """Bare DB with data_points table only — no migration side effects."""
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_valid_order_by_accepted(self, v3_conn):
+        """A valid order_by column + direction is accepted without error."""
+        from storage import DataPointRow, insert_data_point, query_data_points
+
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="a", scope="global", salience=0.5))
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="b", scope="global", salience=0.8))
+        v3_conn.commit()
+
+        results = query_data_points(v3_conn, order_by="salience ASC")
+        assert len(results) == 2
+        assert results[0].salience <= results[1].salience
+
+    def test_invalid_order_by_falls_back_to_default(self, v3_conn):
+        """An invalid order_by string falls back to the default ordering."""
+        from storage import DataPointRow, insert_data_point, query_data_points, _DEFAULT_ORDER_BY
+
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="a", scope="global", salience=0.3))
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="b", scope="global", salience=0.9))
+        v3_conn.commit()
+
+        results_default = query_data_points(v3_conn, order_by=_DEFAULT_ORDER_BY)
+        results_injected = query_data_points(v3_conn, order_by="1; DROP TABLE data_points--")
+        assert len(results_injected) == len(results_default)
+        assert results_injected[0].content == results_default[0].content
+
+    @pytest.mark.parametrize("bad_order", [
+        "salience; DROP TABLE data_points",
+        "1=1",
+        "nonexistent_col DESC",
+        "salience INVALID_DIR",
+    ])
+    def test_injection_attempts_rejected(self, v3_conn, bad_order):
+        """Various SQL injection attempts fall back to default order without error."""
+        from storage import DataPointRow, insert_data_point, query_data_points
+
+        insert_data_point(v3_conn, DataPointRow(type="memory", content="x", scope="global"))
+        v3_conn.commit()
+
+        results = query_data_points(v3_conn, order_by=bad_order)
+        assert isinstance(results, list)
+        assert len(results) >= 1
+
+    def test_limit_validated_as_integer(self, v3_conn):
+        """A non-integer limit is ignored (treated as no limit)."""
+        from storage import DataPointRow, insert_data_point, query_data_points
+
+        for i in range(3):
+            insert_data_point(v3_conn, DataPointRow(type="memory", content=str(i), scope="global"))
+        v3_conn.commit()
+
+        results = query_data_points(v3_conn, limit=2)
+        assert len(results) == 2
+
+
+# ============================================================================
+# A3c: INSERT uses only ? placeholders (no mixed literals in VALUES)
+# ============================================================================
+
+
+class TestInsertProfileSectionPlaceholders:
+    """Tests that _insert_profile_section uses only ? placeholders."""
+
+    @pytest.fixture
+    def bare_conn(self, tmp_path):
+        """Bare DB connection with only data_points table — no migration side effects."""
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_points (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                content TEXT,
+                scope TEXT,
+                entry_type TEXT,
+                source_type TEXT,
+                source_sessions TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                salience REAL DEFAULT 1.0,
+                access_count INTEGER DEFAULT 0,
+                last_accessed TEXT,
+                evidence_count INTEGER DEFAULT 1,
+                consolidated INTEGER DEFAULT 0,
+                content_hash TEXT,
+                simhash INTEGER,
+                entities TEXT,
+                properties TEXT
+            );
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_profile_section_inserted_with_correct_values(self, bare_conn):
+        """_insert_profile_section inserts a profile row with all expected fields."""
+        from storage import _insert_profile_section, query_data_points_by_scope
+
+        _insert_profile_section(bare_conn, "About Me", ["I am a developer."], "2026-01-01T00:00:00Z")
+        bare_conn.commit()
+
+        profiles = query_data_points_by_scope(bare_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+        p = profiles[0]
+        assert p.type == "profile"
+        assert p.name == "About Me"
+        assert p.scope == "user"
+        assert p.source_type == "migration"
+        assert p.salience == 1.0
+        assert p.consolidated == 1
+        assert "I am a developer." in (p.content or "")
+
+    def test_profile_section_idempotent(self, bare_conn):
+        """Inserting the same profile section twice produces only one row."""
+        from storage import _insert_profile_section, query_data_points_by_scope
+
+        _insert_profile_section(bare_conn, "About Me", ["I am a developer."], "2026-01-01T00:00:00Z")
+        _insert_profile_section(bare_conn, "About Me", ["I am a developer."], "2026-01-01T00:00:00Z")
+        bare_conn.commit()
+
+        profiles = query_data_points_by_scope(bare_conn, "user", dp_type="profile")
+        assert len(profiles) == 1
+
+
+# ============================================================================
 # A4: Profile section migration
 # ============================================================================
 

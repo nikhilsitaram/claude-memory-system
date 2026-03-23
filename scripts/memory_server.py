@@ -57,9 +57,12 @@ def init_db():
 def _warm_model_async():
     """Load FastEmbed model in a background thread so server startup is not blocked."""
     def _warm():
-        result = embed_text("warmup")
-        if result and len(result) > 0:
-            _model_ready.set()
+        try:
+            result = embed_text("warmup")
+            if result and len(result) > 0:
+                _model_ready.set()
+        except Exception as exc:
+            print(f"[memory_server] Model warmup failed: {exc}", file=sys.stderr)
 
     t = threading.Thread(target=_warm, daemon=True)
     t.start()
@@ -331,6 +334,7 @@ async def _write_memory(fact, scope, salience=None, entities=None,
                 created_at=now,
                 valid_from=now,
             ))
+            soft_delete_data_point(conn, supersedes)
 
         conn.commit()
         return {"id": dp_id, "status": "created"}

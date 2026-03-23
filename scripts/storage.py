@@ -27,6 +27,11 @@ from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
 SCHEMA_VERSION = 3
 
+# Whitelist for query_data_points order_by validation (Issue 1: SQL injection prevention)
+_ALLOWED_ORDER_COLUMNS = {"salience", "created_at", "last_accessed", "access_count", "evidence_count"}
+_ALLOWED_DIRECTIONS = {"ASC", "DESC"}
+_DEFAULT_ORDER_BY = "salience DESC, created_at DESC"
+
 SCHEMA_DDL = """\
 -- Graph layer
 CREATE TABLE IF NOT EXISTS nodes (
@@ -1134,8 +1139,27 @@ def query_data_points(
         params.append(min_salience)
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    order_clause = f"ORDER BY {order_by}" if order_by else ""
-    limit_clause = f"LIMIT {limit}" if limit else ""
+
+    # Validate order_by to prevent SQL injection: each term must be "column [DIR]"
+    validated_order_by = _DEFAULT_ORDER_BY
+    if order_by:
+        parts = [t.strip() for t in order_by.split(",")]
+        valid_parts = []
+        for part in parts:
+            tokens = part.split()
+            if len(tokens) == 1 and tokens[0] in _ALLOWED_ORDER_COLUMNS:
+                valid_parts.append(tokens[0])
+            elif (len(tokens) == 2 and tokens[0] in _ALLOWED_ORDER_COLUMNS
+                  and tokens[1].upper() in _ALLOWED_DIRECTIONS):
+                valid_parts.append(f"{tokens[0]} {tokens[1].upper()}")
+        validated_order_by = ", ".join(valid_parts) if valid_parts else _DEFAULT_ORDER_BY
+    order_clause = f"ORDER BY {validated_order_by}"
+
+    # Validate limit to prevent SQL injection: must be a non-negative integer
+    if limit is not None:
+        if not isinstance(limit, int) or limit < 0:
+            limit = None
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
 
     query = f"SELECT {_DP_COLUMNS} FROM data_points {where_clause} {order_clause} {limit_clause}"
     rows = conn.execute(query, params).fetchall()
@@ -1382,8 +1406,8 @@ def _insert_profile_section(
         "INSERT INTO data_points "
         "(id, type, name, content, scope, source_type, created_at, "
         "salience, consolidated, content_hash) "
-        "VALUES (?, 'profile', ?, ?, 'user', 'migration', ?, 1.0, 1, ?)",
-        (_generate_id(), header, content, created_at, h),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (_generate_id(), "profile", header, content, "user", "migration", created_at, 1.0, 1, h),
     )
 
 

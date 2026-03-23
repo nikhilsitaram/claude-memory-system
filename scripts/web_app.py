@@ -339,7 +339,9 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         return bool(_csrf_token) and token == _csrf_token
 
     def _serve_html(self) -> None:
-        html_path = Path(__file__).parent.parent / "templates" / "web" / "index.html"
+        installed_path = Path.home() / ".claude" / "memory" / "templates" / "web" / "index.html"
+        dev_path = Path(__file__).parent.parent / "templates" / "web" / "index.html"
+        html_path = installed_path if installed_path.exists() else dev_path
         if not html_path.exists():
             self.send_response(404)
             self.end_headers()

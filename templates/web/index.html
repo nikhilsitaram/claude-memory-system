@@ -649,6 +649,7 @@
     // Detail Modal
     // -----------------------------------------------------------------------
     let _currentDpId = null;
+    let _currentDp = null;
     let _editMode = false;
 
     async function openDetail(dpId) {
@@ -714,11 +715,16 @@
             </div>
         ` : '';
 
+        _currentDp = dp;
         document.getElementById('modal-body').innerHTML = contentHtml + metaHtml + edgesHtml;
-        document.getElementById('modal-actions').innerHTML = `
-            <button class="btn-edit" onclick="startEdit(${JSON.stringify(dp).replace(/</g,'\\u003c')})">Edit</button>
+        const actionsEl = document.getElementById('modal-actions');
+        actionsEl.innerHTML = `
+            <button class="btn-edit" id="btn-edit-dp">Edit</button>
             <button class="btn-delete" onclick="confirmDelete('${dp.id}')">Delete</button>
         `;
+        document.getElementById('btn-edit-dp').addEventListener('click', function() {
+            startEdit(_currentDp);
+        });
     }
 
     function startEdit(dp) {

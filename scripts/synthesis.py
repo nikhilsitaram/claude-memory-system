@@ -18,6 +18,7 @@ import contextlib
 import io
 import json
 import re
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -776,8 +777,8 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
     if op.supersedes:
         try:
             create_provenance_edge(conn, dp_id, op.supersedes, "supersedes", op.reason)
-        except (ValueError, Exception):
-            pass  # FK violation means the referenced dp doesn't exist; skip
+        except (ValueError, sqlite3.IntegrityError):
+            pass  # Self-reference, invalid type, or FK violation — skip
 
     # Attempt to generate embedding (best-effort; requires sqlite-vec)
     try:

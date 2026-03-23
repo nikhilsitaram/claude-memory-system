@@ -746,6 +746,53 @@ class TestSessionContext:
 
 
 # =============================================================================
+# TestSessionContextIdempotencyWildcard — Issue 7: LIKE wildcard injection
+# =============================================================================
+
+
+class TestSessionContextIdempotencyWildcard:
+    """Tests that session_id wildcards are escaped in the idempotency LIKE query."""
+
+    def test_session_id_with_percent_is_idempotent(self, tmp_path):
+        """A session_id containing '%' still produces only one context row."""
+        from synthesis_cron import _write_session_context
+        conn = _make_v3_db_for_cron(tmp_path)
+
+        sid = "session%with%percent"
+        id1 = _write_session_context(conn, "proj", ["topic"], sid)
+        id2 = _write_session_context(conn, "proj", ["topic"], sid)
+        assert id1 == id2
+        count = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_session_id_with_underscore_is_idempotent(self, tmp_path):
+        """A session_id containing '_' still produces only one context row."""
+        from synthesis_cron import _write_session_context
+        conn = _make_v3_db_for_cron(tmp_path)
+
+        sid = "session_with_underscores"
+        id1 = _write_session_context(conn, "proj", ["topic"], sid)
+        id2 = _write_session_context(conn, "proj", ["topic"], sid)
+        assert id1 == id2
+
+    def test_wildcard_session_id_does_not_match_other_sessions(self, tmp_path):
+        """A session_id with '%' does not match unrelated session contexts."""
+        from synthesis_cron import _write_session_context
+        conn = _make_v3_db_for_cron(tmp_path)
+
+        id_real = _write_session_context(conn, "proj", ["a"], "session-2026-01-01")
+        id_wild = _write_session_context(conn, "proj", ["b"], "session%")
+
+        assert id_real != id_wild
+        count = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context'"
+        ).fetchone()[0]
+        assert count == 2
+
+
+# =============================================================================
 # TestV3PromptCleanup — HIGH-1: v3 prompt strips v2-only sections
 # =============================================================================
 

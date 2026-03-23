@@ -476,6 +476,90 @@ class TestWriteMemory:
 
 
 # ===========================================================================
+# B3b — write_memory supersedes soft-deletes the old data point (Issue 3)
+# ===========================================================================
+
+
+class TestWriteMemorySupersedes:
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_superseded_data_point_is_soft_deleted(self, db):
+        """When supersedes is provided, the old data_point's salience is set to 0."""
+        import memory_server
+        memory_server._db_conn = db
+
+        old_id = _make_dp(db, content="old fact", scope="proj-x", salience=0.9)
+
+        old_dp = query_data_point_by_id(db, old_id)
+        assert old_dp.salience == 0.9
+
+        with patch("memory_server.embed_text", return_value=None):
+            self._run(memory_server._write_memory(
+                "new fact",
+                scope="proj-x",
+                supersedes=old_id,
+            ))
+
+        old_dp_after = query_data_point_by_id(db, old_id)
+        assert old_dp_after.salience == 0.0, "Superseded data point must be soft-deleted"
+
+    def test_supersedes_edge_still_created(self, db):
+        """The supersedes edge is still created even after soft-delete."""
+        import memory_server
+        memory_server._db_conn = db
+
+        old_id = _make_dp(db, content="old fact", scope="proj-x")
+
+        with patch("memory_server.embed_text", return_value=None):
+            result = self._run(memory_server._write_memory(
+                "new fact",
+                scope="proj-x",
+                supersedes=old_id,
+            ))
+
+        new_id = result["id"]
+        edge = db.execute(
+            "SELECT type FROM edges WHERE source=? AND target=?", (new_id, old_id)
+        ).fetchone()
+        assert edge is not None
+        assert edge[0] == "supersedes"
+
+
+# ===========================================================================
+# B1b — warmup thread exception handling (Issue 4)
+# ===========================================================================
+
+
+class TestWarmModelAsync:
+    def test_warmup_exception_is_logged_not_silenced(self, capsys):
+        """If embed_text raises during warmup, error is printed to stderr, model_ready not set."""
+        import memory_server
+
+        memory_server._model_ready.clear()
+
+        with patch("memory_server.embed_text", side_effect=RuntimeError("model load failed")):
+            t = memory_server._warm_model_async()
+            t.join(timeout=2.0)
+
+        assert not memory_server._model_ready.is_set(), "model_ready must not be set on exception"
+        captured = capsys.readouterr()
+        assert "model load failed" in captured.err
+
+    def test_warmup_sets_ready_on_success(self):
+        """Successful warmup sets _model_ready event."""
+        import memory_server
+
+        memory_server._model_ready.clear()
+
+        with patch("memory_server.embed_text", return_value=[0.1, 0.2, 0.3]):
+            t = memory_server._warm_model_async()
+            t.join(timeout=2.0)
+
+        assert memory_server._model_ready.is_set()
+
+
+# ===========================================================================
 # B4 — delete_memory
 # ===========================================================================
 

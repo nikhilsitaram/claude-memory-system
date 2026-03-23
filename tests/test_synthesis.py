@@ -1310,3 +1310,85 @@ class TestApplyV3:
         results = apply_memory_ops_v3(conn, ops)
         dp = query_data_point_by_id(conn, results[0]["id"])
         assert dp.salience == 0.5
+
+    def test_add_with_nonexistent_supersedes_skips_gracefully(self, tmp_path):
+        """ADD with supersedes pointing to a nonexistent ID is skipped without crashing."""
+        from synthesis import apply_memory_ops_v3, MemoryOp
+        from storage import query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [MemoryOp(action="ADD", fact="new fact", scope="proj",
+                        supersedes="nonexistent-dp-id", reason="replaced old")]
+        results = apply_memory_ops_v3(conn, ops)
+        assert results[0]["status"] == "inserted"
+        dp = query_data_point_by_id(conn, results[0]["id"])
+        assert dp is not None
+
+    def test_add_with_self_supersedes_skips_gracefully(self, tmp_path):
+        """ADD where supersedes == new dp id (self-reference) is skipped without crashing.
+
+        This can't happen in practice (dp_id is generated after insert), but the
+        except clause should only catch ValueError and sqlite3.IntegrityError.
+        """
+        from synthesis import _apply_add_v3, MemoryOp
+        from storage import DataPointRow, insert_data_point
+        import sqlite3 as _sqlite3
+
+        conn = _make_v3_db_for_synthesis(tmp_path)
+
+        dp_id = insert_data_point(conn, DataPointRow(
+            type="memory", content="existing", scope="proj", id="dp-self"))
+        conn.commit()
+
+        op = MemoryOp(action="ADD", fact="updated", scope="proj", supersedes="dp-self")
+        result = _apply_add_v3(conn, op)
+        assert result["status"] == "inserted"
+
+
+# =============================================================================
+# TestApplyAddV3ExceptionHandling — Issue 8: except clause specificity
+# =============================================================================
+
+
+class TestApplyAddV3ExceptionHandling:
+    """Tests that _apply_add_v3 only catches expected exceptions from provenance."""
+
+    def test_value_error_from_provenance_is_silenced(self, tmp_path):
+        """ValueError from create_provenance_edge (e.g., self-ref) is silenced."""
+        from synthesis import _apply_add_v3, MemoryOp
+        from unittest.mock import patch
+
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")
+
+        with patch("storage.create_provenance_edge", side_effect=ValueError("self-ref")):
+            result = _apply_add_v3(conn, op)
+
+        assert result["status"] == "inserted"
+
+    def test_integrity_error_from_provenance_is_silenced(self, tmp_path):
+        """sqlite3.IntegrityError from create_provenance_edge (FK miss) is silenced."""
+        import sqlite3
+        from synthesis import _apply_add_v3, MemoryOp
+        from unittest.mock import patch
+
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")
+
+        with patch("storage.create_provenance_edge",
+                   side_effect=sqlite3.IntegrityError("FK violation")):
+            result = _apply_add_v3(conn, op)
+
+        assert result["status"] == "inserted"
+
+    def test_unexpected_exception_from_provenance_propagates(self, tmp_path):
+        """Unexpected exceptions from create_provenance_edge are NOT silenced."""
+        import pytest
+        from synthesis import _apply_add_v3, MemoryOp
+        from unittest.mock import patch
+
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        op = MemoryOp(action="ADD", fact="new fact", scope="proj", supersedes="dp-old")
+
+        with patch("storage.create_provenance_edge", side_effect=RuntimeError("unexpected")):
+            with pytest.raises(RuntimeError, match="unexpected"):
+                _apply_add_v3(conn, op)

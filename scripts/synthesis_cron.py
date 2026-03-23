@@ -208,10 +208,11 @@ def _write_session_context(
     import json as _json
     from storage import DataPointRow, insert_data_point, insert_edge, EdgeRow
 
-    # Idempotency check
+    # Idempotency check: escape LIKE wildcards in session_id to prevent injection
+    safe_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     existing = conn.execute(
-        "SELECT id FROM data_points WHERE type='session_context' AND properties LIKE ?",
-        (f'%"session_id": "{session_id}"%',),
+        "SELECT id FROM data_points WHERE type='session_context' AND properties LIKE ? ESCAPE '\\'",
+        (f'%"session_id": "{safe_session_id}"%',),
     ).fetchone()
     if existing:
         return existing[0]
