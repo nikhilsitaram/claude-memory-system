@@ -3,10 +3,8 @@
 SQLite storage layer for Claude Code Memory System.
 
 Provides DB connection helpers, schema creation, and CRUD operations
-for the unified memory.db (graph nodes, edges, content chunks).
-
-The DB coexists with markdown files -- it is a read-optimized index,
-not a replacement for the markdown source of truth.
+for the unified memory.db (v3: data_points + edges, replacing markdown
+as the primary source of truth for structured memory).
 
 Requirements: Python 3.9+
 """
@@ -27,7 +25,12 @@ if str(script_dir) not in sys.path:
 
 from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Whitelist for query_data_points order_by validation (Issue 1: SQL injection prevention)
+_ALLOWED_ORDER_COLUMNS = {"salience", "created_at", "last_accessed", "access_count", "evidence_count"}
+_ALLOWED_DIRECTIONS = {"ASC", "DESC"}
+_DEFAULT_ORDER_BY = "salience DESC, created_at DESC"
 
 SCHEMA_DDL = """\
 -- Graph layer
@@ -53,6 +56,7 @@ CREATE TABLE IF NOT EXISTS edges (
     source TEXT NOT NULL REFERENCES nodes(id),
     target TEXT NOT NULL REFERENCES nodes(id),
     type TEXT NOT NULL,
+    reason TEXT,
     fact TEXT,
     properties TEXT,
     created_at TEXT NOT NULL,
@@ -105,19 +109,91 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
 );
 """
 
+VEC_DATA_DDL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+    embedding float[384],
+    +data_point_id TEXT,
+    +type TEXT
+);
+"""
+
+SCHEMA_V3_DDL = """\
+-- Unified data_points table (replaces chunks and nodes)
+CREATE TABLE IF NOT EXISTS data_points (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    name TEXT,
+    content TEXT,
+    scope TEXT,
+    entry_type TEXT,
+    source_type TEXT,
+    source_sessions TEXT,
+    created_at TEXT NOT NULL,
+    salience REAL DEFAULT 1.0,
+    access_count INTEGER DEFAULT 0,
+    last_accessed TEXT,
+    evidence_count INTEGER DEFAULT 1,
+    consolidated INTEGER DEFAULT 0,
+    content_hash TEXT,
+    simhash INTEGER,
+    entities TEXT,
+    properties TEXT
+);
+
+-- Edges table for relationships between data_points
+CREATE TABLE IF NOT EXISTS edges (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL REFERENCES data_points(id),
+    target TEXT NOT NULL REFERENCES data_points(id),
+    type TEXT NOT NULL,
+    reason TEXT,
+    fact TEXT,
+    properties TEXT,
+    created_at TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    expired_at TEXT,
+    weight REAL DEFAULT 1.0,
+    source_sessions TEXT
+);
+
+-- Vector search layer for data_points
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+    embedding float[384],
+    +data_point_id TEXT,
+    +type TEXT
+);
+
+-- Indexes for data_points
+CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
+CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
+CREATE INDEX IF NOT EXISTS idx_dp_salience ON data_points(salience);
+CREATE INDEX IF NOT EXISTS idx_dp_created ON data_points(created_at);
+CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
+CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
+
+-- Indexes for edges
+CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
+CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+"""
+
 __all__ = [
     "SCHEMA_VERSION",
     "SCHEMA_DDL",
     "VEC_CHUNKS_DDL",
+    "VEC_DATA_DDL",
+    "SCHEMA_V3_DDL",
     "ChunkRow",
     "NodeRow",
     "EdgeRow",
+    "DataPointRow",
     "MigrationStats",
     "ensure_db",
     "get_db",
     "close_db",
     "_get_schema_version",
     "_migrate_salience_data",
+    "_migrate_v2_to_v3",
     "insert_chunk",
     "query_chunks_by_scope",
     "query_chunks_by_source",
@@ -140,9 +216,25 @@ __all__ = [
     "query_current_edges",
     "query_edges_at_date",
     "query_edges_for_node",
+    "insert_data_point",
+    "query_data_point_by_id",
+    "query_data_points",
+    "query_data_points_by_scope",
+    "update_data_point",
+    "soft_delete_data_point",
+    "delete_data_point_soft",
+    "query_edges_for_data_point",
+    "PROVENANCE_TYPES",
+    "create_provenance_edge",
+    "query_provenance_chain",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
+    "PROFILE_SECTIONS",
+    "_migrate_profiles",
+    "migrate_profiles",
+    "_should_archive",
+    "_archive_markdown_files",
 ]
 
 
@@ -193,6 +285,7 @@ class EdgeRow:
     source: str
     target: str
     type: str
+    reason: Optional[str] = None
     fact: Optional[str] = None
     properties: Optional[str] = None
     created_at: Optional[str] = None
@@ -201,6 +294,29 @@ class EdgeRow:
     expired_at: Optional[str] = None
     weight: float = 1.0
     source_sessions: Optional[str] = None
+    id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DataPointRow:
+    """Represents a row in the data_points table (v3 schema)."""
+    type: str
+    content: Optional[str] = None
+    scope: Optional[str] = None
+    name: Optional[str] = None
+    entry_type: Optional[str] = None
+    source_type: Optional[str] = None
+    source_sessions: Optional[str] = None
+    created_at: Optional[str] = None
+    salience: float = 1.0
+    access_count: int = 0
+    last_accessed: Optional[str] = None
+    evidence_count: int = 1
+    consolidated: int = 0
+    content_hash: Optional[str] = None
+    simhash: Optional[int] = None
+    entities: Optional[str] = None
+    properties: Optional[str] = None
     id: Optional[str] = None
 
 
@@ -236,9 +352,225 @@ def _migrate_salience_data(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate from v2 schema (chunks+nodes) to v3 schema (unified data_points).
+
+    Steps:
+    1. Create data_points table
+    2. Copy chunks → data_points with type='memory'
+    3. Copy nodes → data_points with type='entity'
+    4. Add reason column to edges
+    5. Migrate vec_chunks → vec_data (if sqlite-vec available)
+    6. Verify edge integrity
+    7. Drop old chunks, nodes, vec_chunks tables
+    8. Set SCHEMA_VERSION=3
+
+    Idempotent: safe to run multiple times.
+    """
+    import json
+
+    # Guard: if data_points already exists, migration already done
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "data_points" in tables:
+        return
+
+    # Step 1: Create data_points table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS data_points (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            name TEXT,
+            content TEXT,
+            scope TEXT,
+            entry_type TEXT,
+            source_type TEXT,
+            source_sessions TEXT,
+            created_at TEXT NOT NULL,
+            salience REAL DEFAULT 1.0,
+            access_count INTEGER DEFAULT 0,
+            last_accessed TEXT,
+            evidence_count INTEGER DEFAULT 1,
+            consolidated INTEGER DEFAULT 0,
+            content_hash TEXT,
+            simhash INTEGER,
+            entities TEXT,
+            properties TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
+        CREATE INDEX IF NOT EXISTS idx_dp_scope ON data_points(scope);
+        CREATE INDEX IF NOT EXISTS idx_dp_salience ON data_points(salience);
+        CREATE INDEX IF NOT EXISTS idx_dp_created ON data_points(created_at);
+        CREATE INDEX IF NOT EXISTS idx_dp_hash ON data_points(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
+    """)
+
+    # Step 2: Copy chunks → data_points with type='memory'
+    # Build properties JSON from source_file and chunk_index
+    chunks = conn.execute(
+        "SELECT id, content, source_file, source_type, section, scope, entry_type, "
+        "chunk_index, created_at, content_hash, simhash, salience, access_count, "
+        "last_accessed, source_sessions, evidence_count, entities FROM chunks"
+    ).fetchall()
+
+    for chunk in chunks:
+        (
+            chunk_id, content, source_file, source_type, section, scope, entry_type,
+            chunk_index, created_at, content_hash, simhash, salience, access_count,
+            last_accessed, source_sessions, evidence_count, entities
+        ) = chunk
+
+        # Build properties JSON
+        properties = {}
+        if source_file:
+            properties["source_file"] = source_file
+        if chunk_index is not None:
+            properties["chunk_index"] = chunk_index
+        if section:
+            properties["section"] = section
+
+        properties_json = json.dumps(properties) if properties else None
+
+        conn.execute(
+            "INSERT INTO data_points "
+            "(id, type, content, scope, entry_type, source_type, created_at, "
+            "salience, access_count, last_accessed, content_hash, simhash, "
+            "source_sessions, evidence_count, entities, properties) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                chunk_id, "memory", content, scope, entry_type, source_type, created_at,
+                salience, access_count, last_accessed, content_hash, simhash,
+                source_sessions, evidence_count, entities, properties_json
+            )
+        )
+
+    # Step 3: Copy nodes → data_points with type='entity'
+    nodes = conn.execute(
+        "SELECT id, name, type, description, scope, access_count, last_accessed, "
+        "salience, created_at, content_hash, simhash, source_sessions, evidence_count, "
+        "consolidated FROM nodes"
+    ).fetchall()
+
+    for node in nodes:
+        (
+            node_id, name, node_type, description, scope, access_count, last_accessed,
+            salience, created_at, content_hash, simhash, source_sessions, evidence_count,
+            consolidated
+        ) = node
+
+        conn.execute(
+            "INSERT INTO data_points "
+            "(id, type, name, content, scope, created_at, salience, access_count, "
+            "last_accessed, content_hash, simhash, source_sessions, evidence_count, "
+            "consolidated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                node_id, "entity", name, description, scope, created_at, salience,
+                access_count, last_accessed, content_hash, simhash, source_sessions,
+                evidence_count, consolidated
+            )
+        )
+
+    # Step 4: Recreate edges table with data_points references and reason column
+    # Save existing edges data
+    edges_data = conn.execute(
+        "SELECT id, source, target, type, fact, properties, created_at, "
+        "valid_from, valid_to, expired_at, weight, source_sessions FROM edges"
+    ).fetchall()
+
+    # Drop old edges table (this will also drop its indexes)
+    conn.execute("DROP TABLE edges")
+
+    # Create new edges table with data_points references and reason column
+    conn.executescript("""
+        CREATE TABLE edges (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL REFERENCES data_points(id),
+            target TEXT NOT NULL REFERENCES data_points(id),
+            type TEXT NOT NULL,
+            reason TEXT,
+            fact TEXT,
+            properties TEXT,
+            created_at TEXT NOT NULL,
+            valid_from TEXT,
+            valid_to TEXT,
+            expired_at TEXT,
+            weight REAL DEFAULT 1.0,
+            source_sessions TEXT
+        );
+        CREATE INDEX idx_edges_source ON edges(source);
+        CREATE INDEX idx_edges_target ON edges(target);
+        CREATE INDEX idx_edges_valid ON edges(valid_to);
+    """)
+
+    # Restore edges data
+    for edge in edges_data:
+        conn.execute(
+            "INSERT INTO edges (id, source, target, type, fact, properties, created_at, "
+            "valid_from, valid_to, expired_at, weight, source_sessions) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            edge
+        )
+
+    # Step 5: Verify edge integrity
+    orphan_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE "
+        "source NOT IN (SELECT id FROM data_points) OR "
+        "target NOT IN (SELECT id FROM data_points)"
+    ).fetchone()[0]
+
+    if orphan_count > 0:
+        raise ValueError(
+            f"Migration integrity error: {orphan_count} edges reference "
+            "non-existent data_points"
+        )
+
+    # Step 6: Migrate vec_chunks → vec_data (if sqlite-vec available)
+    if "vec_chunks" in tables:
+        try:
+            # Create vec_data virtual table
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_data USING vec0(
+                    embedding float[384],
+                    +data_point_id TEXT,
+                    +type TEXT
+                )
+            """)
+            # Copy data: chunk_id → data_point_id, source_type → type
+            conn.execute(
+                "INSERT INTO vec_data(embedding, data_point_id, type) "
+                "SELECT embedding, chunk_id, source_type FROM vec_chunks"
+            )
+            # Drop old vec_chunks table
+            conn.execute("DROP TABLE vec_chunks")
+        except sqlite3.OperationalError as e:
+            # sqlite-vec may not be available, skip vector migration
+            if "no such module: vec0" not in str(e):
+                raise
+
+    # Step 7: Drop old tables
+    conn.execute("DROP TABLE IF EXISTS chunks")
+    conn.execute("DROP TABLE IF EXISTS nodes")
+
+    # Step 8: Set schema version to 3
+    conn.execute("PRAGMA user_version = 3")
+
+    # Step 9: Migrate profile sections from global LTM (idempotent)
+    _migrate_profiles(conn, get_memory_dir() / "global-long-term-memory.md")
+
+    conn.commit()
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
     if current_version < 2:
         _migrate_salience_data(conn)
+    if current_version < 3:
+        _migrate_v2_to_v3(conn)
 
 
 def ensure_db() -> sqlite3.Connection:
@@ -450,12 +782,12 @@ def insert_edge(conn: sqlite3.Connection, edge: EdgeRow) -> str:
     edge_id = edge.id or _generate_id()
     conn.execute(
         "INSERT INTO edges "
-        "(id, source, target, type, fact, properties, created_at, "
+        "(id, source, target, type, reason, fact, properties, created_at, "
         "valid_from, valid_to, expired_at, weight, source_sessions) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            edge_id, edge.source, edge.target, edge.type, edge.fact,
-            edge.properties, edge.created_at, edge.valid_from,
+            edge_id, edge.source, edge.target, edge.type, edge.reason,
+            edge.fact, edge.properties, edge.created_at, edge.valid_from,
             edge.valid_to, edge.expired_at, edge.weight,
             edge.source_sessions,
         ),
@@ -653,7 +985,7 @@ def query_chunk_by_id(
 
 
 _EDGE_COLUMNS = (
-    "id, source, target, type, fact, properties, created_at, "
+    "id, source, target, type, reason, fact, properties, created_at, "
     "valid_from, valid_to, expired_at, weight, source_sessions"
 )
 
@@ -662,9 +994,9 @@ def _row_to_edge(row: tuple) -> EdgeRow:
     """Convert a raw SQLite row tuple to an EdgeRow dataclass."""
     return EdgeRow(
         id=row[0], source=row[1], target=row[2], type=row[3],
-        fact=row[4], properties=row[5], created_at=row[6],
-        valid_from=row[7], valid_to=row[8], expired_at=row[9],
-        weight=row[10], source_sessions=row[11],
+        reason=row[4], fact=row[5], properties=row[6], created_at=row[7],
+        valid_from=row[8], valid_to=row[9], expired_at=row[10],
+        weight=row[11], source_sessions=row[12],
     )
 
 
@@ -704,9 +1036,430 @@ def query_edges_for_node(
     return [_row_to_edge(r) for r in rows]
 
 
+# ============================================================================
+# DataPoint CRUD (v3 schema)
+# ============================================================================
+
+_DP_COLUMNS = (
+    "id, type, name, content, scope, entry_type, source_type, source_sessions, "
+    "created_at, salience, access_count, last_accessed, evidence_count, "
+    "consolidated, content_hash, simhash, entities, properties"
+)
+
+
+def _row_to_data_point(row: tuple) -> DataPointRow:
+    """Convert a raw SQLite row tuple to a DataPointRow dataclass.
+
+    Column order must match _DP_COLUMNS exactly.
+    """
+    return DataPointRow(
+        id=row[0], type=row[1], name=row[2], content=row[3],
+        scope=row[4], entry_type=row[5], source_type=row[6],
+        source_sessions=row[7], created_at=row[8], salience=row[9],
+        access_count=row[10], last_accessed=row[11], evidence_count=row[12],
+        consolidated=row[13], content_hash=row[14], simhash=row[15],
+        entities=row[16], properties=row[17],
+    )
+
+
+def insert_data_point(conn: sqlite3.Connection, row: DataPointRow) -> str:
+    """Insert a data_point row. Generates id, created_at, and content_hash.
+
+    Returns the data_point ID.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    dp_id = row.id or _generate_id()
+    created_at = row.created_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Generate content_hash from content or name
+    text_for_hash = row.content or row.name or ""
+    content_hash = row.content_hash or _content_hash(text_for_hash) if text_for_hash else None
+
+    conn.execute(
+        "INSERT INTO data_points "
+        "(id, type, name, content, scope, entry_type, source_type, source_sessions, "
+        "created_at, salience, access_count, last_accessed, evidence_count, "
+        "consolidated, content_hash, simhash, entities, properties) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            dp_id, row.type, row.name, row.content, row.scope, row.entry_type,
+            row.source_type, row.source_sessions, created_at, row.salience,
+            row.access_count, row.last_accessed, row.evidence_count,
+            row.consolidated, content_hash, row.simhash, row.entities,
+            row.properties,
+        ),
+    )
+    return dp_id
+
+
+def query_data_point_by_id(
+    conn: sqlite3.Connection, dp_id: str
+) -> Optional[DataPointRow]:
+    """Query a single data_point by ID. Returns None if not found."""
+    row = conn.execute(
+        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id = ?", (dp_id,)
+    ).fetchone()
+    return _row_to_data_point(row) if row else None
+
+
+def query_data_points(
+    conn: sqlite3.Connection,
+    *,
+    dp_type: Optional[str] = None,
+    scope: Optional[str] = None,
+    min_salience: Optional[float] = None,
+    limit: Optional[int] = None,
+    order_by: str = "salience DESC, created_at DESC",
+) -> list[DataPointRow]:
+    """Query data_points with optional filters.
+
+    Args:
+        conn: Database connection.
+        dp_type: Filter by type (e.g., 'observation', 'entity').
+        scope: Filter by scope (e.g., 'global', 'project-x').
+        min_salience: Return only rows with salience >= this value.
+        limit: Maximum number of rows to return.
+        order_by: ORDER BY clause (default: 'salience DESC, created_at DESC').
+
+    Returns:
+        List of DataPointRow instances ordered by the given clause.
+    """
+    conditions = []
+    params = []
+
+    if dp_type:
+        conditions.append("type = ?")
+        params.append(dp_type)
+    if scope:
+        conditions.append("scope = ?")
+        params.append(scope)
+    if min_salience is not None:
+        conditions.append("salience >= ?")
+        params.append(min_salience)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    # Validate order_by to prevent SQL injection: each term must be "column [DIR]"
+    validated_order_by = _DEFAULT_ORDER_BY
+    if order_by:
+        parts = [t.strip() for t in order_by.split(",")]
+        valid_parts = []
+        for part in parts:
+            tokens = part.split()
+            if len(tokens) == 1 and tokens[0] in _ALLOWED_ORDER_COLUMNS:
+                valid_parts.append(tokens[0])
+            elif (len(tokens) == 2 and tokens[0] in _ALLOWED_ORDER_COLUMNS
+                  and tokens[1].upper() in _ALLOWED_DIRECTIONS):
+                valid_parts.append(f"{tokens[0]} {tokens[1].upper()}")
+        validated_order_by = ", ".join(valid_parts) if valid_parts else _DEFAULT_ORDER_BY
+    order_clause = f"ORDER BY {validated_order_by}"
+
+    # Validate limit to prevent SQL injection: must be a non-negative integer
+    if limit is not None:
+        if not isinstance(limit, int) or limit < 0:
+            limit = None
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+
+    query = f"SELECT {_DP_COLUMNS} FROM data_points {where_clause} {order_clause} {limit_clause}"
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_data_point(r) for r in rows]
+
+
+def query_data_points_by_scope(
+    conn: sqlite3.Connection,
+    scope: str,
+    *,
+    dp_type: Optional[str] = None,
+    min_salience: Optional[float] = None,
+    limit: Optional[int] = None,
+    order_by: str = "salience DESC, created_at DESC",
+) -> list[DataPointRow]:
+    """Query data_points for a given scope with optional filters.
+
+    Args:
+        conn: Database connection.
+        scope: Scope to filter by (e.g., 'global', 'project-x').
+        dp_type: Optional type filter.
+        min_salience: Optional minimum salience threshold.
+        limit: Optional maximum number of rows.
+        order_by: ORDER BY clause (default: 'salience DESC, created_at DESC').
+
+    Returns:
+        List of DataPointRow instances ordered by the given clause.
+    """
+    return query_data_points(
+        conn, scope=scope, dp_type=dp_type, min_salience=min_salience,
+        limit=limit, order_by=order_by
+    )
+
+
+def update_data_point(conn: sqlite3.Connection, dp_id: str, **kwargs) -> int:
+    """Update specified columns of a data_point row.
+
+    Args:
+        conn: Database connection.
+        dp_id: ID of the data_point to update.
+        **kwargs: Column-value pairs to update (e.g., content="new", salience=0.8).
+
+    Returns:
+        Number of rows affected (0 if not found, 1 if updated).
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    if not kwargs:
+        return 0
+
+    # Valid columns for update (exclude id and created_at)
+    valid_cols = {
+        "type", "name", "content", "scope", "entry_type", "source_type",
+        "source_sessions", "salience", "access_count", "last_accessed",
+        "evidence_count", "consolidated", "content_hash", "simhash",
+        "entities", "properties",
+    }
+
+    updates = []
+    params = []
+    for col, val in kwargs.items():
+        if col in valid_cols:
+            updates.append(f"{col} = ?")
+            params.append(val)
+
+    if not updates:
+        return 0
+
+    params.append(dp_id)
+    query = f"UPDATE data_points SET {', '.join(updates)} WHERE id = ?"
+    cursor = conn.execute(query, params)
+    return cursor.rowcount
+
+
+def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
+    """Soft-delete a data_point by setting salience to 0.0.
+
+    Args:
+        conn: Database connection.
+        dp_id: ID of the data_point to soft-delete.
+
+    Returns:
+        Number of rows affected (0 if not found, 1 if deleted).
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    cursor = conn.execute(
+        "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+    )
+    return cursor.rowcount
+
+
+# Alias for compatibility
+delete_data_point_soft = soft_delete_data_point
+
+
+def query_edges_for_data_point(
+    conn: sqlite3.Connection, data_point_id: str, direction: str = "both"
+) -> list[EdgeRow]:
+    """Query edges connected to a data_point.
+
+    Args:
+        conn: Database connection.
+        data_point_id: ID of the data_point.
+        direction: 'both' (default), 'outgoing' (source), or 'incoming' (target).
+
+    Returns:
+        List of EdgeRow instances.
+
+    Note: This function works with the v3 schema where edges reference data_points.
+          For v2 schema (edges reference nodes), use query_edges_for_node instead.
+    """
+    if direction == "outgoing":
+        condition = "source = ?"
+    elif direction == "incoming":
+        condition = "target = ?"
+    else:  # "both"
+        condition = "source = ? OR target = ?"
+
+    # V3 edges schema matches _EDGE_COLUMNS exactly; reuse it.
+    if direction == "both":
+        rows = conn.execute(
+            f"SELECT {_EDGE_COLUMNS} FROM edges WHERE {condition}",
+            (data_point_id, data_point_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {_EDGE_COLUMNS} FROM edges WHERE {condition}",
+            (data_point_id,),
+        ).fetchall()
+
+    return [_row_to_edge(r) for r in rows]
+
+
+PROVENANCE_TYPES = frozenset({"supersedes", "contradicts", "led_to", "refines", "supports"})
+
+
+def create_provenance_edge(
+    conn: sqlite3.Connection,
+    source_id: str,
+    target_id: str,
+    edge_type: str,
+    reason: Optional[str] = None,
+) -> str:
+    """Create a provenance edge between two data_points.
+
+    Args:
+        conn: Database connection.
+        source_id: ID of the newer/current data_point (the one doing the relating).
+        target_id: ID of the older/referenced data_point.
+        edge_type: One of PROVENANCE_TYPES (supersedes, contradicts, led_to, refines, supports).
+        reason: Optional human-readable explanation for the relationship.
+
+    Returns:
+        The new edge ID.
+
+    Raises:
+        ValueError: If source_id == target_id (self-reference) or edge_type is invalid.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    if source_id == target_id:
+        raise ValueError("Cannot create self-referencing provenance edge")
+    if edge_type not in PROVENANCE_TYPES:
+        raise ValueError(f"Invalid provenance type: {edge_type!r}. Must be one of {sorted(PROVENANCE_TYPES)}")
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return insert_edge(conn, EdgeRow(
+        source=source_id, target=target_id, type=edge_type,
+        reason=reason, created_at=now, valid_from=now,
+    ))
+
+
+def query_provenance_chain(
+    conn: sqlite3.Connection,
+    data_point_id: str,
+) -> list:
+    """Follow provenance edges from a data_point using a recursive CTE.
+
+    Traverses outgoing supersedes/contradicts/refines edges up to 10 hops deep.
+
+    Args:
+        conn: Database connection.
+        data_point_id: Starting data_point ID.
+
+    Returns:
+        List of dicts: {source_id, target_id, type, reason, depth}.
+        Empty list if no provenance edges exist.
+    """
+    rows = conn.execute("""
+        WITH RECURSIVE chain(source_id, target_id, edge_type, reason, depth) AS (
+            SELECT source, target, type, reason, 1
+            FROM edges
+            WHERE source = ? AND type IN ('supersedes', 'contradicts', 'refines')
+              AND valid_to IS NULL
+            UNION ALL
+            SELECT e.source, e.target, e.type, e.reason, c.depth + 1
+            FROM chain c
+            JOIN edges e ON e.source = c.target_id
+            WHERE e.type IN ('supersedes', 'contradicts', 'refines')
+              AND e.valid_to IS NULL
+              AND c.depth < 10
+        )
+        SELECT source_id, target_id, edge_type, reason, depth
+        FROM chain ORDER BY depth
+    """, (data_point_id,)).fetchall()
+    return [{"source_id": r[0], "target_id": r[1], "type": r[2],
+             "reason": r[3], "depth": r[4]} for r in rows]
+
+
 _LTM_ENTRY_RE = re.compile(
     r'^\s*-\s*\((\d{4}-\d{2}-\d{2})\)\s*\[([^\]]+)\]\s*(.+)'
 )
+
+# Profile section names that are migrated to data_points with type='profile'
+PROFILE_SECTIONS = frozenset({
+    "About Me",
+    "Current Projects",
+    "Technical Environment",
+    "Patterns & Preferences",
+})
+
+
+def _insert_profile_section(
+    conn: sqlite3.Connection, header: str, lines: list, created_at: str
+) -> None:
+    """Insert a single profile section as a data_point.
+
+    Skips insertion if a profile data_point with the same content_hash already
+    exists (idempotency).
+    """
+    content = "\n".join(lines).strip()
+    if not content:
+        return
+
+    h = _content_hash(content)
+    existing = conn.execute(
+        "SELECT id FROM data_points WHERE content_hash = ? AND type = 'profile'",
+        (h,),
+    ).fetchone()
+    if existing:
+        return
+
+    conn.execute(
+        "INSERT INTO data_points "
+        "(id, type, name, content, scope, source_type, created_at, "
+        "salience, consolidated, content_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (_generate_id(), "profile", header, content, "user", "migration", created_at, 1.0, 1, h),
+    )
+
+
+def _migrate_profiles(conn: sqlite3.Connection, ltm_path: Path) -> None:
+    """Parse global LTM markdown and create profile data_points.
+
+    Only processes sections whose headers match PROFILE_SECTIONS.
+    Sections with no content are skipped.
+    Idempotent: uses content_hash to avoid duplicate inserts.
+
+    Args:
+        conn: Database connection.
+        ltm_path: Path to global-long-term-memory.md.
+    """
+    if not ltm_path.exists():
+        return
+
+    created_at = datetime.fromtimestamp(
+        ltm_path.stat().st_mtime, tz=timezone.utc
+    ).isoformat().replace("+00:00", "Z")
+
+    content = ltm_path.read_text(encoding="utf-8")
+    current_header: Optional[str] = None
+    current_lines: list = []
+
+    for line in content.split("\n"):
+        if line.startswith("## "):
+            if current_header in PROFILE_SECTIONS and current_lines:
+                _insert_profile_section(conn, current_header, current_lines, created_at)
+            current_header = line[3:].strip()
+            current_lines = []
+        elif current_header is not None:
+            current_lines.append(line)
+
+    # Handle final section
+    if current_header in PROFILE_SECTIONS and current_lines:
+        _insert_profile_section(conn, current_header, current_lines, created_at)
+
+
+def migrate_profiles(conn: sqlite3.Connection, ltm_path: Path) -> None:
+    """Public API: migrate profile sections from global LTM to data_points.
+
+    Parses ## About Me, ## Current Projects, ## Technical Environment, and
+    ## Patterns & Preferences sections from the global LTM markdown file,
+    creating one data_point per section with type='profile', scope='user',
+    salience=1.0, consolidated=1.
+
+    Idempotent: safe to run multiple times.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    _migrate_profiles(conn, ltm_path)
 
 
 def _parse_ltm_entries(content: str, source_file: str, scope: str) -> list[ChunkRow]:
@@ -776,13 +1529,34 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
     Scans global LTM, project LTMs, and daily files.
     Uses content_hash to skip chunks that already exist in the DB.
     Idempotent -- safe to run multiple times.
+    Schema-aware: queries chunks for v2, data_points for v3+.
     """
     stats = MigrationStats()
-    existing_hashes = {
+
+    # Check which table to query for existing hashes
+    tables = {
         row[0] for row in conn.execute(
-            'SELECT content_hash FROM chunks WHERE content_hash IS NOT NULL'
+            "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
+
+    if 'chunks' in tables:
+        # v2 schema
+        existing_hashes = {
+            row[0] for row in conn.execute(
+                'SELECT content_hash FROM chunks WHERE content_hash IS NOT NULL'
+            ).fetchall()
+        }
+    elif 'data_points' in tables:
+        # v3+ schema
+        existing_hashes = {
+            row[0] for row in conn.execute(
+                'SELECT content_hash FROM data_points WHERE type = \'memory\' AND content_hash IS NOT NULL'
+            ).fetchall()
+        }
+    else:
+        # Empty DB
+        existing_hashes = set()
 
     def _insert_chunks(chunks: list[ChunkRow]) -> None:
         for chunk in chunks:
@@ -826,3 +1600,49 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
 
     conn.commit()
     return stats
+
+
+# ============================================================================
+# A6: Markdown archival utility
+# ============================================================================
+
+
+def _should_archive(conn: sqlite3.Connection) -> bool:
+    """Return True if the data_points table has at least one row.
+
+    Used as a migration safety guard: archival should only proceed if the v3
+    migration successfully populated data_points.
+    """
+    count = conn.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
+    return count > 0
+
+
+def _archive_markdown_files(memory_dir: Path) -> None:
+    """Move markdown memory files to .archive/ subdirectory.
+
+    Moves:
+    - daily/*.md
+    - global-long-term-memory.md
+    - project-memory/*-long-term-memory.md
+
+    Preserves filenames with a timestamp prefix inside .archive/.
+    Skips files that don't exist. Non-markdown state files (settings.json,
+    memory.db, .synthesis-state.json) are never touched.
+    """
+    archive_dir = memory_dir / ".archive"
+    archive_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+    global_ltm = memory_dir / "global-long-term-memory.md"
+    if global_ltm.exists():
+        global_ltm.rename(archive_dir / f"global-long-term-memory-{timestamp}.md")
+
+    daily_dir = memory_dir / "daily"
+    if daily_dir.exists():
+        for f in daily_dir.glob("*.md"):
+            f.rename(archive_dir / f"daily-{f.name}")
+
+    project_dir = memory_dir / "project-memory"
+    if project_dir.exists():
+        for f in project_dir.glob("*-long-term-memory.md"):
+            f.rename(archive_dir / f"project-{f.name}")

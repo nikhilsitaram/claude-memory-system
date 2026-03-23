@@ -61,22 +61,48 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     """Query the database for health metrics.
 
     Returns a HealthReport dataclass. All queries are read-only.
+    Schema-aware: queries chunks/nodes for v2, data_points for v3+.
     """
     report = HealthReport()
     report.schema_version = _get_schema_version(conn)
 
-    # Chunk statistics
-    row = conn.execute("""
-        SELECT
-            COUNT(*) as total,
-            COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
-            SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
-            SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
-            SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
-            SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
-            SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
-        FROM chunks
-    """).fetchone()
+    # Check which tables exist
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    # Chunk/memory statistics
+    if 'chunks' in tables:
+        # v2 schema: query chunks table
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
+                SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
+                SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
+                SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
+                SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
+                SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
+            FROM chunks
+        """).fetchone()
+    elif 'data_points' in tables:
+        # v3+ schema: query data_points table with type filter
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
+                SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
+                SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
+                SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
+                SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
+                SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
+            FROM data_points WHERE type = 'memory'
+        """).fetchone()
+    else:
+        # Empty or unrecognized schema
+        row = (0, 0, 0, 0, 0, 0, 0)
 
     report.total_chunks = row[0] or 0
     report.avg_salience = row[1] or 0.0
@@ -87,19 +113,29 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     report.daily_chunks = row[6] or 0
 
     # Graph statistics
-    report.graph_nodes = (
-        conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
-    )
-    report.active_edges = (
-        conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE valid_to IS NULL"
-        ).fetchone()[0] or 0
-    )
-    report.invalidated_edges = (
-        conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE valid_to IS NOT NULL"
-        ).fetchone()[0] or 0
-    )
+    if 'nodes' in tables:
+        report.graph_nodes = (
+            conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
+        )
+    elif 'data_points' in tables:
+        # v3+: nodes are data_points with type='entity'
+        report.graph_nodes = (
+            conn.execute(
+                "SELECT COUNT(*) FROM data_points WHERE type = 'entity'"
+            ).fetchone()[0] or 0
+        )
+
+    if 'edges' in tables:
+        report.active_edges = (
+            conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE valid_to IS NULL"
+            ).fetchone()[0] or 0
+        )
+        report.invalidated_edges = (
+            conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE valid_to IS NOT NULL"
+            ).fetchone()[0] or 0
+        )
 
     # DB file size
     db_path = get_db_path()

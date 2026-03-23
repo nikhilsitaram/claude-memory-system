@@ -156,6 +156,8 @@ def link_scripts(script_dir: Path) -> None:
         "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
         "backfill.py",  # One-time entity re-extraction for existing chunks
+        "web_app.py",  # Web frontend for browsing and managing memory
+        "memory_server.py",  # MCP server - search/write/delete/traverse tools
     ]
 
     for script_name in scripts_to_link:
@@ -236,6 +238,15 @@ def copy_templates(script_dir: Path) -> None:
             shutil.copy2(src, templates_dir / template_name)
     print("Copied templates to ~/.claude/memory/templates/")
 
+    # Copy web frontend templates
+    web_templates_src = script_dir / "templates" / "web"
+    web_templates_dest = templates_dir / "web"
+    if web_templates_src.exists():
+        web_templates_dest.mkdir(parents=True, exist_ok=True)
+        for f in web_templates_src.iterdir():
+            shutil.copy2(f, web_templates_dest / f.name)
+        print("Copied web frontend templates")
+
     # Copy global-long-term-memory.md to memory root if it doesn't exist
     long_term_file = memory_dir / "global-long-term-memory.md"
     if not long_term_file.exists():
@@ -265,20 +276,36 @@ def create_database(script_dir: Path) -> None:
         if str(scripts_path) not in sys.path:
             sys.path.insert(0, str(scripts_path))
 
-        from storage import close_db, ensure_db, migrate_markdown_to_db
+        import sqlite3
 
-        conn = ensure_db()
+        from memory_utils import get_db_path
+        from storage import SCHEMA_DDL, _migrate_v2_to_v3, close_db, migrate_markdown_to_db
+
+        # Create v2 DB first (with chunks/nodes tables)
+        db_path = get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.executescript(SCHEMA_DDL)
+        conn.execute('PRAGMA user_version=2')
+        conn.commit()
+
         try:
             stats = migrate_markdown_to_db(conn)
             print(f"Memory database: {stats.ltm_files_processed} LTM files, "
                   f"{stats.daily_files_processed} daily files, "
                   f"{stats.chunks_inserted} chunks indexed "
                   f"({stats.chunks_skipped} unchanged)")
+            # Migrate to v3 after population
+            _migrate_v2_to_v3(conn)
+            conn.commit()
         finally:
             close_db(conn)
     except Exception as e:
         print(f"Warning: Could not create memory database: {e}")
-        print("  The markdown-based system continues to work without it.")
+        print("  Memory context will be empty until the database is created.")
 
 
 def install_systemd_units(script_dir: Path) -> None:
@@ -589,6 +616,34 @@ def build_project_index(python_cmd: str) -> None:
         print(f"Note: Project index will be built on first /synthesize ({e})")
 
 
+def merge_mcp_servers(settings: dict, python_cmd: str) -> dict:
+    """Add memory MCP server configuration to settings.
+
+    Adds the memory MCP server under mcpServers.memory.
+    Preserves any existing mcpServers entries.
+    Idempotent — safe to call multiple times.
+
+    Args:
+        settings: Current settings dict.
+        python_cmd: Python executable command (e.g., 'python3').
+
+    Returns:
+        Updated settings dict.
+    """
+    scripts_dir = str(Path.home() / ".claude" / "scripts")
+
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+
+    settings["mcpServers"]["memory"] = {
+        "command": python_cmd,
+        "args": [f"{scripts_dir}/memory_server.py"],
+        "env": {},
+    }
+
+    return settings
+
+
 def print_success_message() -> None:
     """Print installation success message."""
     print()
@@ -597,18 +652,21 @@ def print_success_message() -> None:
     print("=" * 60)
     print()
     print("Available commands:")
-    print("  /remember   - Save notes to daily log")
-    print("  /synthesize - Process transcripts & update long-term memory")
-    print("  /recall     - Search historical memory")
+    print("  /synthesize - Process transcripts & update memory")
     print("  /settings   - View/modify memory settings & token usage")
     print("  /projects   - Manage projects (move, merge orphans, cleanup)")
     print()
-    print("Memory location: ~/.claude/memory/")
-    print("  - global-long-term-memory.md  (loaded every session)")
-    print("  - project-memory/             (loaded when in matching project)")
-    print("  - daily/                      (recent session summaries)")
+    print("MCP tools (Claude calls these automatically):")
+    print("  search_memories  - Semantic memory search")
+    print("  write_memory     - Save facts to knowledge base")
+    print("  delete_memory    - Remove outdated memories")
+    print("  traverse_graph   - Navigate knowledge graph")
     print()
+    print("Memory location: ~/.claude/memory/")
     print("Settings file: ~/.claude/memory/settings.json")
+    print()
+    print("  Web UI:     python3 ~/.claude/scripts/web_app.py")
+    print("              Opens http://localhost:8742")
     print()
     print("Start a new Claude Code session to activate the memory system.")
 
@@ -663,6 +721,9 @@ def main() -> int:
 
     # Add hooks
     settings = merge_hooks(settings, python_cmd)
+
+    # Add MCP server registration
+    settings = merge_mcp_servers(settings, python_cmd)
 
     # Add permissions
     settings = merge_permissions(settings)

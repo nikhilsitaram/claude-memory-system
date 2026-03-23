@@ -704,7 +704,16 @@ class TestCreateDatabase:
         assert db_path.exists()
         import sqlite3
         conn = sqlite3.connect(str(db_path))
-        count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        # Schema-aware: query chunks for v2, data_points for v3+
+        tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if 'chunks' in tables:
+            count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        else:
+            count = conn.execute("SELECT COUNT(*) FROM data_points WHERE type = 'memory'").fetchone()[0]
         conn.close()
         assert count >= 1
 
@@ -714,3 +723,40 @@ class TestCreateDatabase:
             install.create_database(Path("/nonexistent"))
         output = capsys.readouterr().out
         assert "Warning" in output or "Could not" in output
+
+
+# =============================================================================
+# E3: MCP server registration
+# =============================================================================
+
+
+class TestMCPInstall:
+    def test_mcp_server_added_to_settings(self):
+        """install.py adds mcpServers.memory to settings.json."""
+        settings = {}
+        updated = install.merge_mcp_servers(settings, "python3")
+        assert "mcpServers" in updated
+        assert "memory" in updated["mcpServers"]
+        assert updated["mcpServers"]["memory"]["command"] == "python3"
+        assert "memory_server.py" in updated["mcpServers"]["memory"]["args"][0]
+
+    def test_mcp_idempotent(self):
+        """Running merge_mcp_servers twice doesn't duplicate."""
+        settings = {}
+        settings = install.merge_mcp_servers(settings, "python3")
+        settings = install.merge_mcp_servers(settings, "python3")
+        assert len(settings["mcpServers"]) == 1
+
+    def test_existing_mcp_servers_preserved(self):
+        """Existing mcpServers entries are not removed."""
+        settings = {"mcpServers": {"other": {"command": "node", "args": ["other.js"]}}}
+        updated = install.merge_mcp_servers(settings, "python3")
+        assert "other" in updated["mcpServers"]
+        assert "memory" in updated["mcpServers"]
+
+    def test_memory_server_in_link_scripts(self):
+        """memory_server.py is in the scripts_to_link list."""
+        source = open(
+            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+        ).read()
+        assert "memory_server.py" in source

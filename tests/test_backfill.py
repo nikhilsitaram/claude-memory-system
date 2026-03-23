@@ -12,8 +12,6 @@ import json
 from unittest import mock
 
 import pytest
-
-from storage import ChunkRow, close_db, ensure_db, insert_chunk, query_chunk_by_id
 from backfill import (
     BATCH_SIZE,
     MODEL,
@@ -22,11 +20,26 @@ from backfill import (
     get_chunks_needing_entities,
     run_backfill,
 )
-
+from storage import ChunkRow, close_db, insert_chunk, query_chunk_by_id
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing backfill operations."""
+    import sqlite3
+
+    from storage import SCHEMA_DDL
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 
 @pytest.fixture
@@ -36,7 +49,7 @@ def db_dir(tmp_path):
     with mock.patch("storage.get_db_path", return_value=db_path), \
          mock.patch("backfill.ensure_db") as mock_ensure, \
          mock.patch("backfill.close_db"):
-        conn = ensure_db()
+        conn = _make_v2_db(db_path)
         mock_ensure.return_value = conn
         yield tmp_path, conn
     close_db(conn)

@@ -1,6 +1,6 @@
 # Claude Code Memory System - Development Guide
 
-Markdown-based memory persistence for Claude Code. See README.md for user-facing documentation.
+SQL-backed knowledge graph memory persistence for Claude Code. See README.md for user-facing documentation.
 
 ## Repo Structure
 
@@ -9,18 +9,19 @@ claude-memory-system/
 ├── install.py / uninstall.py   # Cross-platform installers
 ├── scripts/
 │   ├── memory_utils.py         # Shared utilities: paths, settings, filtering, locking
-│   ├── load_memory.py          # SessionStart hook - loads memory
+│   ├── load_memory.py          # SessionStart hook - SQL-ranked context loading
+│   ├── memory_server.py        # MCP server - search/write/delete/traverse tools
+│   ├── web_app.py              # Web frontend - browse/search/edit knowledge graph
 │   ├── indexing.py             # Session discovery, project index, CLI
-│   ├── transcript_ops.py      # Transcript parsing and extraction (split from indexing)
-│   ├── decay.py                # Age-based decay for long-term memory
-│   ├── synthesis.py            # Synthesis output parser, applier, state updater
-│   ├── project_manager.py      # Project lifecycle management library
-│   ├── devtools.py             # Dev diagnostics + mark-routed dedup migration
-│   ├── synthesis_cron.py       # Deferred synthesis runner (systemd timer entry point)
-│   ├── storage.py              # SQLite storage layer (DB lifecycle, schema, CRUD, migration)
-│   └── health.py               # Memory health diagnostics (chunk/node/edge stats, alerts)
-├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
-├── systemd/                    # Systemd user units for deferred synthesis
+│   ├── transcript_ops.py       # Transcript parsing and extraction
+│   ├── decay.py                # Salience-based decay for memory lifecycle
+│   ├── synthesis.py            # Synthesis output parser and DB apply pipeline
+│   ├── synthesis_cron.py       # Deferred synthesis runner (launchd/systemd)
+│   ├── storage.py              # SQLite storage layer (data_points, edges, migration)
+│   ├── embeddings.py           # Vector embedding and semantic search
+│   └── health.py               # Memory health diagnostics
+├── skills/                     # /synthesize, /settings, /projects (recall/remember deprecated)
+├── templates/web/              # Web frontend HTML
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
 ```
@@ -70,38 +71,28 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 ### Data Model
 
-**Long-term memory** (curated, persistent):
-| Tier | File | Loaded |
-|------|------|--------|
-| Global | `global-long-term-memory.md` | Every session |
-| Project | `project-memory/{project}-long-term-memory.md` | When `$PWD` matches |
+**Unified `data_points` table** (replaces chunks + nodes):
+| Type | Loaded | Decays? |
+|------|--------|---------|
+| `profile` (scope=user) | Every session, always | No (salience=1.0) |
+| `memory` (scope=global) | Every session, ranked | Yes (normal decay) |
+| `memory` (scope=project) | When CWD matches | Yes (normal decay) |
+| `session_context` | Most recent for project | Yes |
+| `entity` | Not directly loaded | Via edges |
 
-**Short-term memory** (recent daily summaries):
-| Tier | Default Days | Filter |
-|------|------|--------|
-| Global | 2 | `[global/*]` tagged entries |
-| Project | 5 | `[project-name/*]` tagged entries |
-
-### Entry Formats
-
-**Daily files:** `- [scope/type] Description`
-**Long-term files:** `- (YYYY-MM-DD) [type] Description`
-**Routed entries:** `- [routed][scope/type] Description` (skipped at load time)
-
-| Category | Types |
-|----------|-------|
-| Actions | `implement`, `improve`, `document`, `analyze` |
-| Decisions | `design`, `tradeoff`, `scope` |
-| Learnings | `gotcha`, `pitfall`, `pattern` |
-| Lessons | `insight`, `tip`, `workaround` |
+**MCP Tools** (Claude calls these automatically via `memory_server.py`):
+- `search_memories` — vector + graph hybrid search
+- `write_memory` — atomic DB write with embedding + provenance
+- `delete_memory` — soft delete with audit trail
+- `traverse_graph` — knowledge graph navigation
 
 ### Key Pipelines
 
-**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles context string → outputs to stdout for SessionStart hook injection.
+**Loading** (`load_memory.py`): SQL queries against `data_points` table in priority order: user profile → session continuity → project memories → global knowledge → recent activity. ~6K token budget, ~60ms latency. Access tracking on served data_points.
 
-**Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → inject scopes from CWD metadata → LLM summarizes → programmatic daily merge → LTM routing with keyword-overlap dedup (threshold 0.6) + route cap (5/file) → update `.synthesis-state.json` offsets.
+**Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → vector pre-retrieval → LLM produces `MEMORY_OPS` JSON → `apply_memory_ops_v3` writes to `data_points` + creates provenance edges. No markdown writing.
 
-**Decay** (`decay.py`): Scan LTM files for `(YYYY-MM-DD)` dated entries → archive entries older than threshold → purge expired archives. `## Pinned` section protected.
+**Decay** (`decay.py`): Applies salience decay to `data_points` entries older than threshold. Archives markdown LTM entries for backward compatibility. `## Pinned` section protected.
 
 ## Implementation Details
 
@@ -149,3 +140,23 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `decay.archiveRetentionDays` | 365 |
 
 Short-term token limits: `workingDays × 750` (calculated in `_calculate_token_limits()`).
+
+## Available Commands
+
+### Skills (slash commands)
+- `/synthesize` — run synthesis manually
+- `/settings` — view/modify memory settings
+- `/projects` — project status and cleanup
+- `/recall` — **deprecated**, use `search_memories` MCP tool
+- `/remember` — **deprecated**, use `write_memory` MCP tool
+
+### MCP Tools (auto-registered via `mcpServers.memory` in settings.json)
+- `search_memories` — vector + graph hybrid search across knowledge graph
+- `write_memory` — atomic write with embedding + provenance tracking
+- `delete_memory` — soft delete with audit trail
+- `traverse_graph` — navigate entity relationships
+
+### Web UI
+```bash
+python3 ~/.claude/scripts/web_app.py   # start at http://localhost:8742
+```
