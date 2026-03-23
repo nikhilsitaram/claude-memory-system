@@ -6,53 +6,63 @@
 
 ## Problem
 
-Phase 3 established the DB as the sole store with a unified `data_points` schema, MCP server, and web frontend. Five operational gaps remain:
+Phase 3 established the DB as the sole store with a unified `data_points` schema, MCP server, and web frontend. Eight operational gaps remain:
 
-1. **Search is broken.** fastembed and sqlite_vec aren't installed in most environments; `search_memories` silently falls back to `ORDER BY salience DESC` with no semantic understanding. No FTS5 tables exist for keyword matching.
+1. **Salience lifecycle is broken.** Access tracking in `load_memory.py` queries v2 `chunks`/`nodes` tables that don't exist in v3. Result: salience reinforcement on access is silently failing — frequently-served memories don't get boosted. Additionally, no time-based decay exists for `data_points` — `decay.py` only operates on markdown files. A mistakenly high-salience memory permanently occupies top slots with no corrective force.
 
-2. **No mid-session recall.** Memories are only loaded at SessionStart. Claude must manually call `search_memories` during a session, which it often doesn't think to do. As the corpus grows, relevant memories become effectively invisible.
+2. **Search is broken.** fastembed and sqlite_vec aren't installed in most environments; `search_memories` silently falls back to `ORDER BY salience DESC` with no semantic understanding. No FTS5 tables exist for keyword matching.
 
-3. **Memory redundancy.** Synthesis processes one session at a time and only sees a sample of existing memories via pre-retrieval. Over time, multiple sessions produce overlapping memories — slight variations of the same fact that waste token budget and make retrieval noisier.
+3. **No mid-session recall.** Memories are only loaded at SessionStart. Claude must manually call `search_memories` during a session, which it often doesn't think to do. As the corpus grows, relevant memories become effectively invisible.
 
-4. **No system visibility.** The only diagnostic signal is the token budget warning at the end of `load_memory.py` output. No visibility into salience distribution, synthesis health, graph density, or memory staleness.
+4. **Memory redundancy.** Synthesis processes one session at a time and only sees a sample of existing memories via pre-retrieval. Over time, multiple sessions produce overlapping memories — slight variations of the same fact that waste token budget and make retrieval noisier.
 
-5. **No epistemic metadata.** All memories are treated equally regardless of confidence level. A speculative observation ranks the same as a long-standing established pattern.
+5. **No system visibility.** The only diagnostic signal is the token budget warning at the end of `load_memory.py` output. No visibility into salience distribution, synthesis health, graph density, or memory staleness.
 
-6. **No secret sanitization.** API keys, passwords, and tokens can be stored and injected verbatim — a data safety concern.
+6. **No epistemic metadata.** All memories are treated equally regardless of confidence level. A speculative observation ranks the same as a long-standing established pattern.
 
-7. **SimHash bug.** `hamming_distance` in `simhash.py` silently produces wrong results when passed negative (signed) integers from SQLite's signed 64-bit INTEGER type (#70).
+7. **No secret sanitization.** API keys, passwords, and tokens can be stored and injected verbatim — a data safety concern.
+
+8. **V2 dead code.** Multiple scripts contain dead v2 code paths (synthesis.py legacy apply functions, deprecated embeddings functions, markdown-only decay logic) that are exported in `__all__` and risk accidental use.
+
+9. **SimHash bug.** `hamming_distance` in `simhash.py` silently produces wrong results when passed negative (signed) integers from SQLite's signed 64-bit INTEGER type (#70).
 
 ## Goal
 
-Deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory injection, daily memory consolidation, enhanced health monitoring, epistemic metadata, secret sanitization, and retrieval benchmarking — all within the existing SQLite-backed architecture.
+Fix the broken salience lifecycle (reinforcement + decay on `data_points`), deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory injection, daily memory consolidation, enhanced health monitoring, epistemic metadata, secret sanitization, clean up v2 dead code, and add retrieval benchmarking — all within the existing SQLite-backed architecture.
 
 ## Success Criteria
 
-1. **Hybrid search works.** Memory search returns semantically relevant results via RRF fusion of FTS5 BM25 + vector KNN, outperforming the current salience-ranked fallback. Graceful degradation when fastembed or sqlite-vec are unavailable.
+1. **Salience reinforcement works.** When a memory is served at SessionStart or via search, its salience increases via the diminishing-returns formula (`salience + 0.18 * (1 - salience)`), operating on the v3 `data_points` table. Associative reinforcement boosts connected entities via edges.
 
-2. **Proactive mid-session recall.** Relevant memories are surfaced during a session via UserPromptSubmit hook without Claude needing to call a tool. Latency < 800ms per prompt.
+2. **Salience decay works.** A scheduled decay pass applies tiered exponential decay (hot λ=0.005, warm λ=0.02, cold λ=0.05) to `data_points` based on time since last access. Memories that are never accessed naturally lose salience. Piggybacked on synthesis_cron.
 
-3. **Redundant memories are merged.** When two or more active memories have cosine similarity >= 0.80 and represent the same fact, the consolidation pipeline produces a single merged data_point that supersedes the originals.
+3. **Hybrid search works.** Memory search returns semantically relevant results via RRF fusion of FTS5 BM25 + vector KNN, outperforming the current salience-ranked fallback. Graceful degradation when fastembed or sqlite-vec are unavailable.
 
-4. **Evolving knowledge is preserved.** When similar memories represent an evolution of understanding (decisions, reversals, corrections), the LLM refuses to merge them (SKIP). The pipeline never destroys temporal context or decision reasoning.
+4. **Proactive mid-session recall.** Relevant memories are surfaced during a session via UserPromptSubmit hook without Claude needing to call a tool. Latency < 800ms per prompt.
 
-5. **Dates in consolidation.** The LLM merge prompt includes full ISO datetime (`created_at`) for each cluster member, enabling it to preserve temporal ordering and identify which insight came last within the same day.
+5. **Redundant memories are merged.** When two or more active memories have cosine similarity >= 0.80 and represent the same fact, the consolidation pipeline produces a single merged data_point that supersedes the originals.
 
-6. **Daily consolidation cadence.** Consolidation runs once per day as a post-step in `synthesis_cron.py`, gated by interval and minimum-memory thresholds. No separate timer required.
+6. **Evolving knowledge is preserved.** When similar memories represent an evolution of understanding (decisions, reversals, corrections), the LLM refuses to merge them (SKIP). The pipeline never destroys temporal context or decision reasoning.
 
-7. **Backfill on first run.** The first-ever consolidation run processes all unconsolidated memories (higher cluster cap) to clear the historical backlog.
+7. **Dates in consolidation.** The LLM merge prompt includes full ISO datetime (`created_at`) for each cluster member, enabling it to preserve temporal ordering and identify which insight came last within the same day.
 
-8. **Epistemic metadata.** Memories have certainty scores (1-5) that affect decay rates and retrieval ranking.
+8. **Daily consolidation cadence.** Consolidation runs once per day as a post-step in `synthesis_cron.py`, gated by interval and minimum-memory thresholds. No separate timer required.
 
-9. **Secrets are redacted.** API keys, connection strings, JWTs, and private keys are sanitized before storage and injection.
+9. **Backfill on first run.** The first-ever consolidation run processes all unconsolidated memories (higher cluster cap) to clear the historical backlog.
 
-10. **Health dashboard.** `health.py` reports: memories by scope/type, consolidation stats, synthesis stats, staleness indicators, and graph density. SessionStart surfaces alerts for degraded conditions.
+10. **Epistemic metadata.** Memories have certainty scores (1-5) that affect decay rates and retrieval ranking.
 
-11. **Retrieval benchmarking.** A benchmark harness measures precision@5, recall@5, NDCG@10, and MRR with regression detection.
+11. **Secrets are redacted.** API keys, connection strings, JWTs, and private keys are sanitized before storage and injection.
 
-12. **Hamming distance guard.** `hamming_distance()` raises `ValueError` on negative inputs.
+12. **Health dashboard.** `health.py` reports: memories by scope/type, consolidation stats, synthesis stats, stalience indicators, and graph density. SessionStart surfaces alerts for degraded conditions.
 
-13. **No regressions.** All new public functions tested. Test baseline: 1024 passed, 18 skipped.
+13. **Retrieval benchmarking.** A benchmark harness measures precision@5, recall@5, NDCG@10, and MRR with regression detection.
+
+14. **V2 dead code removed.** Legacy v2 functions (`_apply_add`, `_apply_update`, `_apply_delete`, `_apply_noop`, `run_decay`, deprecated `index_chunks*`) cleaned up from synthesis.py and embeddings.py. Markdown-only decay.py deprecated.
+
+15. **Hamming distance guard.** `hamming_distance()` raises `ValueError` on negative inputs.
+
+16. **No regressions.** All new public functions tested. Test baseline: 1024 passed, 18 skipped.
 
 ## Non-Goals
 
@@ -65,6 +75,144 @@ Deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory inject
 - Cross-encoder reranking (RRF is sufficient for our corpus size)
 
 ## Architecture
+
+### Salience Lifecycle Fix
+
+The v3 schema broke both directions of salience movement. This section restores them.
+
+#### Salience Reinforcement (port to v3)
+
+Rewrite `_execute_access_tracking` in `load_memory.py` to operate on `data_points` instead of `chunks`/`nodes`:
+
+```python
+def _execute_access_tracking_v3(conn, dp_ids: list[str]) -> None:
+    """Reinforce salience for served data_points and their graph neighbors."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    for dp_id in dp_ids:
+        # Increment access count
+        conn.execute(
+            "UPDATE data_points SET access_count = access_count + 1, "
+            "last_accessed = ? WHERE id = ?", (now, dp_id)
+        )
+        # Reinforce salience (diminishing returns)
+        row = conn.execute(
+            "SELECT salience FROM data_points WHERE id = ?", (dp_id,)
+        ).fetchone()
+        if row:
+            current = row[0] if row[0] is not None else 1.0
+            new_sal = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+            conn.execute(
+                "UPDATE data_points SET salience = ? WHERE id = ?",
+                (new_sal, dp_id)
+            )
+
+    # Associative reinforcement: boost entities connected via edges
+    if dp_ids:
+        placeholders = ",".join("?" for _ in dp_ids)
+        neighbors = conn.execute(
+            f"SELECT DISTINCT e.target, dp.salience, e.weight FROM edges e "
+            f"JOIN data_points dp ON dp.id = e.target "
+            f"WHERE e.source IN ({placeholders}) AND e.valid_to IS NULL "
+            f"AND dp.type = 'entity'",
+            dp_ids
+        ).fetchall()
+        for target_id, neighbor_sal, edge_weight in neighbors:
+            boost = REINFORCEMENT_ETA * (edge_weight or 1.0) * new_sal
+            new_neighbor_sal = min(1.0, (neighbor_sal or 0.5) + boost)
+            conn.execute(
+                "UPDATE data_points SET salience = ? WHERE id = ?",
+                (new_neighbor_sal, target_id)
+            )
+
+    conn.commit()
+```
+
+Replaces the broken v2 path. Called from `_load_from_db()` after serving memories.
+
+#### Tiered Salience Decay (port to v3)
+
+New function in `decay.py` (or new `scripts/decay_v3.py`):
+
+```python
+def decay_data_points(conn, dry_run=False) -> int:
+    """Apply tiered exponential decay to data_points salience.
+
+    Queries all data_points with salience > 0.05, classifies into
+    hot/warm/cold tiers based on recency + access count, applies
+    decay formula. Returns count of decayed entries.
+    """
+    rows = conn.execute(
+        "SELECT id, salience, access_count, last_accessed "
+        "FROM data_points WHERE type = 'memory' AND salience > ? "
+        "AND consolidated != 1",
+        (ARCHIVE_SALIENCE_THRESHOLD,)
+    ).fetchall()
+
+    decayed = 0
+    for dp_id, salience, access_count, last_accessed in rows:
+        dt = days_since(last_accessed)
+        tier, lam = pick_tier(dt, access_count or 0, salience or 0)
+        new_sal = decay_salience(salience, dt, lam)
+        if new_sal != salience:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE data_points SET salience = ? WHERE id = ?",
+                    (max(0.0, min(1.0, new_sal)), dp_id)
+                )
+            decayed += 1
+
+    if not dry_run:
+        conn.commit()
+    return decayed
+```
+
+**Scheduling:** Piggybacked on `synthesis_cron.py`, runs on every synthesis invocation (not gated by interval — decay is cheap and idempotent). Existing `pick_tier` and `decay_salience` functions from `decay.py` are reused.
+
+**Protected from decay:**
+- `type = 'profile'` (user profile, permanent)
+- `consolidated = 1` (pinned entries)
+- `scope = 'user'` (user-scope memories)
+- Certainty 4-5 (Phase B, once epistemic metadata is added) — immune to decay
+
+**Salience lifecycle summary (after fix):**
+
+| Direction | Mechanism | Trigger |
+|---|---|---|
+| Set initially | Synthesis LLM assigns 0.0-1.0 | Session end |
+| Increases on access | `REINFORCEMENT_ETA = 0.18` diminishing returns | Every SessionStart / search_memories |
+| Decreases over time | Tiered exponential decay (hot/warm/cold) | Every synthesis_cron run |
+| Zeroed on delete | `soft_delete_data_point` | Manual or consolidation supersession |
+
+### V2 Dead Code Cleanup
+
+#### Files to clean up
+
+**synthesis.py:**
+- Remove `_apply_add`, `_apply_update`, `_apply_delete`, `_apply_noop` (lines 340-486) — v2 apply functions that import `insert_chunk`, `update_chunk_salience`, etc.
+- Remove `apply_memory_ops` (v2 markdown writer) — replaced by `apply_memory_ops_v3`
+- Remove `run_decay()` wrapper — calls markdown-only `decay.run()`
+- Remove from `__all__` exports
+- Keep `apply_memory_ops_v3`, `parse_synthesis_output`, `MemoryOp` — active v3 code
+
+**embeddings.py:**
+- Remove `index_chunks()` and `index_chunks_by_source()` — query dead `chunks`/`vec_chunks` tables
+- Remove from `__all__` exports
+- Keep `index_data_points()` and `index_data_points_by_source()` — active v3 code
+
+**decay.py:**
+- Deprecate markdown-based `run()`, `decay_file()`, `append_to_archive()`, `purge_old_archives()`
+- Keep and reuse `pick_tier()`, `decay_salience()`, `days_since()` — these are the tiered decay primitives used by the new v3 decay function
+- Add `decay_data_points()` as the new v3 entry point
+
+**backfill.py:**
+- Update to query `data_points WHERE type='memory'` instead of `chunks`
+- Update to write `UPDATE data_points SET entities = ?` instead of `UPDATE chunks`
+
+**load_memory.py:**
+- Remove `_execute_access_tracking` (v2 path querying chunks/nodes)
+- Replace with `_execute_access_tracking_v3` (queries data_points)
+- Remove imports of `batch_update_access`, `update_chunk_salience`, `update_node_salience`, `query_neighbor_nodes`
 
 ### Search Foundation
 
@@ -436,13 +584,16 @@ New settings in `settings.json`:
 
 ### Four Sequential Phases
 
-**Phase A: Search Foundation + Health** (no LLM dependency)
-- A1: FTS5 virtual table + migration backfill in `storage.py`
-- A2: RRF hybrid search (`search_hybrid()`) in `embeddings.py`
-- A3: Wire hybrid search into `memory_server.py`
-- A4: Secret sanitization in `memory_utils.py` + integration at write/inject points
-- A5: Hamming distance fix in `simhash.py`
-- A6: Health monitoring enhancement (`health.py` extended metrics, `load_memory.py` alerts, web dashboard stats)
+**Phase A: Salience Lifecycle + Search Foundation + Health** (no LLM dependency)
+- A1: Port salience reinforcement to v3 — rewrite `_execute_access_tracking` in `load_memory.py` to query/update `data_points`
+- A2: Port tiered decay to v3 — add `decay_data_points()` function, integrate into `synthesis_cron.py`
+- A3: V2 dead code cleanup — remove legacy apply functions from synthesis.py, deprecated index functions from embeddings.py, fix backfill.py, deprecate markdown decay in decay.py
+- A4: FTS5 virtual table + migration backfill in `storage.py`
+- A5: RRF hybrid search (`search_hybrid()`) in `embeddings.py`
+- A6: Wire hybrid search into `memory_server.py`
+- A7: Secret sanitization in `memory_utils.py` + integration at write/inject points
+- A8: Hamming distance fix in `simhash.py`
+- A9: Health monitoring enhancement (`health.py` extended metrics, `load_memory.py` alerts, web dashboard stats)
 
 **Phase B: Proactive Retrieval** (depends on A for hybrid search)
 - B1: `prompt_recall.py` — UserPromptSubmit hook with relevance gate, hybrid search, dedup, output formatting
@@ -450,7 +601,7 @@ New settings in `settings.json`:
 - B3: Certainty integration into decay, scoring, synthesis, write_memory
 - B4: Hook registration in `install.py`
 
-**Phase C: Consolidation** (depends on A for search, benefits from B for certainty)
+**Phase C: Consolidation** (depends on A for search + decay, benefits from B for certainty)
 - C1: Consolidation pipeline (`scripts/consolidation.py` — clustering, scoring, LLM merge/skip, DB writes)
 - C2: Integration into `synthesis_cron.py` (daily gate, backfill detection)
 - C3: `/consolidate` skill for manual trigger
@@ -476,8 +627,12 @@ New settings in `settings.json`:
 
 | File | Phases | Changes |
 |---|---|---|
+| `scripts/load_memory.py` | A | Replace `_execute_access_tracking` with v3 version (data_points queries + salience reinforcement), SessionStart health alerts, sanitize output, stale state cleanup |
+| `scripts/decay.py` | A | Add `decay_data_points()` v3 entry point, deprecate markdown-only `run()` |
+| `scripts/synthesis.py` | A, B | Remove v2 `_apply_*` functions + `run_decay()` + `apply_memory_ops()`, sanitize in apply ops, FTS5 sync, parse certainty from MEMORY_OPS |
+| `scripts/embeddings.py` | A | Remove deprecated `index_chunks*`, add `search_hybrid()`, `search_fts5()`, FTS5 insert/delete helpers |
+| `scripts/backfill.py` | A | Update to query `data_points WHERE type='memory'` instead of `chunks` |
 | `scripts/storage.py` | A, B | FTS5 DDL, migration backfill, delete sync, certainty/validity_context columns |
-| `scripts/embeddings.py` | A | `search_hybrid()`, `search_fts5()`, FTS5 insert/delete helpers |
 | `scripts/memory_server.py` | A, B | Wire hybrid search, accept certainty in write_memory, sanitize writes |
 | `scripts/memory_utils.py` | A, C | `sanitize_secrets()`, consolidation + recall defaults in DEFAULT_SETTINGS |
 | `scripts/synthesis.py` | A, B | Sanitize in apply ops, FTS5 sync, parse certainty from MEMORY_OPS |
