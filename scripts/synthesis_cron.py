@@ -107,7 +107,7 @@ def retrieve_existing_memories(
         conn = get_db()
         similar = search_similar(conn, query_text, top_k=top_k, scope=scope)
         for scored_chunk in similar:
-            chunk = scored_chunk.chunk
+            chunk = scored_chunk.data_point
             if chunk.id not in seen_ids:
                 seen_ids.add(chunk.id)
                 results.append({
@@ -535,6 +535,7 @@ def run_synthesis(force: bool = False) -> int:
                 pass
 
     if not success:
+        _clear_eager_timestamp()
         return 1
 
     print("All synthesis runs complete")

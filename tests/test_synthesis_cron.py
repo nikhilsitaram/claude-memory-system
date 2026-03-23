@@ -295,8 +295,8 @@ class TestRunSynthesis:
         env = mock_run.call_args[1].get("env", {})
         assert env.get("CLAUDECODE") == ""
 
-    def test_keeps_timestamp_on_timeout(self, tmp_path):
-        """When claude -p times out, timestamp preserved (partial success possible)."""
+    def test_clears_timestamp_on_timeout(self, tmp_path):
+        """When claude -p times out, eager timestamp cleared to allow retry."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
         last_synth = tmp_path / ".last-synthesis"
@@ -314,11 +314,11 @@ class TestRunSynthesis:
             result = run_synthesis()
 
         assert result == 1
-        # Timestamp kept — next run will re-extract only still-pending dates
-        assert last_synth.exists()
+        # Timestamp cleared — allows retry on next interval
+        assert not last_synth.exists()
 
-    def test_keeps_timestamp_on_nonzero_exit(self, tmp_path):
-        """When claude -p exits non-zero, timestamp preserved."""
+    def test_clears_timestamp_on_nonzero_exit(self, tmp_path):
+        """When claude -p exits non-zero, eager timestamp cleared to allow retry."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
         last_synth = tmp_path / ".last-synthesis"
@@ -336,10 +336,10 @@ class TestRunSynthesis:
             result = run_synthesis()
 
         assert result == 1
-        assert last_synth.exists()
+        assert not last_synth.exists()
 
-    def test_keeps_timestamp_on_file_not_found(self, tmp_path):
-        """When claude binary is missing, timestamp preserved."""
+    def test_clears_timestamp_on_file_not_found(self, tmp_path):
+        """When claude binary is missing, eager timestamp cleared to allow retry."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
         last_synth = tmp_path / ".last-synthesis"
@@ -357,7 +357,7 @@ class TestRunSynthesis:
             result = run_synthesis()
 
         assert result == 1
-        assert last_synth.exists()
+        assert not last_synth.exists()
 
     def test_logs_error_on_failure(self, tmp_path):
         """When claude -p fails, should write to error log."""
