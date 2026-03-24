@@ -692,13 +692,17 @@ def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str])
         [timestamp] + list(dp_ids),
     )
 
+    # Batch-fetch saliences to avoid N+1 queries
+    salience_rows = conn.execute(
+        f"SELECT id, salience FROM data_points WHERE id IN ({placeholders})",
+        list(dp_ids),
+    ).fetchall()
+    salience_map = {row[0]: row[1] for row in salience_rows}
+
     for dp_id in dp_ids:
-        row = conn.execute(
-            "SELECT salience FROM data_points WHERE id = ?", (dp_id,)
-        ).fetchone()
-        if not row:
+        if dp_id not in salience_map:
             continue
-        current = row[0] if row[0] is not None else 1.0
+        current = salience_map[dp_id] if salience_map[dp_id] is not None else 1.0
         new_sal = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
         conn.execute(
             "UPDATE data_points SET salience = ? WHERE id = ?",

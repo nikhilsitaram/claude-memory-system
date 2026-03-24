@@ -22,10 +22,13 @@ _CONFIRM_RE = re.compile(
     re.IGNORECASE,
 )
 
-MIN_PROMPT_LENGTH = 15
-MAX_PROMPT_LENGTH = 500
-MAX_INJECTIONS = 3
-DEDUP_WINDOW = 3
+from memory_utils import DEFAULT_SETTINGS
+
+_RECALL_DEFAULTS = DEFAULT_SETTINGS["recall"]
+MIN_PROMPT_LENGTH = _RECALL_DEFAULTS["minPromptLength"]
+MAX_PROMPT_LENGTH = _RECALL_DEFAULTS["maxPromptLength"]
+MAX_INJECTIONS = _RECALL_DEFAULTS["maxInjectionsPerPrompt"]
+DEDUP_WINDOW = 3  # Not user-configurable — internal dedup window
 
 
 def should_search(prompt: str) -> bool:

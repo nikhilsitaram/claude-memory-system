@@ -5,20 +5,17 @@ Seeds a test DB with ~50 diverse memories, runs ~20 benchmark queries,
 measures precision@5, recall@5, NDCG@10, MRR, and compares against baseline.
 
 Usage:
-    python3 -m pytest tests/benchmark_retrieval.py -v
-    python3 tests/benchmark_retrieval.py --update-baseline  # save new baseline
+    python3 -m pytest tests/test_benchmark_retrieval.py -v
+    python3 tests/test_benchmark_retrieval.py --update-baseline  # save new baseline
 """
 import json
 import math
 import sqlite3
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from storage import ensure_db, insert_data_point, DataPointRow, fts_insert
 

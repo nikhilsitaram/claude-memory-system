@@ -222,6 +222,15 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "synthesis.py",
         claude_dir / "scripts" / "devtools.py",
         claude_dir / "scripts" / "consolidation.py",
+        claude_dir / "scripts" / "storage.py",
+        claude_dir / "scripts" / "embeddings.py",
+        claude_dir / "scripts" / "health.py",
+        claude_dir / "scripts" / "memory_server.py",
+        claude_dir / "scripts" / "web_app.py",
+        claude_dir / "scripts" / "backfill.py",
+        claude_dir / "scripts" / "prompt_recall.py",
+        claude_dir / "scripts" / "simhash.py",
+        claude_dir / "scripts" / "chunking.py",
         # Legacy scripts — removed in past versions but may still exist on disk
         # for users who installed before the removal. Keep in purge list to ensure
         # clean uninstall regardless of which version was originally installed.

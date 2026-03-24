@@ -30,6 +30,7 @@ except ImportError:
 
 from embeddings import _serialize_vector, embed_text, search_hybrid, search_similar
 from storage import (
+    PROVENANCE_TYPES,
     DataPointRow,
     EdgeRow,
     ensure_db,
@@ -42,6 +43,16 @@ from storage import (
 )
 
 TOOL_NAMES = ["search_memories", "write_memory", "delete_memory", "traverse_graph"]
+
+
+def _safe_json_loads(value):
+    """Parse JSON string, returning empty list on None or malformed input."""
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 _db_conn = None
 _model_ready = threading.Event()
@@ -165,7 +176,7 @@ if HAS_MCP:
 
         if name == "delete_memory":
             result = await _delete_memory(
-                id=arguments["id"],
+                dp_id=arguments["id"],
                 reason=arguments.get("reason"),
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -199,7 +210,8 @@ def _sql_ranked_search(conn, scope, top_k):
     rows = conn.execute(
         f"SELECT id, type, name, content, scope, entry_type, source_type, source_sessions, "
         f"created_at, salience, access_count, last_accessed, evidence_count, "
-        f"consolidated, content_hash, simhash, entities, properties "
+        f"consolidated, content_hash, simhash, entities, properties, "
+        f"certainty, validity_context "
         f"FROM data_points {where} ORDER BY salience DESC, created_at DESC LIMIT ?",
         params + [top_k],
     ).fetchall()
@@ -213,6 +225,8 @@ def _sql_ranked_search(conn, scope, top_k):
             access_count=row[10], last_accessed=row[11], evidence_count=row[12],
             consolidated=row[13], content_hash=row[14], simhash=row[15],
             entities=row[16], properties=row[17],
+            certainty=row[18] if len(row) > 18 else None,
+            validity_context=row[19] if len(row) > 19 else None,
         )
         results.append(ScoredDataPoint(data_point=dp, score=dp.salience, vec_similarity=0.0))
     return results
@@ -257,7 +271,7 @@ async def _search_memories(query, scope=None, top_k=10):
             "score": round(r.score, 3),
             "scope": r.data_point.scope,
             "certainty": r.data_point.certainty,
-            "entities": json.loads(r.data_point.entities) if r.data_point.entities else [],
+            "entities": _safe_json_loads(r.data_point.entities),
             "provenance": [{"id": e[0], "type": e[1], "reason": e[2]} for e in prov_edges],
         })
     return formatted
@@ -339,7 +353,7 @@ async def _write_memory(fact, scope, salience=None, entities=None,
                 ))
 
         if supersedes:
-            edge_type = relation_type or "supersedes"
+            edge_type = relation_type if relation_type in PROVENANCE_TYPES else "supersedes"
             insert_edge(conn, EdgeRow(
                 source=dp_id,
                 target=supersedes,
@@ -357,20 +371,20 @@ async def _write_memory(fact, scope, salience=None, entities=None,
         raise
 
 
-async def _delete_memory(id, reason=None):
+async def _delete_memory(dp_id, reason=None):
     """Soft-delete a data_point: salience=0, invalidate edges, create deletion marker."""
     conn = _db_conn
-    target = query_data_point_by_id(conn, id)
+    target = query_data_point_by_id(conn, dp_id)
     if not target:
-        return {"error": f"Data point {id} not found"}
+        return {"error": f"Data point {dp_id} not found"}
 
     try:
         conn.execute("BEGIN IMMEDIATE")
         now = datetime.now(timezone.utc).isoformat()
 
-        soft_delete_data_point(conn, id)
+        soft_delete_data_point(conn, dp_id)
 
-        edges = query_edges_for_data_point(conn, id, direction="both")
+        edges = query_edges_for_data_point(conn, dp_id, direction="both")
         for edge in edges:
             if edge.valid_to is None:
                 invalidate_edge(conn, edge.id, now, now)
@@ -388,7 +402,7 @@ async def _delete_memory(id, reason=None):
 
         insert_edge(conn, EdgeRow(
             source=marker_id,
-            target=id,
+            target=dp_id,
             type="supersedes",
             fact=reason,
             created_at=now,
