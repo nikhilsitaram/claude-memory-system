@@ -831,3 +831,53 @@ class TestPyprojectMcpDependency:
         pyproject = repo_root / "pyproject.toml"
         content = pyproject.read_text()
         assert "<2.0.0" in content or "<2" in content
+
+
+# =============================================================================
+# A6: Hybrid Search Wiring Tests
+# =============================================================================
+
+
+class TestSearchMemoriesHybrid:
+    """Tests for hybrid search integration in _search_memories."""
+
+    def test_uses_search_hybrid(self):
+        """_search_memories calls search_hybrid when available."""
+        from unittest.mock import patch, MagicMock
+        import asyncio
+        import memory_server
+        from memory_server import _search_memories
+
+        mock_result = MagicMock()
+        mock_result.data_point = MagicMock()
+        mock_result.data_point.id = "dp-1"
+        mock_result.data_point.content = "test fact"
+        mock_result.data_point.scope = "global"
+        mock_result.data_point.salience = 0.8
+        mock_result.data_point.entities = '["Redis"]'
+        mock_result.score = 0.95
+
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = []
+
+        with patch("memory_server.search_hybrid", return_value=[mock_result]) as mock_hybrid, \
+             patch("memory_server.query_edges_for_data_point", return_value=[]), \
+             patch.object(memory_server, '_db_conn', mock_conn):
+            result = asyncio.get_event_loop().run_until_complete(
+                _search_memories("Redis cache", scope=None, top_k=5)
+            )
+            mock_hybrid.assert_called_once()
+
+    def test_falls_back_to_sql_when_hybrid_empty(self):
+        """Falls back to _sql_ranked_search when search_hybrid returns nothing."""
+        from unittest.mock import patch, MagicMock
+        import asyncio
+        from memory_server import _search_memories
+
+        with patch("memory_server.search_hybrid", return_value=[]), \
+             patch("memory_server._sql_ranked_search") as mock_sql:
+            mock_sql.return_value = []
+            asyncio.get_event_loop().run_until_complete(
+                _search_memories("something", scope=None, top_k=5)
+            )
+            mock_sql.assert_called_once()
