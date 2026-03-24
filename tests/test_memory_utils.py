@@ -1470,5 +1470,41 @@ class TestSanitizeSecrets:
         assert sanitize_secrets(None) is None
 
 
+# =============================================================================
+# Consolidation and recall settings
+# =============================================================================
+
+
+class TestConsolidationSettings:
+    def test_default_settings_has_consolidation(self):
+        from memory_utils import DEFAULT_SETTINGS
+        assert "consolidation" in DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["consolidation"]["intervalHours"] == 24
+        assert DEFAULT_SETTINGS["consolidation"]["minMemories"] == 5
+        assert DEFAULT_SETTINGS["consolidation"]["similarityThreshold"] == 0.80
+        assert DEFAULT_SETTINGS["consolidation"]["maxClusters"] == 15
+        assert DEFAULT_SETTINGS["consolidation"]["backfillMaxClusters"] == 30
+        assert DEFAULT_SETTINGS["consolidation"]["model"] == "sonnet"
+
+    def test_default_settings_has_recall(self):
+        from memory_utils import DEFAULT_SETTINGS
+        assert "recall" in DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["recall"]["maxPromptLength"] == 500
+        assert DEFAULT_SETTINGS["recall"]["minPromptLength"] == 15
+        assert DEFAULT_SETTINGS["recall"]["maxInjectionsPerPrompt"] == 3
+        assert DEFAULT_SETTINGS["recall"]["maxTokenBudget"] == 500
+
+    def test_load_settings_includes_consolidation_defaults(self, tmp_path):
+        """load_settings() returns consolidation defaults even if settings.json lacks them."""
+        from unittest.mock import patch
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{"version": 3}')
+        with patch("memory_utils.get_settings_file", return_value=settings_file):
+            from memory_utils import load_settings
+            settings = load_settings()
+        assert "consolidation" in settings
+        assert settings["consolidation"]["intervalHours"] == DEFAULT_SETTINGS["consolidation"]["intervalHours"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

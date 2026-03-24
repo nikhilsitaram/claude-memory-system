@@ -159,6 +159,7 @@ def link_scripts(script_dir: Path) -> None:
         "web_app.py",  # Web frontend for browsing and managing memory
         "memory_server.py",  # MCP server - search/write/delete/traverse tools
         "prompt_recall.py",  # UserPromptSubmit hook - proactive memory injection
+        "consolidation.py",  # Memory consolidation and deduplication
     ]
 
     for script_name in scripts_to_link:
@@ -205,7 +206,7 @@ def link_skills(script_dir: Path) -> None:
     """Symlink skill directories to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "settings", "projects"]
+    skills = ["remember", "synthesize", "recall", "settings", "projects", "consolidate"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill

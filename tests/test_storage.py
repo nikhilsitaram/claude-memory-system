@@ -2574,3 +2574,40 @@ class TestEpistemicMetadata:
         assert "certainty" in cols
         assert "validity_context" in cols
         conn.close()
+
+
+class TestMetadataTable:
+    """Tests for the metadata key-value table."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_metadata_table_exists(self, tmp_path):
+        conn = self._make_db(tmp_path)
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "metadata" in tables
+        conn.close()
+
+    def test_metadata_insert_and_read(self, tmp_path):
+        conn = self._make_db(tmp_path)
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('test_key', 'test_val')")
+        conn.commit()
+        row = conn.execute("SELECT value FROM metadata WHERE key = 'test_key'").fetchone()
+        assert row[0] == "test_val"
+        conn.close()
+
+    def test_metadata_upsert(self, tmp_path):
+        conn = self._make_db(tmp_path)
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('k', 'v1')")
+        conn.commit()
+        conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('k', 'v2')")
+        conn.commit()
+        row = conn.execute("SELECT value FROM metadata WHERE key = 'k'").fetchone()
+        assert row[0] == "v2"
+        conn.close()

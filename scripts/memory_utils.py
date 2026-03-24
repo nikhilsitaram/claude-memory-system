@@ -248,6 +248,20 @@ DEFAULT_SETTINGS = {
         "projectWorkingDays": 20,
         "archiveRetentionDays": 365,
     },
+    "consolidation": {
+        "intervalHours": 24,
+        "minMemories": 5,
+        "similarityThreshold": 0.80,
+        "maxClusters": 15,
+        "backfillMaxClusters": 30,
+        "model": "sonnet",
+    },
+    "recall": {
+        "maxPromptLength": 500,
+        "minPromptLength": 15,
+        "maxInjectionsPerPrompt": 3,
+        "maxTokenBudget": 500,
+    },
     # totalTokenBudget calculated as sum of 4 components
 }
 
