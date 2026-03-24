@@ -857,7 +857,8 @@ def _load_from_db(project_scope: str) -> str | None:
             except Exception as e:
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
 
-        return "\n\n".join(sections)
+        from memory_utils import sanitize_secrets
+        return sanitize_secrets("\n\n".join(sections))
 
     finally:
         close_db(conn)

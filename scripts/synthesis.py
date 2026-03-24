@@ -374,14 +374,16 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
     """Apply an ADD operation — inserts a new data_point."""
     from datetime import datetime, timezone
 
+    from memory_utils import sanitize_secrets
     from storage import DataPointRow, EdgeRow, create_provenance_edge, insert_data_point, insert_edge
 
+    fact = sanitize_secrets(op.fact)
     salience = op.salience if op.salience is not None else 0.5
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     dp = DataPointRow(
         type="memory",
-        content=op.fact,
+        content=fact,
         scope=op.scope,
         entry_type=op.type,
         source_type="synthesis_v3",

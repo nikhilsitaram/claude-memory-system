@@ -284,6 +284,9 @@ def _get_or_create_entity(conn, entity_name, scope):
 async def _write_memory(fact, scope, salience=None, entities=None,
                         supersedes=None, relation_type=None, relation_reason=None):
     """Write a new memory data_point with embedding, entity links, and provenance."""
+    from memory_utils import sanitize_secrets
+    fact = sanitize_secrets(fact)
+
     conn = _db_conn
     try:
         conn.execute("BEGIN IMMEDIATE")
