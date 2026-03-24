@@ -7,6 +7,9 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
+*.egg-info/
+.coverage
 
 # OS files
 .DS_Store
