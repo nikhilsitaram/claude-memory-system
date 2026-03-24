@@ -631,7 +631,9 @@ def _make_v3_db_for_synthesis(tmp_path):
             content_hash TEXT,
             simhash INTEGER,
             entities TEXT,
-            properties TEXT
+            properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS edges (
             id TEXT PRIMARY KEY,
@@ -831,3 +833,37 @@ class TestApplyAddV3ExceptionHandling:
         with patch("storage.create_provenance_edge", side_effect=RuntimeError("unexpected")):
             with pytest.raises(RuntimeError, match="unexpected"):
                 _apply_add_v3(conn, op)
+
+
+class TestCertaintyInMemoryOps:
+    """Tests for certainty field in MemoryOp and synthesis pipeline."""
+
+    def test_memory_op_parses_certainty(self):
+        from synthesis import parse_synthesis_output
+        text = '===MEMORY_OPS===\n{"ops": [{"action": "ADD", "fact": "test", "scope": "global", "certainty": 4}]}\n===END==='
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].certainty == 4
+
+    def test_memory_op_certainty_default_none(self):
+        from synthesis import parse_synthesis_output
+        text = '===MEMORY_OPS===\n{"ops": [{"action": "ADD", "fact": "test", "scope": "global"}]}\n===END==='
+        result = parse_synthesis_output(text)
+        assert result.memory_ops[0].certainty is None
+
+    def test_apply_add_v3_writes_certainty(self, tmp_path):
+        from synthesis import MemoryOp, _apply_add_v3
+        from storage import query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        op = MemoryOp(action="ADD", fact="certain fact", scope="global", certainty=4)
+        result = _apply_add_v3(conn, op)
+        dp = query_data_point_by_id(conn, result["id"])
+        assert dp.certainty == 4
+
+    def test_apply_add_v3_defaults_certainty_to_2(self, tmp_path):
+        from synthesis import MemoryOp, _apply_add_v3
+        from storage import query_data_point_by_id
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        op = MemoryOp(action="ADD", fact="no certainty", scope="global")
+        result = _apply_add_v3(conn, op)
+        dp = query_data_point_by_id(conn, result["id"])
+        assert dp.certainty == 2

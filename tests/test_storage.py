@@ -1076,7 +1076,9 @@ class TestV3Schema:
                         content_hash TEXT,
                         simhash INTEGER,
                         entities TEXT,
-                        properties TEXT
+                        properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                     );
                 """)
                 conn.commit()
@@ -1089,14 +1091,15 @@ class TestV3Schema:
         ).fetchone()
         assert result is not None
 
-        # Check all 18 columns exist
+        # Check all 20 columns exist (18 original + certainty + validity_context)
         cols = conn.execute("PRAGMA table_info(data_points)").fetchall()
         col_names = {col[1] for col in cols}
         expected_cols = {
             'id', 'type', 'name', 'content', 'scope', 'entry_type',
             'source_type', 'source_sessions', 'created_at', 'salience',
             'access_count', 'last_accessed', 'evidence_count', 'consolidated',
-            'content_hash', 'simhash', 'entities', 'properties'
+            'content_hash', 'simhash', 'entities', 'properties',
+            'certainty', 'validity_context'
         }
         assert col_names == expected_cols
         conn.close()
@@ -1158,7 +1161,9 @@ class TestV3Schema:
                         content_hash TEXT,
                         simhash INTEGER,
                         entities TEXT,
-                        properties TEXT
+                        properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                     );
                     CREATE TABLE IF NOT EXISTS edges (
                         id TEXT PRIMARY KEY,
@@ -1234,7 +1239,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1282,7 +1289,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1327,7 +1336,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1373,7 +1384,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1421,7 +1434,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1456,7 +1471,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1505,7 +1522,9 @@ class TestDataPointCRUD:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
             CREATE TABLE edges (
                 id TEXT PRIMARY KEY,
@@ -1584,7 +1603,9 @@ class TestDataPointCRUD:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
             CREATE TABLE edges (
                 id TEXT PRIMARY KEY,
@@ -1637,7 +1658,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1685,7 +1708,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1720,7 +1745,9 @@ class TestDataPointCRUD:
                     content_hash TEXT,
                     simhash INTEGER,
                     entities TEXT,
-                    properties TEXT
+                    properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
                 );
             """)
             conn.commit()
@@ -1755,7 +1782,9 @@ class TestDataPointCRUD:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
             CREATE TABLE edges (
                 id TEXT PRIMARY KEY,
@@ -1823,7 +1852,9 @@ class TestQueryDataPointsOrderByValidation:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
         """)
         conn.commit()
@@ -1916,7 +1947,9 @@ class TestInsertProfileSectionPlaceholders:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
         """)
         conn.commit()
@@ -1986,7 +2019,9 @@ class TestMigrateProfiles:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
             CREATE TABLE IF NOT EXISTS edges (
                 id TEXT PRIMARY KEY,
@@ -2151,7 +2186,9 @@ class TestArchiveMarkdown:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
         """)
         conn.commit()
@@ -2283,7 +2320,9 @@ class TestProvenanceEdges:
                 content_hash TEXT,
                 simhash INTEGER,
                 entities TEXT,
-                properties TEXT
+                properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
             );
             CREATE TABLE IF NOT EXISTS edges (
                 id TEXT PRIMARY KEY,
@@ -2449,7 +2488,7 @@ class TestFTS5:
     def test_fts_migration_backfill(self, tmp_path):
         """Migration populates fts_data from existing data_points."""
         from unittest.mock import patch
-        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table
+        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table, _backfill_fts
 
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
@@ -2460,7 +2499,78 @@ class TestFTS5:
         conn.commit()
 
         _ensure_fts_table(conn)
+        _backfill_fts(conn)
 
         results = fts_search(conn, "migration backfill", scope=None, limit=10)
         assert len(results) >= 1
+        conn.close()
+
+
+class TestEpistemicMetadata:
+    """Tests for certainty and validity_context columns on data_points."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_certainty_column_exists(self, tmp_path):
+        conn = self._make_db(tmp_path)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(data_points)").fetchall()}
+        assert "certainty" in cols
+        conn.close()
+
+    def test_validity_context_column_exists(self, tmp_path):
+        conn = self._make_db(tmp_path)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(data_points)").fetchall()}
+        assert "validity_context" in cols
+        conn.close()
+
+    def test_data_point_row_has_certainty(self, tmp_path):
+        from storage import DataPointRow
+        dp = DataPointRow(type="memory", content="test", scope="global", certainty=3)
+        assert dp.certainty == 3
+
+    def test_data_point_row_certainty_default_none(self, tmp_path):
+        from storage import DataPointRow
+        dp = DataPointRow(type="memory", content="test", scope="global")
+        assert dp.certainty is None
+
+    def test_data_point_row_validity_context(self, tmp_path):
+        from storage import DataPointRow
+        dp = DataPointRow(type="memory", content="test", scope="global", validity_context="Verified in prod")
+        assert dp.validity_context == "Verified in prod"
+
+    def test_insert_and_query_with_certainty(self, tmp_path):
+        from storage import insert_data_point, query_data_point_by_id, DataPointRow
+        conn = self._make_db(tmp_path)
+        dp = DataPointRow(type="memory", content="certain fact", scope="global", certainty=4, validity_context="Verified in prod")
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+        result = query_data_point_by_id(conn, dp_id)
+        assert result.certainty == 4
+        assert result.validity_context == "Verified in prod"
+        conn.close()
+
+    def test_insert_without_certainty_returns_none(self, tmp_path):
+        from storage import insert_data_point, query_data_point_by_id, DataPointRow
+        conn = self._make_db(tmp_path)
+        dp = DataPointRow(type="memory", content="no certainty", scope="global")
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+        result = query_data_point_by_id(conn, dp_id)
+        assert result.certainty is None
+        assert result.validity_context is None
+        conn.close()
+
+    def test_migration_idempotent(self, tmp_path):
+        """Running migration twice does not error."""
+        conn = self._make_db(tmp_path)
+        from storage import _ensure_epistemic_columns
+        _ensure_epistemic_columns(conn)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(data_points)").fetchall()}
+        assert "certainty" in cols
+        assert "validity_context" in cols
         conn.close()

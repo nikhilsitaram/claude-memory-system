@@ -158,6 +158,7 @@ def link_scripts(script_dir: Path) -> None:
         "backfill.py",  # One-time entity re-extraction for existing chunks
         "web_app.py",  # Web frontend for browsing and managing memory
         "memory_server.py",  # MCP server - search/write/delete/traverse tools
+        "prompt_recall.py",  # UserPromptSubmit hook - proactive memory injection
     ]
 
     for script_name in scripts_to_link:
@@ -507,6 +508,19 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                     }
                 ],
             },
+        ],
+        # UserPromptSubmit injects relevant memories per-prompt
+        "UserPromptSubmit": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{python_cmd} {scripts_dir}/prompt_recall.py",
+                        "timeout": 2,
+                    }
+                ],
+            }
         ],
         # SessionEnd triggers deferred synthesis (platform-aware)
         "SessionEnd": [

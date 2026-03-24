@@ -199,6 +199,9 @@ def score_memory(vec_distance: float, chunk) -> float:
 
     Accepts either a ChunkRow or DataPointRow (both expose last_accessed,
     created_at, and salience attributes with the same semantics).
+
+    If the chunk has a ``certainty`` attribute, modulates salience:
+    ``salience * (0.6 + 0.1 * certainty)``.
     """
     vec_sim = max(0.0, 1.0 - vec_distance)
     boosted = 1.0 - math.exp(-VEC_BOOST_RATE * vec_sim)
@@ -209,6 +212,10 @@ def score_memory(vec_distance: float, chunk) -> float:
     recency = math.exp(-RECENCY_DECAY * days)
 
     salience = chunk.salience if chunk.salience is not None else 1.0
+
+    certainty = getattr(chunk, "certainty", None)
+    if certainty is not None:
+        salience = salience * (0.6 + 0.1 * certainty)
 
     return VEC_SIM_WEIGHT * boosted + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience
 

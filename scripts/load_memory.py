@@ -892,6 +892,13 @@ def main() -> None:
     except (json.JSONDecodeError, IOError):
         pass  # Not called from hook, or invalid input — safe to continue
 
+    # Clean up stale prompt-recall state files
+    try:
+        from prompt_recall import cleanup_stale_state_files
+        cleanup_stale_state_files(get_memory_dir())
+    except Exception:
+        pass
+
     # Load settings
     settings = load_settings()
 

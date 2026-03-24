@@ -881,3 +881,45 @@ class TestSearchMemoriesHybrid:
                 _search_memories("something", scope=None, top_k=5)
             )
             mock_sql.assert_called_once()
+
+
+class TestCertaintyInWriteMemory:
+    """Tests for certainty parameter in write_memory MCP tool."""
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_write_memory_accepts_certainty(self, db):
+        """write_memory MCP tool accepts optional certainty parameter."""
+        import memory_server
+        memory_server._db_conn = db
+        with patch("memory_server.embed_text", return_value=None):
+            result = self._run(memory_server._write_memory(
+                "certain fact", scope="proj-x", certainty=4
+            ))
+        dp = query_data_point_by_id(db, result["id"])
+        assert dp.certainty == 4
+
+    def test_write_memory_defaults_certainty_to_3(self, db):
+        """write_memory without certainty defaults to 3."""
+        import memory_server
+        memory_server._db_conn = db
+        with patch("memory_server.embed_text", return_value=None):
+            result = self._run(memory_server._write_memory(
+                "default certainty fact", scope="proj-x"
+            ))
+        dp = query_data_point_by_id(db, result["id"])
+        assert dp.certainty == 3
+
+    def test_write_memory_certainty_in_tool_schema(self):
+        """The write_memory tool schema includes certainty property."""
+        from memory_server import HAS_MCP
+        if not HAS_MCP:
+            pytest.skip("MCP not available")
+        import asyncio
+        from memory_server import server
+        tools = asyncio.get_event_loop().run_until_complete(
+            server.request_handlers["tools/list"](None)
+        )
+        write_tool = next(t for t in tools if t.name == "write_memory")
+        assert "certainty" in write_tool.inputSchema["properties"]

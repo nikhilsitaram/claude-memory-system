@@ -760,3 +760,34 @@ class TestMCPInstall:
             str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
         ).read()
         assert "memory_server.py" in source
+
+
+class TestPromptRecallHook:
+    """Tests for UserPromptSubmit hook registration."""
+
+    def test_user_prompt_submit_hook_registered(self):
+        """install.py registers a UserPromptSubmit hook for prompt_recall.py."""
+        settings = install.merge_hooks({}, "python3")
+        assert "UserPromptSubmit" in settings.get("hooks", {}), "UserPromptSubmit hook not registered"
+        hook_entries = settings["hooks"]["UserPromptSubmit"]
+        found = False
+        for entry in hook_entries:
+            for hook in entry.get("hooks", []):
+                if "prompt_recall" in hook.get("command", ""):
+                    found = True
+        assert found, "prompt_recall.py not in hook command"
+
+    def test_user_prompt_submit_hook_has_timeout(self):
+        """UserPromptSubmit hook has a timeout <= 3 seconds."""
+        settings = install.merge_hooks({}, "python3")
+        for entry in settings["hooks"].get("UserPromptSubmit", []):
+            for hook in entry.get("hooks", []):
+                if "prompt_recall" in hook.get("command", ""):
+                    assert hook.get("timeout", 0) <= 3, "Timeout should be <= 3 seconds"
+
+    def test_prompt_recall_in_link_scripts(self):
+        """prompt_recall.py is in the scripts_to_link list."""
+        source = open(
+            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+        ).read()
+        assert "prompt_recall.py" in source

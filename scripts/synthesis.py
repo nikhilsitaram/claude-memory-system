@@ -75,6 +75,7 @@ class MemoryOp:
     reason: str | None = None
     salience: float | None = None      # v3: LLM-assigned salience (0.0-1.0)
     supersedes: str | None = None       # v3: ID of data_point this replaces
+    certainty: int | None = None        # v4: epistemic certainty (1-5)
 
 
 @dataclass
@@ -148,6 +149,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
                             reason=op.get("reason"),
                             salience=op.get("salience"),
                             supersedes=op.get("supersedes"),
+                            certainty=op.get("certainty"),
                         )
                         for op in raw_ops
                     ]
@@ -388,6 +390,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
         entry_type=op.type,
         source_type="synthesis_v3",
         salience=salience,
+        certainty=op.certainty if op.certainty is not None else 2,
     )
     dp_id = insert_data_point(conn, dp)
 
@@ -425,7 +428,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
 
 def _apply_update_v3(conn, op: "MemoryOp") -> dict:
     """Apply an UPDATE operation — modifies content/salience of an existing data_point."""
-    from storage import update_data_point
+    from storage import query_data_point_by_id, update_data_point
 
     if not op.id:
         return {"action": "UPDATE", "status": "skipped", "reason": "missing id"}
@@ -445,8 +448,10 @@ def _apply_update_v3(conn, op: "MemoryOp") -> dict:
     if rows_affected > 0 and op.fact:
         try:
             from storage import fts_delete, fts_insert
+            existing_dp = query_data_point_by_id(conn, op.id)
+            scope = existing_dp.scope if existing_dp else op.scope
             fts_delete(conn, op.id)
-            fts_insert(conn, op.id, kwargs["content"], op.scope)
+            fts_insert(conn, op.id, kwargs["content"], scope)
         except Exception as e:
             print(f"Warning: FTS5 sync failed for UPDATE: {e}", file=sys.stderr)
 

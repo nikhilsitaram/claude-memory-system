@@ -105,6 +105,7 @@ if HAS_MCP:
                         "supersedes": {"type": "string", "description": "ID of data_point this replaces"},
                         "relation_type": {"type": "string", "description": "Edge type for supersedes relation"},
                         "relation_reason": {"type": "string", "description": "Reason for supersedes relation"},
+                        "certainty": {"type": "integer", "minimum": 1, "maximum": 5, "description": "Epistemic certainty (1=speculative, 5=established)"},
                     },
                     "required": ["fact", "scope"],
                 },
@@ -158,6 +159,7 @@ if HAS_MCP:
                 supersedes=arguments.get("supersedes"),
                 relation_type=arguments.get("relation_type"),
                 relation_reason=arguments.get("relation_reason"),
+                certainty=arguments.get("certainty"),
             )
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -254,6 +256,7 @@ async def _search_memories(query, scope=None, top_k=10):
             "content": r.data_point.content,
             "score": round(r.score, 3),
             "scope": r.data_point.scope,
+            "certainty": r.data_point.certainty,
             "entities": json.loads(r.data_point.entities) if r.data_point.entities else [],
             "provenance": [{"id": e[0], "type": e[1], "reason": e[2]} for e in prov_edges],
         })
@@ -282,7 +285,8 @@ def _get_or_create_entity(conn, entity_name, scope):
 
 
 async def _write_memory(fact, scope, salience=None, entities=None,
-                        supersedes=None, relation_type=None, relation_reason=None):
+                        supersedes=None, relation_type=None, relation_reason=None,
+                        certainty=None):
     """Write a new memory data_point with embedding, entity links, and provenance."""
     from memory_utils import sanitize_secrets
     fact = sanitize_secrets(fact)
@@ -307,6 +311,7 @@ async def _write_memory(fact, scope, salience=None, entities=None,
             consolidated=consolidated,
             source_type="manual",
             created_at=now,
+            certainty=certainty if certainty is not None else 3,
         )
         dp_id = insert_data_point(conn, dp)
 
