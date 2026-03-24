@@ -2360,3 +2360,107 @@ class TestProvenanceEdges:
         conn.commit()
         row = conn.execute("SELECT type FROM edges WHERE source='src'").fetchone()
         assert row[0] == edge_type
+
+
+# =============================================================================
+# A4: FTS5 Full-Text Search Tests
+# =============================================================================
+
+
+class TestFTS5:
+    """Tests for FTS5 full-text search table and helpers."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_fts_data_table_created(self, tmp_path):
+        """ensure_db creates the fts_data FTS5 virtual table."""
+        conn = self._make_db(tmp_path)
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "fts_data" in tables
+        conn.close()
+
+    def test_fts_insert_and_search(self, tmp_path):
+        """Inserted text is findable via FTS5 MATCH query."""
+        from storage import fts_insert, fts_search
+        conn = self._make_db(tmp_path)
+        fts_insert(conn, "dp-1", "Redis cache requires explicit TTL settings", "global")
+        conn.commit()
+        results = fts_search(conn, "Redis TTL", scope=None, limit=10)
+        assert len(results) >= 1
+        assert results[0]["data_point_id"] == "dp-1"
+        conn.close()
+
+    def test_fts_porter_stemming(self, tmp_path):
+        """Porter stemming allows matching 'running' with 'run'."""
+        from storage import fts_insert, fts_search
+        conn = self._make_db(tmp_path)
+        fts_insert(conn, "dp-stem", "The process was running slowly", "global")
+        conn.commit()
+        results = fts_search(conn, "run", scope=None, limit=10)
+        assert len(results) >= 1
+        conn.close()
+
+    def test_fts_delete(self, tmp_path):
+        """Deleted entries no longer appear in search results."""
+        from storage import fts_insert, fts_delete, fts_search
+        conn = self._make_db(tmp_path)
+        fts_insert(conn, "dp-del", "unique findable content xyz", "global")
+        conn.commit()
+        assert len(fts_search(conn, "xyz", scope=None, limit=10)) >= 1
+        fts_delete(conn, "dp-del")
+        conn.commit()
+        assert len(fts_search(conn, "xyz", scope=None, limit=10)) == 0
+        conn.close()
+
+    def test_fts_scope_filtering(self, tmp_path):
+        """Scope parameter limits search to matching scope."""
+        from storage import fts_insert, fts_search
+        conn = self._make_db(tmp_path)
+        fts_insert(conn, "dp-g", "shared pattern across projects", "global")
+        fts_insert(conn, "dp-p", "project specific pattern info", "my-project")
+        conn.commit()
+        results_global = fts_search(conn, "pattern", scope="global", limit=10)
+        results_project = fts_search(conn, "pattern", scope="my-project", limit=10)
+        assert all(r["scope"] == "global" for r in results_global)
+        assert all(r["scope"] == "my-project" for r in results_project)
+        conn.close()
+
+    def test_soft_delete_removes_fts_entry(self, tmp_path):
+        """soft_delete_data_point also removes the FTS5 index entry."""
+        from storage import DataPointRow, insert_data_point, fts_insert, fts_search, soft_delete_data_point
+        conn = self._make_db(tmp_path)
+        dp = DataPointRow(type="memory", content="unique deletable content xyz", scope="global", salience=0.8)
+        dp_id = insert_data_point(conn, dp)
+        fts_insert(conn, dp_id, dp.content, dp.scope)
+        conn.commit()
+        assert len(fts_search(conn, "deletable", scope=None, limit=10)) >= 1
+        soft_delete_data_point(conn, dp_id)
+        conn.commit()
+        assert len(fts_search(conn, "deletable", scope=None, limit=10)) == 0
+        conn.close()
+
+    def test_fts_migration_backfill(self, tmp_path):
+        """Migration populates fts_data from existing data_points."""
+        from unittest.mock import patch
+        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table
+
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+
+        insert_data_point(conn, DataPointRow(type="memory", content="migration backfill test content", scope="global"))
+        conn.commit()
+
+        _ensure_fts_table(conn)
+
+        results = fts_search(conn, "migration backfill", scope=None, limit=10)
+        assert len(results) >= 1
+        conn.close()

@@ -28,7 +28,7 @@ try:
 except ImportError:
     HAS_MCP = False
 
-from embeddings import _serialize_vector, embed_text, search_similar
+from embeddings import _serialize_vector, embed_text, search_hybrid, search_similar
 from storage import (
     DataPointRow,
     EdgeRow,
@@ -217,12 +217,12 @@ def _sql_ranked_search(conn, scope, top_k):
 
 
 async def _search_memories(query, scope=None, top_k=10):
-    """Search memories by vector similarity or SQL fallback, with graph boost."""
+    """Search memories by hybrid search (FTS5 + vector + RRF), with SQL fallback."""
     conn = _db_conn
 
-    if _model_ready.is_set():
-        results = search_similar(conn, query, top_k=top_k, scope=scope)
-    else:
+    results = search_hybrid(conn, query, top_k=top_k, scope=scope)
+
+    if not results:
         results = _sql_ranked_search(conn, scope, top_k)
 
     result_ids = {r.data_point.id for r in results}
@@ -284,6 +284,9 @@ def _get_or_create_entity(conn, entity_name, scope):
 async def _write_memory(fact, scope, salience=None, entities=None,
                         supersedes=None, relation_type=None, relation_reason=None):
     """Write a new memory data_point with embedding, entity links, and provenance."""
+    from memory_utils import sanitize_secrets
+    fact = sanitize_secrets(fact)
+
     conn = _db_conn
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -306,6 +309,12 @@ async def _write_memory(fact, scope, salience=None, entities=None,
             created_at=now,
         )
         dp_id = insert_data_point(conn, dp)
+
+        try:
+            from storage import fts_insert
+            fts_insert(conn, dp_id, fact, scope)
+        except Exception as e:
+            print(f"Warning: FTS5 sync failed for write: {e}", file=sys.stderr)
 
         vec = embed_text(fact)
         if vec:

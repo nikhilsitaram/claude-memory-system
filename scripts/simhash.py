@@ -99,19 +99,21 @@ def hamming_distance(a: int, b: int) -> int:
     """Compute the Hamming distance between two 64-bit SimHash fingerprints.
 
     Args:
-        a: First fingerprint.
-        b: Second fingerprint.
+        a: First fingerprint (must be non-negative).
+        b: Second fingerprint (must be non-negative).
 
     Returns:
         Number of differing bit positions (0-64).
 
-    Warning:
-        Both arguments must be non-negative (unsigned) 64-bit integers.
-        Mixing a signed value (e.g., read back from SQLite as a negative int)
-        with an unsigned value produces silently wrong results because
-        bin(a ^ b).count("1") counts extra sign-extension bits.
-        Cast SQLite values with: value & 0xFFFFFFFFFFFFFFFF before comparing.
+    Raises:
+        ValueError: If either argument is negative. SQLite stores 64-bit integers
+            as signed; cast with ``val & 0xFFFFFFFFFFFFFFFF`` before comparing.
     """
+    if a < 0 or b < 0:
+        raise ValueError(
+            f"Both arguments must be non-negative unsigned 64-bit integers "
+            f"(got a={a}, b={b}). Cast SQLite values with: val & 0xFFFFFFFFFFFFFFFF"
+        )
     return bin(a ^ b).count("1")
 
 

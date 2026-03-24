@@ -70,12 +70,11 @@ __all__ = [
     "embed_text",
     "embed_batch",
     "index_data_points",
-    "index_chunks",
     "index_data_points_by_source",
-    "index_chunks_by_source",
     "delete_vec_data",
-    "delete_vec_chunks",
     "search_similar",
+    "search_hybrid",
+    "RRF_K",
     "reindex_changed_files",
     "reindex_all",
     "score_memory",
@@ -260,48 +259,6 @@ def index_data_points(conn, data_point_ids: list) -> None:
     conn.commit()
 
 
-def index_chunks(conn, chunk_ids: list) -> None:
-    """Deprecated: use index_data_points() for v3 schema.
-
-    For v2 schema DBs (with chunks/vec_chunks tables), embeds chunks and
-    inserts into vec_chunks. Skips chunks already indexed with same hash.
-    """
-    if not chunk_ids or not HAS_FASTEMBED:
-        return
-
-    placeholders = ",".join("?" * len(chunk_ids))
-    rows = conn.execute(
-        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE id IN ({placeholders})",
-        chunk_ids,
-    ).fetchall()
-    chunks = [_row_to_chunk(r) for r in rows]
-
-    existing = conn.execute(
-        f"SELECT vc.chunk_id, c.content_hash FROM vec_chunks vc JOIN chunks c ON vc.chunk_id = c.id WHERE vc.chunk_id IN ({placeholders})",
-        chunk_ids,
-    ).fetchall()
-    existing_map = {row[0]: row[1] for row in existing}
-
-    to_embed = [c for c in chunks if c.id not in existing_map or existing_map.get(c.id) != c.content_hash]
-
-    if not to_embed:
-        return
-
-    stale_ids = [c.id for c in to_embed if c.id in existing_map]
-    if stale_ids:
-        delete_vec_chunks(conn, stale_ids)
-
-    contents = [c.content for c in to_embed]
-    vectors = embed_batch(contents)
-
-    for chunk, vec in zip(to_embed, vectors):
-        conn.execute(
-            "INSERT INTO vec_chunks (embedding, chunk_id, source_type) VALUES (?, ?, ?)",
-            (_serialize_vector(vec), chunk.id, chunk.source_type),
-        )
-    conn.commit()
-
-
 def index_data_points_by_source(conn, source_types: list) -> None:
     """Index all data_points from the given source types."""
     if not source_types or not HAS_FASTEMBED:
@@ -316,37 +273,10 @@ def index_data_points_by_source(conn, source_types: list) -> None:
         index_data_points(conn, dp_ids)
 
 
-def index_chunks_by_source(conn, source_files: list) -> None:
-    """Deprecated: use index_data_points_by_source() for v3 schema.
-
-    Index all chunks from the given source files (v2 schema).
-    """
-    if not source_files or not HAS_FASTEMBED:
-        return
-    placeholders = ",".join("?" * len(source_files))
-    rows = conn.execute(
-        f"SELECT id FROM chunks WHERE source_file IN ({placeholders})",
-        source_files,
-    ).fetchall()
-    chunk_ids = [r[0] for r in rows]
-    if chunk_ids:
-        index_chunks(conn, chunk_ids)
-
-
 def delete_vec_data(conn, data_point_ids: list) -> None:
     """Delete vec_data rows for the given data_point IDs."""
     for dp_id in data_point_ids:
         conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
-    conn.commit()
-
-
-def delete_vec_chunks(conn, chunk_ids: list) -> None:
-    """Deprecated: use delete_vec_data() for v3 schema.
-
-    Delete vec_chunks rows for the given chunk IDs (v2 schema).
-    """
-    for chunk_id in chunk_ids:
-        conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (chunk_id,))
     conn.commit()
 
 
@@ -410,6 +340,96 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
 
     results.sort(key=lambda x: x.score, reverse=True)
     return results[:top_k]
+
+
+RRF_K = 60  # RRF constant (standard value from Cormack et al.)
+
+
+def search_hybrid(
+    conn,
+    query: str,
+    scope: Optional[str] = None,
+    top_k: int = DEFAULT_TOP_K,
+) -> list:
+    """Hybrid search combining FTS5 BM25 and vector KNN via Reciprocal Rank Fusion.
+
+    Fallback chain:
+    - Both FTS5 + vector available -> RRF hybrid
+    - Vector only -> vector search
+    - FTS5 only -> BM25 keyword search
+    - Neither -> SQL ranked fallback (salience + recency)
+
+    Returns sorted list of ScoredDataPoint (highest score first), limited to top_k.
+    """
+    has_fts = _has_table(conn, "fts_data")
+    has_vec = HAS_FASTEMBED and HAS_SQLITE_VEC and _has_table(conn, "vec_data")
+
+    fts_results = []
+    vec_results = []
+
+    if has_fts:
+        try:
+            from storage import fts_search
+            fts_hits = fts_search(conn, query, scope=scope, limit=top_k * 2)
+            fts_results = [(hit["data_point_id"], rank_idx) for rank_idx, hit in enumerate(fts_hits)]
+        except Exception:
+            pass
+
+    if has_vec:
+        try:
+            vec_results_raw = search_similar(conn, query, top_k=top_k * 2, scope=scope)
+            vec_results = [(r.data_point.id, rank_idx) for rank_idx, r in enumerate(vec_results_raw)]
+        except Exception:
+            pass
+
+    if fts_results and vec_results:
+        scores = {}
+        for dp_id, rank in fts_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        for dp_id, rank in vec_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        ranked_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:top_k]
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif vec_results:
+        ranked_ids = [dp_id for dp_id, _ in vec_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in vec_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif fts_results:
+        ranked_ids = [dp_id for dp_id, _ in fts_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in fts_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    else:
+        return _sql_ranked_fallback(conn, scope, top_k)
+
+
+def _fetch_scored_data_points(conn, ranked_ids, scores):
+    """Fetch data_points by ID and return as ScoredDataPoint list."""
+    from storage import query_data_point_by_id
+    results = []
+    for dp_id in ranked_ids:
+        dp = query_data_point_by_id(conn, dp_id)
+        if dp:
+            salience_recency = score_memory(0.5, dp)
+            final_score = scores[dp_id] + salience_recency
+            results.append(ScoredDataPoint(data_point=dp, score=final_score, vec_similarity=0.0))
+    results.sort(key=lambda x: x.score, reverse=True)
+    return results
+
+
+def _sql_ranked_fallback(conn, scope, top_k):
+    """Fallback search using salience + recency ordering (no semantic understanding)."""
+    from storage import query_data_points_by_scope
+    dps = query_data_points_by_scope(
+        conn, scope=scope or "global", dp_type="memory",
+        order_by="salience DESC, created_at DESC", limit=top_k
+    )
+    return [
+        ScoredDataPoint(data_point=dp, score=dp.salience, vec_similarity=0.0)
+        for dp in dps
+    ]
 
 
 def reindex_changed_files(conn, changed_files: list) -> None:
