@@ -822,10 +822,10 @@ class TestCertaintyDecay:
     def test_certainty_4_immune_to_decay(self, tmp_path):
         """Certainty 4-5 data_points are not decayed."""
         from storage import insert_data_point, DataPointRow
-        from decay import decay_data_points
+        from decay import decay_data_points, DEFAULT_AGE_DAYS
 
         conn = self._make_v3_db(tmp_path)
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).isoformat().replace("+00:00", "Z")
         dp = DataPointRow(type="memory", content="established", scope="global", salience=0.6, certainty=4, last_accessed=old_ts)
         dp_id = insert_data_point(conn, dp)
         conn.commit()
@@ -838,10 +838,10 @@ class TestCertaintyDecay:
     def test_certainty_5_immune_to_decay(self, tmp_path):
         """Certainty 5 data_points are also immune to decay."""
         from storage import insert_data_point, DataPointRow
-        from decay import decay_data_points
+        from decay import decay_data_points, DEFAULT_AGE_DAYS
 
         conn = self._make_v3_db(tmp_path)
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).isoformat().replace("+00:00", "Z")
         dp = DataPointRow(type="memory", content="established fact", scope="global", salience=0.7, certainty=5, last_accessed=old_ts)
         dp_id = insert_data_point(conn, dp)
         conn.commit()

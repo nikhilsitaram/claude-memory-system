@@ -256,6 +256,7 @@ async def _search_memories(query, scope=None, top_k=10):
             "content": r.data_point.content,
             "score": round(r.score, 3),
             "scope": r.data_point.scope,
+            "certainty": r.data_point.certainty,
             "entities": json.loads(r.data_point.entities) if r.data_point.entities else [],
             "provenance": [{"id": e[0], "type": e[1], "reason": e[2]} for e in prov_edges],
         })
