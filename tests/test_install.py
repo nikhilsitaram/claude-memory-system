@@ -791,3 +791,31 @@ class TestPromptRecallHook:
             str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
         ).read()
         assert "prompt_recall.py" in source
+
+
+# ---------------------------------------------------------------------------
+# Consolidation install
+# ---------------------------------------------------------------------------
+
+
+class TestConsolidationInstall:
+    def test_consolidation_py_in_link_scripts(self):
+        """consolidation.py is included in the link_scripts list."""
+        source = open(
+            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+        ).read()
+        assert "consolidation.py" in source
+
+
+# ---------------------------------------------------------------------------
+# Consolidate skill
+# ---------------------------------------------------------------------------
+
+
+class TestConsolidateSkill:
+    def test_consolidate_skill_in_link_list(self):
+        """The 'consolidate' skill is in the link_skills list."""
+        source = open(
+            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+        ).read()
+        assert "consolidate" in source

@@ -177,6 +177,12 @@ CREATE INDEX IF NOT EXISTS idx_dp_simhash ON data_points(simhash);
 -- Indexes for edges
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+
+-- Key-value metadata (consolidation timestamps, etc.)
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 __all__ = [
@@ -659,6 +665,20 @@ def fts_search(conn: sqlite3.Connection, query: str, scope: str | None, limit: i
     return [{"data_point_id": r[0], "scope": r[1], "rank": r[2]} for r in rows]
 
 
+METADATA_DDL = """\
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+"""
+
+
+def _ensure_metadata_table(conn: sqlite3.Connection) -> None:
+    """Create metadata key-value table if it doesn't exist."""
+    conn.executescript(METADATA_DDL)
+    conn.commit()
+
+
 def _ensure_epistemic_columns(conn: sqlite3.Connection) -> None:
     """Add certainty and validity_context columns if they don't exist.
 
@@ -700,6 +720,7 @@ def ensure_db() -> sqlite3.Connection:
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
     _ensure_epistemic_columns(conn)
+    _ensure_metadata_table(conn)
     try:
         _ensure_fts_table(conn)
     except sqlite3.OperationalError as e:
