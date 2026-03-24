@@ -29,12 +29,16 @@ from load_memory import (
 from storage import (
     SCHEMA_DDL,
     ChunkRow,
+    DataPointRow,
     EdgeRow,
     NodeRow,
     close_db,
+    ensure_db,
     insert_chunk,
+    insert_data_point,
     insert_edge,
     insert_node,
+    invalidate_edge,
     query_chunks_with_salience,
 )
 
@@ -2083,6 +2087,97 @@ class TestSessionContinuity:
 
         assert result is not None
         assert "JWT" in result
+
+
+# =============================================================================
+# Salience Reinforcement Tests (A1)
+# =============================================================================
+
+
+class TestSalienceReinforcement:
+    """Tests for salience reinforcement in _batch_update_data_point_access."""
+
+    def _make_v3_db(self, tmp_path):
+        """Create a v3 DB for testing data_point access tracking."""
+        from unittest.mock import patch
+        with patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_salience_increases_on_access(self, tmp_path):
+        """Accessing a data_point increases its salience via diminishing returns."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.5)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access, REINFORCEMENT_ETA
+        _batch_update_data_point_access(conn, [dp_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        expected = min(1.0, 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5))
+        assert abs(row[0] - expected) < 0.001
+        conn.close()
+
+    def test_salience_capped_at_one(self, tmp_path):
+        """Salience cannot exceed 1.0 even after repeated reinforcement."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.95)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        for _ in range(10):
+            _batch_update_data_point_access(conn, [dp_id])
+            conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] <= 1.0
+        conn.close()
+
+    def test_associative_boost_propagates_to_entities(self, tmp_path):
+        """Accessing a memory boosts salience of connected entity data_points."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="Use Redis for caching", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(conn, EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now))
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] > 0.4, "Entity salience should increase via associative boost"
+        conn.close()
+
+    def test_no_boost_to_invalidated_edges(self, tmp_path):
+        """Entities connected via invalidated edges (valid_to IS NOT NULL) are not boosted."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="test", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="test", content="test", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        edge_row = EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now)
+        insert_edge(conn, edge_row)
+        edge_id = conn.execute("SELECT id FROM edges ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        invalidate_edge(conn, edge_id, valid_to=now, expired_at=now)
+        conn.commit()
+
+        original_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        new_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        assert new_salience == original_salience, "Invalidated edge should not cause boost"
+        conn.close()
 
 
 if __name__ == "__main__":

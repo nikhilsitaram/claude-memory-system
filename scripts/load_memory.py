@@ -767,7 +767,10 @@ def track_memory_access(chunk_ids: list, node_ids: list | None = None) -> None:
 
 
 def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str]) -> None:
-    """Increment access_count and update last_accessed for data_point IDs.
+    """Increment access_count, update last_accessed, reinforce salience, and boost neighbors.
+
+    Applies diminishing-returns salience reinforcement (REINFORCEMENT_ETA = 0.18)
+    and associative graph-neighbor boosting for connected entity data_points.
 
     Note: Does not commit. Caller must commit.
     """
@@ -780,6 +783,34 @@ def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str])
         f"last_accessed = ? WHERE id IN ({placeholders})",
         [timestamp] + list(dp_ids),
     )
+
+    for dp_id in dp_ids:
+        row = conn.execute(
+            "SELECT salience FROM data_points WHERE id = ?", (dp_id,)
+        ).fetchone()
+        if not row:
+            continue
+        current = row[0] if row[0] is not None else 1.0
+        new_sal = min(1.0, current + REINFORCEMENT_ETA * (1.0 - current))
+        conn.execute(
+            "UPDATE data_points SET salience = ? WHERE id = ?",
+            (new_sal, dp_id)
+        )
+
+        neighbors = conn.execute(
+            "SELECT DISTINCT e.target, dp2.salience, e.weight FROM edges e "
+            "JOIN data_points dp2 ON dp2.id = e.target "
+            "WHERE e.source = ? AND e.valid_to IS NULL "
+            "AND dp2.type = 'entity'",
+            (dp_id,)
+        ).fetchall()
+        for target_id, neighbor_sal, edge_weight in neighbors:
+            boost = REINFORCEMENT_ETA * (edge_weight or 1.0) * new_sal
+            new_neighbor_sal = min(1.0, (neighbor_sal or 0.5) + boost)
+            conn.execute(
+                "UPDATE data_points SET salience = ? WHERE id = ?",
+                (new_neighbor_sal, target_id)
+            )
 
 
 def _load_from_db(project_scope: str) -> str | None:
