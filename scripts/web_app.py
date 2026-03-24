@@ -160,10 +160,11 @@ def _search(conn: sqlite3.Connection, query: str, limit: int = 20) -> list:
         pass
 
     # LIKE fallback (no FTS5 table or no results)
-    like = f"%{query}%"
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{escaped}%"
     rows = conn.execute(
         "SELECT id, type, name, content, scope, salience, created_at "
-        "FROM data_points WHERE salience > 0 AND (content LIKE ? OR name LIKE ?) "
+        "FROM data_points WHERE salience > 0 AND (content LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\') "
         "ORDER BY salience DESC LIMIT ?",
         (like, like, limit),
     ).fetchall()

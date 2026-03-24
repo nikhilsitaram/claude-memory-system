@@ -230,7 +230,6 @@ __all__ = [
     "query_current_edges",
     "query_edges_at_date",
     "query_edges_for_data_point",
-    "query_neighbor_nodes",
     # Provenance
     "PROVENANCE_TYPES",
     "create_provenance_edge",
@@ -260,6 +259,7 @@ __all__ = [
     "query_chunks_for_retrieval",
     "query_chunk_by_id",
     "query_edges_for_node",
+    "query_neighbor_nodes",
 ]
 
 
@@ -1735,15 +1735,27 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
         # Empty DB
         existing_hashes = set()
 
+    schema_version = _get_schema_version(conn)
+
     def _insert_chunks(chunks: list[ChunkRow]) -> None:
         for chunk in chunks:
             h = _content_hash(chunk.content)
             if h in existing_hashes:
                 stats.chunks_skipped += 1
                 continue
-            chunk.content_hash = h
-            insert_chunk(conn, chunk)
             existing_hashes.add(h)
+            if schema_version >= 3:
+                # v3: write directly to data_points
+                insert_data_point(conn, DataPointRow(
+                    type="memory", content=chunk.content, scope=chunk.scope,
+                    entry_type=chunk.entry_type, source_type=chunk.source_type,
+                    salience=chunk.salience, content_hash=h,
+                    created_at=chunk.created_at,
+                ))
+            else:
+                # v2: write to chunks table
+                chunk.content_hash = h
+                insert_chunk(conn, chunk)
             stats.chunks_inserted += 1
 
     global_file = get_memory_dir() / 'global-long-term-memory.md'
@@ -1770,10 +1782,10 @@ def migrate_markdown_to_db(conn: sqlite3.Connection) -> MigrationStats:
             _insert_chunks(chunks)
             stats.daily_files_processed += 1
 
-    # _migrate_salience_data() ran in ensure_db() before chunks were inserted,
-    # so newly migrated chunks have last_accessed=NULL. Re-run it now that
-    # chunks exist (idempotent: only rows with NULL are touched).
-    _migrate_salience_data(conn)
+    # v2 only: re-run salience data migration for newly inserted chunks.
+    # On v3, data_points are inserted with correct fields directly.
+    if schema_version < 3:
+        _migrate_salience_data(conn)
 
     conn.commit()
     return stats
