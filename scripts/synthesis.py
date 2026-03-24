@@ -391,6 +391,12 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
     )
     dp_id = insert_data_point(conn, dp)
 
+    try:
+        from storage import fts_insert
+        fts_insert(conn, dp_id, fact, op.scope)
+    except Exception as e:
+        print(f"Warning: FTS5 sync failed for ADD: {e}", file=sys.stderr)
+
     # Create entity data_points and link them
     if op.entities:
         for entity_name in op.entities:
@@ -434,6 +440,14 @@ def _apply_update_v3(conn, op: "MemoryOp") -> dict:
         kwargs["entities"] = _json.dumps(op.entities)
 
     rows_affected = update_data_point(conn, op.id, **kwargs) if kwargs else 0
+
+    if rows_affected > 0 and op.fact:
+        try:
+            from storage import fts_delete, fts_insert
+            fts_delete(conn, op.id)
+            fts_insert(conn, op.id, op.fact, op.scope)
+        except Exception as e:
+            print(f"Warning: FTS5 sync failed for UPDATE: {e}", file=sys.stderr)
 
     # Attempt to re-embed updated content
     if rows_affected > 0 and op.fact:

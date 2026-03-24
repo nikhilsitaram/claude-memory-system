@@ -1325,6 +1325,11 @@ def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
     cursor = conn.execute(
         "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
     )
+    try:
+        fts_delete(conn, dp_id)
+    except Exception as e:
+        import sys as _sys
+        print(f"Warning: FTS5 delete failed for {dp_id}: {e}", file=_sys.stderr)
     return cursor.rowcount
 
 

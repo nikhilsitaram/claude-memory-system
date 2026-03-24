@@ -310,6 +310,12 @@ async def _write_memory(fact, scope, salience=None, entities=None,
         )
         dp_id = insert_data_point(conn, dp)
 
+        try:
+            from storage import fts_insert
+            fts_insert(conn, dp_id, fact, scope)
+        except Exception as e:
+            print(f"Warning: FTS5 sync failed for write: {e}", file=sys.stderr)
+
         vec = embed_text(fact)
         if vec:
             conn.execute(

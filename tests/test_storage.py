@@ -2432,6 +2432,20 @@ class TestFTS5:
         assert all(r["scope"] == "my-project" for r in results_project)
         conn.close()
 
+    def test_soft_delete_removes_fts_entry(self, tmp_path):
+        """soft_delete_data_point also removes the FTS5 index entry."""
+        from storage import DataPointRow, insert_data_point, fts_insert, fts_search, soft_delete_data_point
+        conn = self._make_db(tmp_path)
+        dp = DataPointRow(type="memory", content="unique deletable content xyz", scope="global", salience=0.8)
+        dp_id = insert_data_point(conn, dp)
+        fts_insert(conn, dp_id, dp.content, dp.scope)
+        conn.commit()
+        assert len(fts_search(conn, "deletable", scope=None, limit=10)) >= 1
+        soft_delete_data_point(conn, dp_id)
+        conn.commit()
+        assert len(fts_search(conn, "deletable", scope=None, limit=10)) == 0
+        conn.close()
+
     def test_fts_migration_backfill(self, tmp_path):
         """Migration populates fts_data from existing data_points."""
         from unittest.mock import patch
