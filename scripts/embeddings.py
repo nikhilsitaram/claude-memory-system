@@ -73,6 +73,8 @@ __all__ = [
     "index_data_points_by_source",
     "delete_vec_data",
     "search_similar",
+    "search_hybrid",
+    "RRF_K",
     "reindex_changed_files",
     "reindex_all",
     "score_memory",
@@ -338,6 +340,96 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
 
     results.sort(key=lambda x: x.score, reverse=True)
     return results[:top_k]
+
+
+RRF_K = 60  # RRF constant (standard value from Cormack et al.)
+
+
+def search_hybrid(
+    conn,
+    query: str,
+    scope: Optional[str] = None,
+    top_k: int = DEFAULT_TOP_K,
+) -> list:
+    """Hybrid search combining FTS5 BM25 and vector KNN via Reciprocal Rank Fusion.
+
+    Fallback chain:
+    - Both FTS5 + vector available -> RRF hybrid
+    - Vector only -> vector search
+    - FTS5 only -> BM25 keyword search
+    - Neither -> SQL ranked fallback (salience + recency)
+
+    Returns sorted list of ScoredDataPoint (highest score first), limited to top_k.
+    """
+    has_fts = _has_table(conn, "fts_data")
+    has_vec = HAS_FASTEMBED and HAS_SQLITE_VEC and _has_table(conn, "vec_data")
+
+    fts_results = []
+    vec_results = []
+
+    if has_fts:
+        try:
+            from storage import fts_search
+            fts_hits = fts_search(conn, query, scope=scope, limit=top_k * 2)
+            fts_results = [(hit["data_point_id"], rank_idx) for rank_idx, hit in enumerate(fts_hits)]
+        except Exception:
+            pass
+
+    if has_vec:
+        try:
+            vec_results_raw = search_similar(conn, query, top_k=top_k * 2, scope=scope)
+            vec_results = [(r.data_point.id, rank_idx) for rank_idx, r in enumerate(vec_results_raw)]
+        except Exception:
+            pass
+
+    if fts_results and vec_results:
+        scores = {}
+        for dp_id, rank in fts_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        for dp_id, rank in vec_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        ranked_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:top_k]
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif vec_results:
+        ranked_ids = [dp_id for dp_id, _ in vec_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in vec_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif fts_results:
+        ranked_ids = [dp_id for dp_id, _ in fts_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in fts_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    else:
+        return _sql_ranked_fallback(conn, scope, top_k)
+
+
+def _fetch_scored_data_points(conn, ranked_ids, scores):
+    """Fetch data_points by ID and return as ScoredDataPoint list."""
+    from storage import query_data_point_by_id
+    results = []
+    for dp_id in ranked_ids:
+        dp = query_data_point_by_id(conn, dp_id)
+        if dp:
+            salience_recency = score_memory(0.5, dp)
+            final_score = scores[dp_id] + salience_recency
+            results.append(ScoredDataPoint(data_point=dp, score=final_score, vec_similarity=0.0))
+    results.sort(key=lambda x: x.score, reverse=True)
+    return results
+
+
+def _sql_ranked_fallback(conn, scope, top_k):
+    """Fallback search using salience + recency ordering (no semantic understanding)."""
+    from storage import query_data_points_by_scope
+    dps = query_data_points_by_scope(
+        conn, scope=scope or "global", dp_type="memory",
+        order_by="salience DESC, created_at DESC", limit=top_k
+    )
+    return [
+        ScoredDataPoint(data_point=dp, score=dp.salience, vec_similarity=0.0)
+        for dp in dps
+    ]
 
 
 def reindex_changed_files(conn, changed_files: list) -> None:

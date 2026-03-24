@@ -389,3 +389,91 @@ class TestBackwardCompatAliases:
         score = score_memory(0.0, dp)
         assert isinstance(score, float)
         assert score > 0
+
+
+# =============================================================================
+# A5: Hybrid Search (RRF) Tests
+# =============================================================================
+
+
+class TestHybridSearch:
+    """Tests for RRF hybrid search combining FTS5 + vector KNN."""
+
+    def _make_db_with_fts(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db, insert_data_point, DataPointRow, fts_insert
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        dp1 = DataPointRow(type="memory", content="Redis cache requires explicit TTL", scope="global", salience=0.8)
+        dp2 = DataPointRow(type="memory", content="SQLite WAL mode for concurrency", scope="global", salience=0.7)
+        dp3 = DataPointRow(type="memory", content="Always use pytest fixtures", scope="global", salience=0.6)
+        id1 = insert_data_point(conn, dp1)
+        id2 = insert_data_point(conn, dp2)
+        id3 = insert_data_point(conn, dp3)
+        fts_insert(conn, id1, dp1.content, dp1.scope)
+        fts_insert(conn, id2, dp2.content, dp2.scope)
+        fts_insert(conn, id3, dp3.content, dp3.scope)
+        conn.commit()
+        return conn, [id1, id2, id3]
+
+    def test_fts_only_fallback(self, tmp_path):
+        """When vector search is unavailable, hybrid falls back to FTS5 BM25."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False), \
+             patch("embeddings.HAS_SQLITE_VEC", False):
+            results = search_hybrid(conn, "Redis cache", scope=None, top_k=5)
+        assert len(results) >= 1
+        assert results[0].data_point.id == ids[0]
+        conn.close()
+
+    def test_sql_fallback_when_no_fts_no_vector(self, tmp_path):
+        """When both FTS5 and vector are unavailable, falls back to SQL ranked."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False), \
+             patch("embeddings.HAS_SQLITE_VEC", False), \
+             patch("embeddings._has_table", return_value=False):
+            results = search_hybrid(conn, "cache", scope=None, top_k=5)
+        assert len(results) >= 1
+        conn.close()
+
+    def test_results_ordered_by_score(self, tmp_path):
+        """Results are sorted by composite score, highest first."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "Redis", scope=None, top_k=5)
+        if len(results) >= 2:
+            assert results[0].score >= results[1].score
+        conn.close()
+
+    def test_scope_filtering(self, tmp_path):
+        """Scope parameter limits results to matching scope."""
+        from unittest.mock import patch
+        from storage import insert_data_point, DataPointRow, fts_insert
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        dp = DataPointRow(type="memory", content="Redis project-specific config", scope="my-proj", salience=0.9)
+        dp_id = insert_data_point(conn, dp)
+        fts_insert(conn, dp_id, dp.content, dp.scope)
+        conn.commit()
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "Redis", scope="my-proj", top_k=5)
+        assert all(r.data_point.scope == "my-proj" for r in results)
+        conn.close()
+
+    def test_top_k_limits_results(self, tmp_path):
+        """top_k parameter limits the number of results returned."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "cache SQLite pytest", scope=None, top_k=1)
+        assert len(results) <= 1
+        conn.close()
