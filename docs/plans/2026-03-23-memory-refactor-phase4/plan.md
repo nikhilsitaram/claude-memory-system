@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Fix broken salience lifecycle (reinforcement + decay on data_points), deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory injection, daily memory consolidation, enhanced health monitoring, epistemic metadata, secret sanitization, v2 dead code cleanup, and retrieval benchmarking. Implementation Plan

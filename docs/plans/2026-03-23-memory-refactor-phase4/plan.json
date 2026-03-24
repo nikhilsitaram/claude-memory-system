@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "Not Yet Started",
+  "status": "In Development",
   "workflow": "create-pr",
   "goal": "Fix broken salience lifecycle (reinforcement + decay on data_points), deliver hybrid search (FTS5 + vector + RRF), proactive mid-session memory injection, daily memory consolidation, enhanced health monitoring, epistemic metadata, secret sanitization, v2 dead code cleanup, and retrieval benchmarking.",
   "architecture": "Four sequential phases: (A) Salience lifecycle fix + search foundation + health + v2 cleanup -- port reinforcement and decay to v3 data_points, add FTS5 virtual table + RRF hybrid search, secret sanitization, hamming distance fix, extended health monitoring, remove dead v2 code. (B) Proactive retrieval -- UserPromptSubmit hook for per-prompt memory injection, epistemic metadata columns (certainty, validity_context), certainty integration into decay/scoring/synthesis. (C) Consolidation -- batch supersession pipeline with edge-aware clustering, LLM merge/skip decisions, daily scheduling piggybacked on synthesis_cron. (D) Benchmarking -- retrieval benchmark harness with precision@5, recall@5, NDCG@10, MRR, regression detection.",
