@@ -857,6 +857,17 @@ def _load_from_db(project_scope: str) -> str | None:
             except Exception as e:
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
 
+        try:
+            from health import health_report, health_alerts
+            hr = health_report(conn)
+            alerts = health_alerts(hr)
+            if alerts:
+                sections.append("\n## Health Alerts")
+                for alert in alerts:
+                    sections.append(f"- {alert}")
+        except Exception:
+            pass
+
         from memory_utils import sanitize_secrets
         return sanitize_secrets("\n\n".join(sections))
 
