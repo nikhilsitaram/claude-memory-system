@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "type": "impl-review",
+    "scope": "phase-a",
+    "iteration": 1,
+    "issues_found": 8,
+    "severity": {"critical": 0, "high": 1, "medium": 0, "low": 7},
+    "actionable": 1,
+    "dismissed": 7,
+    "dismissals": [
+      {"id": 2, "reason": "Duplicate SQL fallback is harmless, functionally correct"},
+      {"id": 3, "reason": "_model_ready/search_similar partial dead code — low risk cleanup later"},
+      {"id": 4, "reason": "last_consolidation placeholder by design, Phase C will wire"},
+      {"id": 5, "reason": "format_report() missing new fields — JSON output works, secondary"},
+      {"id": 6, "reason": ".venv symlink is worktree artifact, not actually committed to branch"},
+      {"id": 7, "reason": "raise DeprecationWarning unusual but internally consistent and tested"},
+      {"id": 8, "reason": "REINFORCEMENT_ETA location manageable in Phase B"}
+    ],
+    "fixed": 1,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T19:50:00Z"
+  }
+]

@@ -9,14 +9,14 @@
     {
       "letter": "A",
       "name": "Salience Lifecycle + Search Foundation + Health + V2 Cleanup",
-      "status": "Not Started",
+      "status": "Complete (2026-03-23)",
       "depends_on": [],
       "rationale": "Everything else depends on working salience (B needs decay rates for certainty, C needs decay to avoid consolidating already-dead memories), hybrid search (B's prompt_recall uses it, C's clustering uses vector KNN), and clean v2 removal (dead code paths confuse consumers). No LLM dependency -- pure DB/code work.",
       "tasks": [
         {
           "id": "A1",
           "name": "Port salience reinforcement to v3 data_points",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -33,7 +33,7 @@
         {
           "id": "A2",
           "name": "Port tiered decay to v3 data_points",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "A1"
           ],
@@ -53,7 +53,7 @@
         {
           "id": "A3",
           "name": "Remove v2 dead code from synthesis.py, embeddings.py, load_memory.py, and backfill.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -77,7 +77,7 @@
         {
           "id": "A4",
           "name": "Add FTS5 virtual table with migration backfill",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -94,7 +94,7 @@
         {
           "id": "A5",
           "name": "Implement RRF hybrid search in embeddings.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "A4"
           ],
@@ -113,7 +113,7 @@
         {
           "id": "A6",
           "name": "Wire hybrid search into memory_server.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "A5"
           ],
@@ -132,7 +132,7 @@
         {
           "id": "A7",
           "name": "Add FTS5 sync to write and delete paths",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "A4"
           ],
@@ -155,7 +155,7 @@
         {
           "id": "A8",
           "name": "Implement secret sanitization",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -175,7 +175,7 @@
         {
           "id": "A9",
           "name": "Fix hamming distance signed integer bug",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -192,7 +192,7 @@
         {
           "id": "A10",
           "name": "Extend health monitoring with new metrics and SessionStart alerts",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "A2"
           ],
