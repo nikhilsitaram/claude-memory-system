@@ -136,9 +136,30 @@ def _get_data_points(
 
 
 def _search(conn: sqlite3.Connection, query: str, limit: int = 20) -> list:
-    """Full-text search over data_points content and name fields."""
+    """Full-text search over data_points using FTS5 with LIKE fallback."""
     if not query:
         return []
+
+    # Try FTS5 first (stemming + BM25 ranking)
+    try:
+        from storage import fts_search, query_data_point_by_id
+        fts_results = fts_search(conn, query, scope=None, limit=limit)
+        if fts_results:
+            results = []
+            for hit in fts_results:
+                dp = query_data_point_by_id(conn, hit["data_point_id"])
+                if dp and dp.salience > 0:
+                    results.append({
+                        "id": dp.id, "type": dp.type, "name": dp.name,
+                        "content": dp.content, "scope": dp.scope,
+                        "salience": dp.salience, "created_at": dp.created_at,
+                    })
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # LIKE fallback (no FTS5 table or no results)
     like = f"%{query}%"
     rows = conn.execute(
         "SELECT id, type, name, content, scope, salience, created_at "

@@ -34,6 +34,7 @@ from storage import (
     DataPointRow,
     EdgeRow,
     ensure_db,
+    get_or_create_entity,
     insert_data_point,
     insert_edge,
     invalidate_edge,
@@ -281,23 +282,7 @@ async def _search_memories(query, scope=None, top_k=10):
 
 def _get_or_create_entity(conn, entity_name, scope):
     """Return existing entity data_point ID, or create and return a new one."""
-    row = conn.execute(
-        "SELECT id FROM data_points WHERE LOWER(name) = LOWER(?) AND type = 'entity' AND scope = ?",
-        (entity_name, scope),
-    ).fetchone()
-    if row:
-        return row[0]
-
-    now = datetime.now(timezone.utc).isoformat()
-    entity_dp = DataPointRow(
-        type="entity",
-        name=entity_name,
-        scope=scope,
-        salience=0.5,
-        source_type="manual",
-        created_at=now,
-    )
-    return insert_data_point(conn, entity_dp)
+    return get_or_create_entity(conn, entity_name, scope)
 
 
 async def _write_memory(fact, scope, salience=None, entities=None,

@@ -1310,11 +1310,16 @@ class TestSynthesisDeferredSetting:
         output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
         assert "AUTO-SYNTHESIZE" not in output
 
-    def test_deferred_false_preserves_auto_synthesis(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=False, existing behavior is preserved."""
+    def test_deferred_false_forced_to_deferred_on_v3(self, tmp_path, capsys, monkeypatch):
+        """When synthesis.deferred=False on v3 schema, forced to deferred mode (no in-session synthesis)."""
         settings = self._make_settings(deferred=False)
+        # Mock storage.get_db and _get_schema_version to simulate v3 schema
+        import storage as _storage_mod
+        monkeypatch.setattr(_storage_mod, "_get_schema_version", lambda c: 3)
+        monkeypatch.setattr(_storage_mod, "get_db", lambda: type("FakeConn", (), {"execute": lambda *a: None})())
+        monkeypatch.setattr(_storage_mod, "close_db", lambda c: None)
         output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" in output
+        assert "AUTO-SYNTHESIZE" not in output
 
 
 class TestCheckSynthesisErrors:

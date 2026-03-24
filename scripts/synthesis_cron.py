@@ -264,24 +264,9 @@ def _write_session_context(
 
 
 def _get_or_create_entity_in_db(conn, entity_name: str, scope: str | None) -> str:
-    """Return the ID of an entity data_point, creating it if absent.
-
-    Separate from synthesis._get_or_create_entity to avoid circular import.
-    """
-    from storage import DataPointRow, _content_hash, insert_data_point  # noqa: F401
-
-    content_hash = _content_hash(f"entity:{entity_name}")
-    row = conn.execute(
-        "SELECT id FROM data_points WHERE type='entity' AND content_hash=?",
-        (content_hash,),
-    ).fetchone()
-    if row:
-        return row[0]
-    return insert_data_point(conn, DataPointRow(
-        type="entity", name=entity_name, scope=scope,
-        content=entity_name, source_type="synthesis_v3",
-        salience=0.5,
-    ))
+    """Return the ID of an entity data_point, creating it if absent."""
+    from storage import get_or_create_entity
+    return get_or_create_entity(conn, entity_name, scope)
 
 
 def _get_schema_version(conn) -> int:

@@ -926,6 +926,18 @@ def main() -> None:
     # Exclude current session — it's still active and shouldn't be synthesized
     pending_dates = get_recent_days(exclude_session_id=current_session_id)
     synthesis_deferred = settings.get("synthesis", {}).get("deferred", True)
+    # v3 schema requires deferred synthesis (synthesis_cron.py handles MEMORY_OPS pipeline).
+    # The in-session v2 prompt format (===PROJECT:=== blocks + synthesis.py apply) is incompatible
+    # with v3's DB-only writes. Force deferred mode when on v3.
+    if not synthesis_deferred:
+        try:
+            from storage import _get_schema_version, get_db, close_db
+            _check_conn = get_db()
+            if _get_schema_version(_check_conn) >= 3:
+                synthesis_deferred = True
+            close_db(_check_conn)
+        except Exception:
+            pass
     if pending_dates and should_synthesize(settings) and not synthesis_deferred:
         # Write timestamp eagerly to prevent duplicate synthesis when multiple
         # sessions start simultaneously (all would see stale timestamp otherwise)

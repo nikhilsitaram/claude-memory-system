@@ -24,11 +24,9 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from storage import (  # noqa: E402
-    _CHUNK_COLUMNS,
     _DP_COLUMNS,
     VEC_DATA_DDL,
     DataPointRow,
-    _row_to_chunk,
     _row_to_data_point,
 )
 
@@ -427,12 +425,21 @@ def _fetch_scored_data_points(conn, ranked_ids, scores):
 
 
 def _sql_ranked_fallback(conn, scope, top_k):
-    """Fallback search using salience + recency ordering (no semantic understanding)."""
-    from storage import query_data_points_by_scope
-    dps = query_data_points_by_scope(
-        conn, scope=scope or "global", dp_type="memory",
-        order_by="salience DESC, created_at DESC", limit=top_k
-    )
+    """Fallback search using salience + recency ordering (no semantic understanding).
+
+    When scope is None, returns memories across all scopes (no filter).
+    """
+    from storage import query_data_points_by_scope, query_data_points
+    if scope is None:
+        dps = query_data_points(
+            conn, dp_type="memory", min_salience=0.0,
+            order_by="salience DESC, created_at DESC", limit=top_k
+        )
+    else:
+        dps = query_data_points_by_scope(
+            conn, scope=scope, dp_type="memory",
+            order_by="salience DESC, created_at DESC", limit=top_k
+        )
     return [
         ScoredDataPoint(data_point=dp, score=dp.salience, vec_similarity=0.0)
         for dp in dps

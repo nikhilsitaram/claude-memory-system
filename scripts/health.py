@@ -64,6 +64,7 @@ class HealthReport:
     never_accessed_pct: float = 0.0
     oldest_memory_days: int = 0
     edges_per_entity: float = 0.0
+    newest_edge_days: int = 0
 
 
 def health_report(conn: sqlite3.Connection) -> HealthReport:
@@ -193,6 +194,30 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
             ).fetchone()[0] or 0
             report.edges_per_entity = entity_edge_count / report.graph_nodes
 
+    # Newest edge age (for edge-staleness alert)
+    if report.active_edges > 0 and 'edges' in tables:
+        try:
+            from datetime import datetime, timezone
+            newest_row = conn.execute(
+                "SELECT MAX(created_at) FROM edges WHERE valid_to IS NULL"
+            ).fetchone()
+            if newest_row and newest_row[0]:
+                edge_dt = datetime.fromisoformat(newest_row[0].replace("Z", "+00:00"))
+                report.newest_edge_days = (datetime.now(timezone.utc) - edge_dt).days
+        except (ValueError, AttributeError):
+            pass
+
+    # Last consolidation timestamp from metadata table
+    if 'metadata' in tables:
+        try:
+            meta_row = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+            ).fetchone()
+            if meta_row:
+                report.last_consolidation = meta_row[0]
+        except Exception:
+            pass
+
     try:
         from memory_utils import get_memory_dir
         last_synth_file = get_memory_dir() / ".last-synthesis"
@@ -257,6 +282,13 @@ def health_alerts(report: HealthReport) -> list[str]:
 
     if report.synthesis_errors_7d > 3:
         alerts.append(f"{report.synthesis_errors_7d} synthesis errors in the last 7 days")
+
+    # Edge staleness: no new edges in 7+ days suggests entity extraction stalled
+    if report.active_edges > 0 and report.newest_edge_days > 7:
+        alerts.append(
+            f"No new edges in {report.newest_edge_days} days -- "
+            "entity extraction may be stalled"
+        )
 
     return alerts
 

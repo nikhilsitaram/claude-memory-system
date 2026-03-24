@@ -457,7 +457,7 @@ class TestWriteMemory:
             self._run(memory_server._write_memory("second JWT fact", scope="proj-x", entities=["JWT"]))
 
         count = db.execute(
-            "SELECT COUNT(*) FROM data_points WHERE type='entity' AND LOWER(name)=LOWER('JWT') AND scope='proj-x'"
+            "SELECT COUNT(*) FROM data_points WHERE type='entity' AND LOWER(name)=LOWER('JWT')"
         ).fetchone()[0]
         assert count == 1
 

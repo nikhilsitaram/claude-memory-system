@@ -186,56 +186,27 @@ CREATE TABLE IF NOT EXISTS metadata (
 """
 
 __all__ = [
+    # Schema & DDL
     "SCHEMA_VERSION",
     "SCHEMA_DDL",
     "VEC_CHUNKS_DDL",
     "VEC_DATA_DDL",
     "SCHEMA_V3_DDL",
-    "ChunkRow",
-    "NodeRow",
+    "FTS5_DDL",
+    # Dataclasses
     "EdgeRow",
     "DataPointRow",
     "MigrationStats",
+    "NeighborInfo",
+    # DB lifecycle
     "ensure_db",
     "get_db",
     "close_db",
+    # Schema & migration
     "_get_schema_version",
     "_migrate_salience_data",
     "_migrate_v2_to_v3",
     "_ensure_epistemic_columns",
-    "insert_chunk",
-    "query_chunks_by_scope",
-    "query_chunks_by_source",
-    "delete_chunks_by_source",
-    "insert_node",
-    "query_nodes_by_scope",
-    "query_node_by_name_and_type",
-    "update_node_access",
-    "insert_edge",
-    "NeighborInfo",
-    "query_neighbor_nodes",
-    "batch_update_access",
-    "update_chunk_salience",
-    "update_node_salience",
-    "query_chunks_with_salience",
-    "invalidate_edge",
-    "update_chunk_content",
-    "query_chunks_for_retrieval",
-    "query_chunk_by_id",
-    "query_current_edges",
-    "query_edges_at_date",
-    "query_edges_for_node",
-    "insert_data_point",
-    "query_data_point_by_id",
-    "query_data_points",
-    "query_data_points_by_scope",
-    "update_data_point",
-    "soft_delete_data_point",
-    "delete_data_point_soft",
-    "query_edges_for_data_point",
-    "PROVENANCE_TYPES",
-    "create_provenance_edge",
-    "query_provenance_chain",
     "migrate_markdown_to_db",
     "_parse_ltm_entries",
     "_parse_daily_entries",
@@ -244,12 +215,51 @@ __all__ = [
     "migrate_profiles",
     "_should_archive",
     "_archive_markdown_files",
-    "FTS5_DDL",
+    # v3 data_points CRUD
+    "get_or_create_entity",
+    "insert_data_point",
+    "query_data_point_by_id",
+    "query_data_points",
+    "query_data_points_by_scope",
+    "update_data_point",
+    "soft_delete_data_point",
+    "delete_data_point_soft",
+    # Edges
+    "insert_edge",
+    "invalidate_edge",
+    "query_current_edges",
+    "query_edges_at_date",
+    "query_edges_for_data_point",
+    "query_neighbor_nodes",
+    # Provenance
+    "PROVENANCE_TYPES",
+    "create_provenance_edge",
+    "query_provenance_chain",
+    # FTS5
     "_ensure_fts_table",
     "_backfill_fts",
     "fts_insert",
     "fts_delete",
     "fts_search",
+    # v2-only (migration support — do not use for new code)
+    "ChunkRow",
+    "NodeRow",
+    "insert_chunk",
+    "query_chunks_by_scope",
+    "query_chunks_by_source",
+    "delete_chunks_by_source",
+    "insert_node",
+    "query_nodes_by_scope",
+    "query_node_by_name_and_type",
+    "update_node_access",
+    "batch_update_access",
+    "update_chunk_salience",
+    "update_node_salience",
+    "query_chunks_with_salience",
+    "update_chunk_content",
+    "query_chunks_for_retrieval",
+    "query_chunk_by_id",
+    "query_edges_for_node",
 ]
 
 
@@ -750,6 +760,26 @@ def _content_hash(text: str) -> str:
 
 def _generate_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def get_or_create_entity(conn: sqlite3.Connection, entity_name: str, scope: str | None) -> str:
+    """Return the ID of an entity data_point, creating it if absent.
+
+    Uses content_hash("entity:{name}") for dedup so the same entity name
+    always resolves to one data_point regardless of which entry point created it.
+    """
+    content_hash = _content_hash(f"entity:{entity_name}")
+    row = conn.execute(
+        "SELECT id FROM data_points WHERE type='entity' AND content_hash=?",
+        (content_hash,),
+    ).fetchone()
+    if row:
+        return row[0]
+    return insert_data_point(conn, DataPointRow(
+        type="entity", name=entity_name, scope=scope,
+        content=entity_name, content_hash=content_hash,
+        source_type="system", salience=0.5,
+    ))
 
 
 def insert_chunk(conn: sqlite3.Connection, chunk: ChunkRow) -> str:
