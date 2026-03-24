@@ -767,5 +767,129 @@ class TestSalienceDecayIntegration:
         assert old_final.salience < ARCHIVE_SALIENCE_THRESHOLD
 
 
+# =============================================================================
+# A2: Tiered Decay for v3 data_points
+# =============================================================================
+
+
+class TestDecayDataPoints:
+    """Tests for decay_data_points() operating on the v3 data_points table."""
+
+    def _make_v3_db(self, tmp_path):
+        """Create a v3 DB with data_points table for testing."""
+        from unittest.mock import patch as _patch
+        from storage import ensure_db
+
+        db_path = tmp_path / "memory.db"
+        with _patch("storage.get_db_path", return_value=db_path), \
+             _patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_decays_old_memory_data_points(self, tmp_path):
+        """A memory not accessed in 30+ days gets its salience reduced."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(type="memory", content="old fact", scope="global", salience=0.6, last_accessed=old_ts)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        count = decay_data_points(conn)
+        assert count >= 1
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] < 0.6, "Salience should decrease after decay"
+        conn.close()
+
+    def test_skips_profile_type_data_points(self, tmp_path):
+        """Profile data_points (type='profile') are never decayed."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(type="profile", content="About Me", scope="user", salience=1.0, last_accessed=old_ts)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        decay_data_points(conn)
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] == 1.0, "Profile should not be decayed"
+        conn.close()
+
+    def test_skips_consolidated_data_points(self, tmp_path):
+        """Consolidated (pinned) data_points are not decayed."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(type="memory", content="pinned", scope="global", salience=0.8, consolidated=1, last_accessed=old_ts)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        decay_data_points(conn)
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] == 0.8, "Consolidated should not be decayed"
+        conn.close()
+
+    def test_skips_user_scope_data_points(self, tmp_path):
+        """User-scope memories are not decayed."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(type="memory", content="user pref", scope="user", salience=0.7, last_accessed=old_ts)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        decay_data_points(conn)
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] == 0.7, "User scope should not be decayed"
+        conn.close()
+
+    def test_dry_run_no_changes_data_points(self, tmp_path):
+        """dry_run=True counts but does not modify salience."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(type="memory", content="old fact", scope="global", salience=0.6, last_accessed=old_ts)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        count = decay_data_points(conn, dry_run=True)
+        assert count >= 1
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] == 0.6, "Dry run should not change salience"
+        conn.close()
+
+    def test_tier_classification_data_points(self, tmp_path):
+        """Verify tier classification applies correct decay rates."""
+        from storage import insert_data_point, DataPointRow
+        from decay import decay_data_points
+
+        conn = self._make_v3_db(tmp_path)
+        now = datetime.now(timezone.utc)
+        cold_ts = (now - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+        warm_ts = (now - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+
+        cold_dp = DataPointRow(type="memory", content="cold fact", scope="global", salience=0.3, last_accessed=cold_ts, access_count=1)
+        warm_dp = DataPointRow(type="memory", content="warm fact", scope="global", salience=0.5, last_accessed=warm_ts, access_count=3)
+        cold_id = insert_data_point(conn, cold_dp)
+        warm_id = insert_data_point(conn, warm_dp)
+        conn.commit()
+
+        decay_data_points(conn)
+        cold_row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (cold_id,)).fetchone()
+        warm_row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (warm_id,)).fetchone()
+        assert cold_row[0] < warm_row[0], "Cold tier should decay faster than warm"
+        conn.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

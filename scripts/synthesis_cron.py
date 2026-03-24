@@ -460,6 +460,17 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
     return not failed
 
 
+def _run_decay_v3(conn) -> None:
+    """Run tiered decay on data_points. Cheap and idempotent -- runs every invocation."""
+    try:
+        from decay import decay_data_points
+        count = decay_data_points(conn)
+        if count > 0:
+            print(f"Decay: adjusted salience for {count} data_points", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Decay failed: {e}", file=sys.stderr)
+
+
 def run_synthesis(force: bool = False) -> int:
     """Run the full deferred synthesis pipeline.
 
@@ -522,6 +533,7 @@ def run_synthesis(force: bool = False) -> int:
     try:
         if version >= 3 and conn is not None:
             success = _run_synthesis_v3(conn, model, prompt_files)
+            _run_decay_v3(conn)
         else:
             if conn:
                 close_db(conn)

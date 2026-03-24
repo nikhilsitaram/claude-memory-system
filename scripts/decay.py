@@ -145,6 +145,50 @@ def decay_salience(
     return max(0.0, min(1.0, current_salience * factor))
 
 
+def decay_data_points(conn, dry_run: bool = False) -> int:
+    """Apply tiered exponential decay to data_points salience.
+
+    Queries all active memories (type='memory', salience > threshold,
+    not consolidated, not user scope), classifies into hot/warm/cold
+    tiers, and applies decay formula.
+
+    Protected from decay:
+    - type != 'memory' (profile, entity, session_context)
+    - consolidated = 1 (pinned)
+    - scope = 'user' (permanent user preferences)
+
+    Args:
+        conn: SQLite connection with v3 schema.
+        dry_run: If True, count but do not write changes.
+
+    Returns:
+        Count of data_points whose salience was reduced.
+    """
+    rows = conn.execute(
+        "SELECT id, salience, access_count, last_accessed "
+        "FROM data_points WHERE type = 'memory' AND salience > ? "
+        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        (ARCHIVE_SALIENCE_THRESHOLD,)
+    ).fetchall()
+
+    decayed = 0
+    for dp_id, salience, access_count, last_accessed in rows:
+        dt = days_since(last_accessed)
+        _tier, lam = pick_tier(dt, access_count or 0, salience or 0)
+        new_sal = decay_salience(salience, dt, lam)
+        if new_sal != salience:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE data_points SET salience = ? WHERE id = ?",
+                    (max(0.0, min(1.0, new_sal)), dp_id)
+                )
+            decayed += 1
+
+    if not dry_run:
+        conn.commit()
+    return decayed
+
+
 def parse_learning_date(line: str) -> date | None:
     """Extract creation date from learning line."""
     match = DATE_PATTERN.search(line)
