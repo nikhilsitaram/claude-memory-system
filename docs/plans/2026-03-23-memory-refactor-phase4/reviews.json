@@ -20,5 +20,23 @@
     "remaining": 0,
     "verdict": "pass",
     "timestamp": "2026-03-23T19:50:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-b",
+    "iteration": 1,
+    "issues_found": 5,
+    "severity": {"critical": 0, "high": 1, "medium": 0, "low": 4},
+    "actionable": 2,
+    "dismissed": 3,
+    "dismissals": [
+      {"id": 3, "reason": "MAX_TOKEN_BUDGET unused — Phase C will wire configurable settings"},
+      {"id": 4, "reason": "validity_context no interface — by design, future phase"},
+      {"id": 5, "reason": "Hardcoded prompt_recall constants — Phase C task C3 will address"}
+    ],
+    "fixed": 2,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T20:15:00Z"
   }
 ]

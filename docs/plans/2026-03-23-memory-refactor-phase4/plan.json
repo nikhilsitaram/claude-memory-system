@@ -217,7 +217,7 @@
     {
       "letter": "B",
       "name": "Proactive Retrieval + Epistemic Metadata",
-      "status": "Not Started",
+      "status": "Complete (2026-03-23)",
       "depends_on": [
         "A"
       ],
@@ -226,7 +226,7 @@
         {
           "id": "B1",
           "name": "Add epistemic metadata columns (certainty, validity_context) with migration",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -243,7 +243,7 @@
         {
           "id": "B2",
           "name": "Integrate certainty into decay, scoring, synthesis, and write_memory",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "B1"
           ],
@@ -268,7 +268,7 @@
         {
           "id": "B3",
           "name": "Create prompt_recall.py UserPromptSubmit hook",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "B2"
           ],
@@ -287,7 +287,7 @@
         {
           "id": "B4",
           "name": "Register UserPromptSubmit hook in install.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "B3"
           ],
