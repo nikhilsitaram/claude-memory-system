@@ -137,7 +137,9 @@ CREATE TABLE IF NOT EXISTS data_points (
     content_hash TEXT,
     simhash INTEGER,
     entities TEXT,
-    properties TEXT
+    properties TEXT,
+    certainty INTEGER DEFAULT NULL,
+    validity_context TEXT DEFAULT NULL
 );
 
 -- Edges table for relationships between data_points
@@ -194,6 +196,7 @@ __all__ = [
     "_get_schema_version",
     "_migrate_salience_data",
     "_migrate_v2_to_v3",
+    "_ensure_epistemic_columns",
     "insert_chunk",
     "query_chunks_by_scope",
     "query_chunks_by_source",
@@ -322,6 +325,8 @@ class DataPointRow:
     simhash: Optional[int] = None
     entities: Optional[str] = None
     properties: Optional[str] = None
+    certainty: Optional[int] = None
+    validity_context: Optional[str] = None
     id: Optional[str] = None
 
 
@@ -404,7 +409,9 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
             content_hash TEXT,
             simhash INTEGER,
             entities TEXT,
-            properties TEXT
+            properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_dp_type ON data_points(type);
@@ -641,6 +648,20 @@ def fts_search(conn: sqlite3.Connection, query: str, scope: str | None, limit: i
     return [{"data_point_id": r[0], "scope": r[1], "rank": r[2]} for r in rows]
 
 
+def _ensure_epistemic_columns(conn: sqlite3.Connection) -> None:
+    """Add certainty and validity_context columns if they don't exist.
+
+    Uses PRAGMA table_info to check before ALTER TABLE (SQLite has no
+    ADD COLUMN IF NOT EXISTS).
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(data_points)").fetchall()}
+    if "certainty" not in existing:
+        conn.execute("ALTER TABLE data_points ADD COLUMN certainty INTEGER DEFAULT NULL")
+    if "validity_context" not in existing:
+        conn.execute("ALTER TABLE data_points ADD COLUMN validity_context TEXT DEFAULT NULL")
+    conn.commit()
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
     if current_version < 2:
         _migrate_salience_data(conn)
@@ -662,6 +683,7 @@ def ensure_db() -> sqlite3.Connection:
     assert isinstance(SCHEMA_VERSION, int), 'SCHEMA_VERSION must be int'
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
+    _ensure_epistemic_columns(conn)
     _ensure_fts_table(conn)
     return conn
 
@@ -1119,7 +1141,8 @@ def query_edges_for_node(
 _DP_COLUMNS = (
     "id, type, name, content, scope, entry_type, source_type, source_sessions, "
     "created_at, salience, access_count, last_accessed, evidence_count, "
-    "consolidated, content_hash, simhash, entities, properties"
+    "consolidated, content_hash, simhash, entities, properties, "
+    "certainty, validity_context"
 )
 
 
@@ -1135,6 +1158,8 @@ def _row_to_data_point(row: tuple) -> DataPointRow:
         access_count=row[10], last_accessed=row[11], evidence_count=row[12],
         consolidated=row[13], content_hash=row[14], simhash=row[15],
         entities=row[16], properties=row[17],
+        certainty=row[18] if len(row) > 18 else None,
+        validity_context=row[19] if len(row) > 19 else None,
     )
 
 
@@ -1156,14 +1181,15 @@ def insert_data_point(conn: sqlite3.Connection, row: DataPointRow) -> str:
         "INSERT INTO data_points "
         "(id, type, name, content, scope, entry_type, source_type, source_sessions, "
         "created_at, salience, access_count, last_accessed, evidence_count, "
-        "consolidated, content_hash, simhash, entities, properties) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "consolidated, content_hash, simhash, entities, properties, "
+        "certainty, validity_context) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             dp_id, row.type, row.name, row.content, row.scope, row.entry_type,
             row.source_type, row.source_sessions, created_at, row.salience,
             row.access_count, row.last_accessed, row.evidence_count,
             row.consolidated, content_hash, row.simhash, row.entities,
-            row.properties,
+            row.properties, row.certainty, row.validity_context,
         ),
     )
     return dp_id

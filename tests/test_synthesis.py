@@ -631,7 +631,9 @@ def _make_v3_db_for_synthesis(tmp_path):
             content_hash TEXT,
             simhash INTEGER,
             entities TEXT,
-            properties TEXT
+            properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS edges (
             id TEXT PRIMARY KEY,
