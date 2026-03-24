@@ -235,6 +235,11 @@ __all__ = [
     "migrate_profiles",
     "_should_archive",
     "_archive_markdown_files",
+    "FTS5_DDL",
+    "_ensure_fts_table",
+    "fts_insert",
+    "fts_delete",
+    "fts_search",
 ]
 
 
@@ -566,6 +571,76 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+FTS5_DDL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_data USING fts5(
+    content,
+    data_point_id UNINDEXED,
+    scope UNINDEXED,
+    tokenize='porter unicode61'
+);
+"""
+
+
+def _ensure_fts_table(conn: sqlite3.Connection) -> None:
+    """Create FTS5 table and backfill from data_points if needed."""
+    conn.executescript(FTS5_DDL)
+    conn.execute("""
+        INSERT INTO fts_data(content, data_point_id, scope)
+        SELECT dp.content, dp.id, dp.scope
+        FROM data_points dp
+        WHERE dp.content IS NOT NULL
+        AND dp.id NOT IN (SELECT data_point_id FROM fts_data)
+    """)
+    conn.commit()
+
+
+def fts_insert(conn: sqlite3.Connection, dp_id: str, content: str, scope: str | None) -> None:
+    """Insert a data_point's content into the FTS5 index."""
+    if not content:
+        return
+    conn.execute(
+        "INSERT INTO fts_data(content, data_point_id, scope) VALUES (?, ?, ?)",
+        (content, dp_id, scope)
+    )
+
+
+def fts_delete(conn: sqlite3.Connection, dp_id: str) -> None:
+    """Remove a data_point from the FTS5 index."""
+    conn.execute("DELETE FROM fts_data WHERE data_point_id = ?", (dp_id,))
+
+
+def fts_search(conn: sqlite3.Connection, query: str, scope: str | None, limit: int = 10) -> list[dict]:
+    """Search FTS5 index with BM25 ranking.
+
+    Returns list of dicts with 'data_point_id', 'scope', 'rank' keys,
+    ordered by BM25 relevance (best first).
+    """
+    if not query or not query.strip():
+        return []
+
+    safe_query = query.replace('"', '""')
+    terms = safe_query.split()
+    fts_query = " ".join(f'"{t}"' for t in terms if t.strip())
+    if not fts_query:
+        return []
+
+    if scope:
+        rows = conn.execute(
+            "SELECT data_point_id, scope, rank FROM fts_data "
+            "WHERE fts_data MATCH ? AND scope = ? "
+            "ORDER BY rank LIMIT ?",
+            (fts_query, scope, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT data_point_id, scope, rank FROM fts_data "
+            "WHERE fts_data MATCH ? ORDER BY rank LIMIT ?",
+            (fts_query, limit)
+        ).fetchall()
+
+    return [{"data_point_id": r[0], "scope": r[1], "rank": r[2]} for r in rows]
+
+
 def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
     if current_version < 2:
         _migrate_salience_data(conn)
@@ -587,6 +662,7 @@ def ensure_db() -> sqlite3.Connection:
     assert isinstance(SCHEMA_VERSION, int), 'SCHEMA_VERSION must be int'
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
+    _ensure_fts_table(conn)
     return conn
 
 
