@@ -75,6 +75,7 @@ class MemoryOp:
     reason: str | None = None
     salience: float | None = None      # v3: LLM-assigned salience (0.0-1.0)
     supersedes: str | None = None       # v3: ID of data_point this replaces
+    certainty: int | None = None        # v4: epistemic certainty (1-5)
 
 
 @dataclass
@@ -148,6 +149,7 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
                             reason=op.get("reason"),
                             salience=op.get("salience"),
                             supersedes=op.get("supersedes"),
+                            certainty=op.get("certainty"),
                         )
                         for op in raw_ops
                     ]
@@ -388,6 +390,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
         entry_type=op.type,
         source_type="synthesis_v3",
         salience=salience,
+        certainty=op.certainty if op.certainty is not None else 2,
     )
     dp_id = insert_data_point(conn, dp)
 

@@ -477,3 +477,36 @@ class TestHybridSearch:
             results = search_hybrid(conn, "cache SQLite pytest", scope=None, top_k=1)
         assert len(results) <= 1
         conn.close()
+
+
+class TestCertaintyScoring:
+    """Tests for certainty modulation in score_memory."""
+
+    def test_certainty_modulates_score(self):
+        from embeddings import score_memory
+        from unittest.mock import MagicMock
+
+        high_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=5)
+        low_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=1)
+        no_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=None)
+
+        high_score = score_memory(0.5, high_cert_dp)
+        low_score = score_memory(0.5, low_cert_dp)
+        neutral_score = score_memory(0.5, no_cert_dp)
+
+        assert high_score > low_score, "Higher certainty should produce higher score"
+        assert neutral_score > 0, "None certainty should not crash and produce a positive score"
+
+    def test_certainty_none_is_neutral(self):
+        """certainty=None should not modify salience (backward compatible)."""
+        from embeddings import score_memory
+        from unittest.mock import MagicMock
+
+        dp_none = MagicMock(salience=0.8, last_accessed=None, created_at=None, certainty=None)
+        dp_no_attr = MagicMock(salience=0.8, last_accessed=None, created_at=None, spec=[])
+        del dp_no_attr.certainty
+
+        score_none = score_memory(0.5, dp_none)
+        score_no_attr = score_memory(0.5, dp_no_attr)
+
+        assert score_none == score_no_attr, "None and missing certainty should produce same score"

@@ -165,16 +165,23 @@ def decay_data_points(conn, dry_run: bool = False) -> int:
         Count of data_points whose salience was reduced.
     """
     rows = conn.execute(
-        "SELECT id, salience, access_count, last_accessed "
+        "SELECT id, salience, access_count, last_accessed, certainty "
         "FROM data_points WHERE type = 'memory' AND salience > ? "
         "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
         (ARCHIVE_SALIENCE_THRESHOLD,)
     ).fetchall()
 
     decayed = 0
-    for dp_id, salience, access_count, last_accessed in rows:
+    for dp_id, salience, access_count, last_accessed, certainty in rows:
+        if certainty is not None and certainty >= 4:
+            continue
+
         dt = days_since(last_accessed)
         _tier, lam = pick_tier(dt, access_count or 0, salience or 0)
+
+        if certainty is not None and certainty <= 2:
+            lam = lam * 2.0
+
         new_sal = decay_salience(salience, dt, lam)
         if new_sal != salience:
             if not dry_run:
