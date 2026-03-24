@@ -62,6 +62,11 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
         else:
             result.append({"members": members, "similarities": edges})
 
+    # Enrich clusters with metadata for scoring, then sort by importance
+    for cluster in result:
+        _enrich_cluster_metadata(conn, cluster)
+    result.sort(key=score_cluster, reverse=True)
+
     return result[:max_clusters]
 
 
@@ -178,6 +183,33 @@ def _split_large_cluster(members, edges, max_size=15):
     return [members[:max_size]]
 
 
+def _enrich_cluster_metadata(conn, cluster):
+    """Add max_recency and avg_salience to a cluster dict for scoring."""
+    saliences = []
+    max_ts = None
+    now = datetime.now(timezone.utc)
+    for dp_id in cluster["members"]:
+        row = conn.execute(
+            "SELECT salience, created_at FROM data_points WHERE id = ?", (dp_id,)
+        ).fetchone()
+        if row:
+            saliences.append(row[0] or 0.0)
+            if row[1]:
+                try:
+                    ts = datetime.fromisoformat(row[1].replace("Z", "+00:00"))
+                    if max_ts is None or ts > max_ts:
+                        max_ts = ts
+                except (ValueError, AttributeError):
+                    pass
+
+    cluster["avg_salience"] = sum(saliences) / len(saliences) if saliences else 0.0
+    if max_ts:
+        age_days = (now - max_ts).total_seconds() / 86400
+        cluster["max_recency"] = max(0.0, 1.0 - age_days / 365.0)
+    else:
+        cluster["max_recency"] = 0.0
+
+
 def score_cluster(cluster):
     """Score a cluster for priority ranking.
 
@@ -202,7 +234,7 @@ def merge_cluster(conn, member_ids, model="sonnet"):
         if row:
             members.append({
                 "id": dp_id,
-                "content": row[0],
+                "content": sanitize_secrets(row[0]) if row[0] else row[0],
                 "created_at": row[1],
                 "entities": row[2],
             })
@@ -211,8 +243,7 @@ def merge_cluster(conn, member_ids, model="sonnet"):
 
     try:
         result = subprocess.run(
-            ["claude", "-p", "--no-session-persistence", "--model", model,
-             "--permission-mode", "bypassPermissions"],
+            ["claude", "-p", "--no-session-persistence", "--model", model],
             input=prompt,
             capture_output=True, text=True, timeout=120,
         )
@@ -257,7 +288,13 @@ def _build_merge_prompt(members):
 def _parse_merge_response(text):
     """Parse LLM merge/skip response JSON."""
     import re
-    json_match = re.search(r'\{[^}]+\}', text, re.DOTALL)
+    # Try direct parse first (clean JSON response)
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fall back to extracting JSON object from surrounding text
+    json_match = re.search(r'\{.*\}', text, re.DOTALL)
     if json_match:
         try:
             return json.loads(json_match.group())
@@ -277,10 +314,11 @@ def write_merge_result(conn, merged_fact, original_ids, entities=None, certainty
             max_sal = max(max_sal, row[0])
     new_salience = min(1.0, max_sal + 0.05)
 
+    safe_fact = sanitize_secrets(merged_fact)
     entities_json = json.dumps(entities) if entities else None
     dp = DataPointRow(
         type="memory",
-        content=sanitize_secrets(merged_fact),
+        content=safe_fact,
         scope=scope,
         source_type="consolidation",
         salience=new_salience,
@@ -296,7 +334,7 @@ def write_merge_result(conn, merged_fact, original_ids, entities=None, certainty
         soft_delete_data_point(conn, oid)
 
     try:
-        fts_insert(conn, new_id, merged_fact, scope)
+        fts_insert(conn, new_id, safe_fact, scope)
     except Exception:
         pass
 
@@ -332,6 +370,11 @@ def run_consolidation(conn, settings=None, backfill=False, dry_run=False):
     for cluster in clusters:
         result = merge_cluster(conn, cluster["members"], model=model)
         if result["decision"] == "MERGE":
+            merged_fact = result.get("fact", "")
+            if not merged_fact or not merged_fact.strip():
+                stats["clusters_skipped"] += 1
+                print("Consolidation SKIP: LLM returned empty merged fact", file=sys.stderr)
+                continue
             scopes = []
             for mid in cluster["members"]:
                 row = conn.execute("SELECT scope FROM data_points WHERE id = ?", (mid,)).fetchone()
@@ -347,7 +390,7 @@ def run_consolidation(conn, settings=None, backfill=False, dry_run=False):
 
             write_merge_result(
                 conn,
-                merged_fact=result.get("fact", ""),
+                merged_fact=merged_fact,
                 original_ids=cluster["members"],
                 entities=result.get("entities", []),
                 certainty=max_cert,

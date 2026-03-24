@@ -62,6 +62,7 @@ def seed_benchmark_db(tmp_path):
         # Project-scoped
         ("proj_auth", "Authentication uses JWT with RS256 algorithm", "auth-service", 0.8, 4),
         ("proj_auth_refresh", "Refresh tokens expire after 7 days, access tokens after 15 minutes", "auth-service", 0.7, 3),
+        ("proj_auth_jwt_tokens", "JWT tokens must be validated and refreshed by the auth-service middleware", "auth-service", 0.75, 4),
         ("proj_deploy", "Deploy to staging requires approval from team lead", "auth-service", 0.5, 2),
         # Python patterns
         ("py_pathlib", "Use pathlib.Path instead of os.path for cross-platform compatibility", "global", 0.6, 5),
@@ -138,10 +139,15 @@ def seed_benchmark_db(tmp_path):
 
 
 def build_benchmark_queries(id_map):
-    """Build the benchmark query suite (~20 queries covering diverse scenarios)."""
+    """Build the benchmark query suite (~20 queries covering diverse scenarios).
+
+    FTS5 uses implicit AND for quoted terms, so each query term must appear
+    in the target seed memory content for a match.  Queries are designed so
+    that at least one relevant seed memory contains ALL query terms.
+    """
     return [
         BenchmarkQuery(
-            "Redis caching best practices",
+            "Redis cache",
             [id_map["redis_ttl"], id_map["redis_cluster"], id_map["redis_eviction"]],
             description="Keyword: Redis cluster",
         ),
@@ -151,94 +157,94 @@ def build_benchmark_queries(id_map):
             description="Keyword: SQLite concurrency",
         ),
         BenchmarkQuery(
-            "testing best practices",
+            "pytest fixtures",
             [id_map["pytest_fixtures"], id_map["pytest_parametrize"], id_map["test_constants"]],
             description="Testing cluster",
         ),
         BenchmarkQuery(
-            "authentication tokens",
+            "JWT tokens",
             [id_map["proj_auth"], id_map["proj_auth_refresh"]],
             scope="auth-service",
             description="Project-scoped auth",
         ),
         BenchmarkQuery(
-            "database configuration",
-            [id_map["sqlite_wal"], id_map["sqlite_fk"], id_map["redis_ttl"]],
+            "SQLite PRAGMA",
+            [id_map["sqlite_wal"], id_map["sqlite_fk"], id_map["sqlite_busy"]],
             description="Cross-topic DB config",
         ),
         BenchmarkQuery(
-            "Python code style",
+            "pathlib compatibility",
             [id_map["py_pathlib"], id_map["py_typing"], id_map["py_dataclass"]],
             description="Python patterns",
         ),
         BenchmarkQuery(
-            "git workflow",
+            "commit messages",
             [id_map["git_rebase"], id_map["git_commit"]],
             description="Git patterns",
         ),
         BenchmarkQuery(
-            "service architecture",
+            "microservice database",
             [id_map["arch_microservice"], id_map["arch_event"], id_map["arch_api"]],
             description="Architecture cluster",
         ),
         BenchmarkQuery(
-            "cache eviction strategy",
+            "Redis eviction cache",
             [id_map["redis_eviction"], id_map["redis_ttl"]],
             description="Specific Redis topic",
         ),
         BenchmarkQuery(
-            "cross-platform file handling",
+            "pathlib cross platform",
             [id_map["py_pathlib"]],
             description="Single relevant result",
         ),
         BenchmarkQuery(
-            "Docker container optimization",
+            "Docker builds",
             [id_map["docker_multi"], id_map["docker_health"]],
             description="Docker cluster",
         ),
         BenchmarkQuery(
-            "Kubernetes deployment configuration",
+            "Kubernetes pods",
             [id_map["k8s_limits"], id_map["k8s_probes"]],
             description="K8s cluster",
         ),
         BenchmarkQuery(
-            "security secrets management",
+            "secrets environment",
             [id_map["sec_secrets"], id_map["sec_jwt"]],
             description="Security cluster",
         ),
         BenchmarkQuery(
-            "database indexing and migrations",
+            "indexes foreign keys",
             [id_map["db_index"], id_map["db_migration"]],
             description="DB maintenance",
         ),
         BenchmarkQuery(
-            "error handling retry patterns",
+            "retry errors backoff",
             [id_map["err_retry"], id_map["err_circuit"]],
             description="Error handling cluster",
         ),
         BenchmarkQuery(
-            "structured logging configuration",
+            "structured logging JSON",
             [id_map["log_struct"], id_map["log_level"]],
             description="Logging cluster",
         ),
         BenchmarkQuery(
-            "CI build optimization",
+            "CI dependencies cache",
             [id_map["ci_cache"], id_map["ci_parallel"]],
             description="CI/CD cluster",
         ),
         BenchmarkQuery(
-            "API rate limiting and versioning",
+            "API rate limiting",
             [id_map["proj_api_rate"], id_map["proj_api_version"]],
             scope="api-gateway",
             description="Project-scoped API gateway",
         ),
         BenchmarkQuery(
-            "monitoring SLIs and alerting",
+            "SLIs latency alerts",
             [id_map["mon_sli"], id_map["mon_alert"]],
             description="Monitoring cluster",
         ),
         BenchmarkQuery(
-            "JWT token validation",
+            "JWT validated request",
             [id_map["sec_jwt"], id_map["proj_auth"]],
             description="Cross-scope JWT (global + project)",
         ),
@@ -450,8 +456,11 @@ class TestBenchmarkExecution:
         conn, id_map = seed_benchmark_db(tmp_path)
         with patch("embeddings.HAS_FASTEMBED", False), \
              patch("embeddings.HAS_SQLITE_VEC", False):
-            results = search_hybrid(conn, "authentication tokens", scope="auth-service", top_k=10)
+            results = search_hybrid(conn, "JWT tokens", scope="auth-service", top_k=10)
 
+        assert len(results) > 0, (
+            "Expected at least one result for 'JWT tokens' in auth-service scope"
+        )
         for r in results:
             assert r.data_point.scope == "auth-service", (
                 f"Expected scope 'auth-service', got '{r.data_point.scope}'"

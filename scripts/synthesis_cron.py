@@ -473,13 +473,18 @@ def _run_decay_v3(conn) -> None:
 
 def _should_consolidate(conn, settings) -> bool:
     """Check if consolidation should run based on interval and memory count."""
+    import sqlite3
+
     consol = settings.get("consolidation", {})
     interval_hours = consol.get("intervalHours", 24)
     min_memories = consol.get("minMemories", 5)
 
-    row = conn.execute(
-        "SELECT value FROM metadata WHERE key = 'last_consolidation'"
-    ).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
 
     if row and row[0]:
         try:
@@ -502,9 +507,14 @@ def _should_consolidate(conn, settings) -> bool:
 
 def _is_backfill(conn) -> bool:
     """Check if this is the first-ever consolidation run."""
-    row = conn.execute(
-        "SELECT value FROM metadata WHERE key = 'last_consolidation'"
-    ).fetchone()
+    import sqlite3
+
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return True
     return row is None or row[0] is None
 
 
