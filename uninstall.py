@@ -207,6 +207,7 @@ def purge_memory_data() -> None:
         claude_dir / "skills" / "recall",
         claude_dir / "skills" / "settings",
         claude_dir / "skills" / "projects",
+        claude_dir / "skills" / "consolidate",
         # Hook scripts
         claude_dir / "hooks" / "pretooluse-allow-memory.sh",
         # Scripts (current)
@@ -220,6 +221,7 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "synthesis_cron.py",
         claude_dir / "scripts" / "synthesis.py",
         claude_dir / "scripts" / "devtools.py",
+        claude_dir / "scripts" / "consolidation.py",
         # Legacy scripts — removed in past versions but may still exist on disk
         # for users who installed before the removal. Keep in purge list to ensure
         # clean uninstall regardless of which version was originally installed.
@@ -264,7 +266,7 @@ def print_cleanup_instructions() -> None:
     print("Or manually:")
     print()
     print("  rm -rf ~/.claude/memory")
-    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects}")
+    print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects,consolidate}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
     print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager,synthesis_cron,synthesis,devtools}.py")
     if sys.platform == "darwin":

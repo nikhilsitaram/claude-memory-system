@@ -713,8 +713,8 @@ def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str])
             (dp_id,)
         ).fetchall()
         for target_id, neighbor_sal, edge_weight in neighbors:
-            boost = REINFORCEMENT_ETA * (edge_weight or 1.0) * new_sal
-            new_neighbor_sal = min(1.0, (neighbor_sal or 0.5) + boost)
+            boost = REINFORCEMENT_ETA * (edge_weight if edge_weight is not None else 1.0) * new_sal
+            new_neighbor_sal = min(1.0, (neighbor_sal if neighbor_sal is not None else 0.5) + boost)
             conn.execute(
                 "UPDATE data_points SET salience = ? WHERE id = ?",
                 (new_neighbor_sal, target_id)

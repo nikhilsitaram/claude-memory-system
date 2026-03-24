@@ -1357,7 +1357,7 @@ def update_data_point(conn: sqlite3.Connection, dp_id: str, **kwargs) -> int:
         "type", "name", "content", "scope", "entry_type", "source_type",
         "source_sessions", "salience", "access_count", "last_accessed",
         "evidence_count", "consolidated", "content_hash", "simhash",
-        "entities", "properties",
+        "entities", "properties", "certainty", "validity_context",
     }
 
     updates = []

@@ -418,7 +418,6 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
             print(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
             failed = True
-            Path(tmp_path).unlink(missing_ok=True)
             continue
         finally:
             Path(tmp_path).unlink(missing_ok=True)

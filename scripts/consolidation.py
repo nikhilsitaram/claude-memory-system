@@ -172,8 +172,13 @@ def _split_large_cluster(members, edges, max_size=15):
     while True:
         active_edges = [e for e in sorted_edges if e not in removed]
         components = _connected_components(active_edges, members)
+        if not components:
+            return [members[:max_size]]
         if all(len(c[0]) <= max_size for c in components):
-            return [c[0] for c in components]
+            result = [c[0] for c in components if len(c[0]) >= 2]
+            if not result:
+                return [members[:max_size]]
+            return result
         for e in sorted_edges:
             if e not in removed:
                 removed.add(e)

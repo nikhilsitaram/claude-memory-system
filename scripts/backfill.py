@@ -7,6 +7,6 @@ Entity extraction is now handled by:
 
 This script targeted the v2 chunks table which no longer exists.
 """
-raise DeprecationWarning(
+raise RuntimeError(
     "backfill.py is deprecated. Entity extraction is handled by synthesis and write_memory."
 )
