@@ -25,7 +25,6 @@ _CONFIRM_RE = re.compile(
 MIN_PROMPT_LENGTH = 15
 MAX_PROMPT_LENGTH = 500
 MAX_INJECTIONS = 3
-MAX_TOKEN_BUDGET = 500
 DEDUP_WINDOW = 3
 
 
@@ -33,7 +32,7 @@ def should_search(prompt: str) -> bool:
     """Relevance gate: decide whether this prompt warrants memory search."""
     if not prompt or len(prompt.strip()) < MIN_PROMPT_LENGTH:
         return False
-    if len(prompt) > MAX_PROMPT_LENGTH:
+    if len(prompt.strip()) > MAX_PROMPT_LENGTH:
         return False
     if prompt.strip().startswith("/"):
         return False
@@ -67,7 +66,7 @@ def record_injection(dp_id: str, state_file: Path, prompt_index: int) -> None:
             pass
 
     state["injections"].append({"id": dp_id, "prompt_index": prompt_index})
-    state["injections"] = state["injections"][-5:]
+    state["injections"] = state["injections"][-(MAX_INJECTIONS * DEDUP_WINDOW):]
     state_file.write_text(json.dumps(state))
 
 

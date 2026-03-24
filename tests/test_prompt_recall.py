@@ -70,13 +70,14 @@ class TestSessionDedup:
         record_injection("dp-1", state_file, prompt_index=1)
         assert is_recently_injected("dp-1", state_file, current_prompt_index=1 + DEDUP_WINDOW + 1) is False
 
-    def test_state_keeps_last_5(self, tmp_path):
-        from prompt_recall import record_injection
+    def test_state_keeps_last_n(self, tmp_path):
+        from prompt_recall import record_injection, MAX_INJECTIONS, DEDUP_WINDOW
         state_file = tmp_path / ".prompt-recall-state-test"
-        for i in range(10):
+        cap = MAX_INJECTIONS * DEDUP_WINDOW
+        for i in range(cap + 5):
             record_injection(f"dp-{i}", state_file, prompt_index=i)
         state = json.loads(state_file.read_text())
-        assert len(state["injections"]) == 5
+        assert len(state["injections"]) == cap
 
     def test_corrupt_state_treated_as_empty(self, tmp_path):
         from prompt_recall import is_recently_injected
