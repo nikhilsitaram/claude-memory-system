@@ -24,13 +24,10 @@ from embeddings import (
     VEC_SIM_WEIGHT,
     ScoredChunk,
     ScoredDataPoint,
-    delete_vec_chunks,
     delete_vec_data,
     embed_batch,
     embed_text,
     ensure_vec_table,
-    index_chunks,
-    index_chunks_by_source,
     index_data_points,
     reindex_all,
     reindex_changed_files,
@@ -201,10 +198,6 @@ class TestGracefulDegradation:
             results = search_similar(db, "test query")
             assert results == []
 
-    def test_index_chunks_no_fastembed(self, db):
-        with mock.patch("embeddings.HAS_FASTEMBED", False):
-            index_chunks(db, ["id1", "id2"])
-
     def test_reindex_all_no_fastembed(self, db):
         with mock.patch("embeddings.HAS_FASTEMBED", False):
             reindex_all(db)
@@ -213,30 +206,6 @@ class TestGracefulDegradation:
         with mock.patch("embeddings.HAS_SQLITE_VEC", False):
             results = search_similar(db, "test query")
             assert results == []
-
-
-class TestIndexChunks:
-    def test_index_chunks_inserts_vectors(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == len(sample_chunks)
-
-    def test_index_chunks_skips_existing_same_hash(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks[:2])
-        index_chunks(db_with_vec, sample_chunks[:2])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_index_chunks_by_source(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks_by_source(db_with_vec, ["global-long-term-memory.md"])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_delete_vec_chunks(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        delete_vec_chunks(db_with_vec, sample_chunks[:2])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 3
 
 
 class TestScoring:
@@ -283,48 +252,6 @@ class TestScoring:
         score = score_memory(0.3, chunk)
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
-
-
-class TestSearchSimilar:
-    def test_returns_scored_chunks(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "pytest fixtures for testing")
-        assert len(results) > 0
-        assert all(isinstance(r, ScoredChunk) for r in results)
-        assert all(r.score >= 0 for r in results)
-
-    def test_scope_filtering(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "testing", scope="global")
-        assert all(r.data_point.scope == "global" for r in results)
-
-    def test_respects_top_k(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "testing", top_k=2)
-        assert len(results) <= 2
-
-    def test_returns_empty_when_no_vectors(self, db_with_vec, mock_embedder):
-        results = search_similar(db_with_vec, "anything")
-        assert results == []
-
-
-class TestReindex:
-    def test_reindex_all(self, db_with_vec, mock_embedder, sample_chunks):
-        reindex_all(db_with_vec)
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == len(sample_chunks)
-
-    def test_reindex_changed_files(self, db_with_vec, mock_embedder, sample_chunks):
-        reindex_changed_files(db_with_vec, ["global-long-term-memory.md"])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_reindex_changed_files_replaces_old_vectors(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        count_before = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        reindex_changed_files(db_with_vec, ["global-long-term-memory.md"])
-        count_after = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count_after == count_before
 
 
 @pytest.mark.skipif(not HAS_FASTEMBED, reason="fastembed not installed")
@@ -449,21 +376,6 @@ class TestBackwardCompatAliases:
     def test_scored_chunk_is_scored_data_point(self):
         """ScoredChunk must be the same class as ScoredDataPoint."""
         assert ScoredChunk is ScoredDataPoint
-
-    def test_index_chunks_is_importable(self):
-        """index_chunks can still be imported (deprecated wrapper)."""
-        from embeddings import index_chunks
-        assert callable(index_chunks)
-
-    def test_delete_vec_chunks_is_importable(self):
-        """delete_vec_chunks can still be imported (deprecated wrapper)."""
-        from embeddings import delete_vec_chunks
-        assert callable(delete_vec_chunks)
-
-    def test_index_chunks_by_source_is_importable(self):
-        """index_chunks_by_source can still be imported (deprecated wrapper)."""
-        from embeddings import index_chunks_by_source
-        assert callable(index_chunks_by_source)
 
     def test_score_memory_with_data_point_row(self):
         """score_memory accepts DataPointRow (duck-typed alongside ChunkRow)."""

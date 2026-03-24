@@ -283,14 +283,13 @@ def decay_file(
     project_work_days: list[str] | None = None,
     project_decay_threshold: int | None = None,
 ) -> tuple[int, list[str]]:
-    """
-    Process a memory file, archiving old learnings.
+    """Process a memory file, archiving old learnings.
 
-    For project files, pass project_work_days and project_decay_threshold
-    to use working-day-based decay instead of calendar-day decay.
-
-    Returns (archived_count, archived_learnings).
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
     """
+    import warnings as _w
+    _w.warn("decay_file() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not filepath.exists():
         return 0, []
 
@@ -357,7 +356,13 @@ def decay_file(
 
 
 def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
-    """Append archived learnings to decay archive."""
+    """Append archived learnings to decay archive.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("append_to_archive() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not learnings:
         return
 
@@ -403,7 +408,13 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
 
 
 def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
-    """Remove archive sections older than retention_days."""
+    """Remove archive sections older than retention_days.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("purge_old_archives() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     archive_file = get_memory_dir() / ".decay-archive.md"
 
     if not archive_file.exists():
@@ -443,7 +454,13 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
 
 
 def run(dry_run: bool = False) -> int:
-    """Run decay on all memory files. Returns 0 on success."""
+    """Run decay on all memory files. Returns 0 on success.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("run() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     settings = load_settings()
     age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
     project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)

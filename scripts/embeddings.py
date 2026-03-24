@@ -70,11 +70,8 @@ __all__ = [
     "embed_text",
     "embed_batch",
     "index_data_points",
-    "index_chunks",
     "index_data_points_by_source",
-    "index_chunks_by_source",
     "delete_vec_data",
-    "delete_vec_chunks",
     "search_similar",
     "reindex_changed_files",
     "reindex_all",
@@ -260,48 +257,6 @@ def index_data_points(conn, data_point_ids: list) -> None:
     conn.commit()
 
 
-def index_chunks(conn, chunk_ids: list) -> None:
-    """Deprecated: use index_data_points() for v3 schema.
-
-    For v2 schema DBs (with chunks/vec_chunks tables), embeds chunks and
-    inserts into vec_chunks. Skips chunks already indexed with same hash.
-    """
-    if not chunk_ids or not HAS_FASTEMBED:
-        return
-
-    placeholders = ",".join("?" * len(chunk_ids))
-    rows = conn.execute(
-        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE id IN ({placeholders})",
-        chunk_ids,
-    ).fetchall()
-    chunks = [_row_to_chunk(r) for r in rows]
-
-    existing = conn.execute(
-        f"SELECT vc.chunk_id, c.content_hash FROM vec_chunks vc JOIN chunks c ON vc.chunk_id = c.id WHERE vc.chunk_id IN ({placeholders})",
-        chunk_ids,
-    ).fetchall()
-    existing_map = {row[0]: row[1] for row in existing}
-
-    to_embed = [c for c in chunks if c.id not in existing_map or existing_map.get(c.id) != c.content_hash]
-
-    if not to_embed:
-        return
-
-    stale_ids = [c.id for c in to_embed if c.id in existing_map]
-    if stale_ids:
-        delete_vec_chunks(conn, stale_ids)
-
-    contents = [c.content for c in to_embed]
-    vectors = embed_batch(contents)
-
-    for chunk, vec in zip(to_embed, vectors):
-        conn.execute(
-            "INSERT INTO vec_chunks (embedding, chunk_id, source_type) VALUES (?, ?, ?)",
-            (_serialize_vector(vec), chunk.id, chunk.source_type),
-        )
-    conn.commit()
-
-
 def index_data_points_by_source(conn, source_types: list) -> None:
     """Index all data_points from the given source types."""
     if not source_types or not HAS_FASTEMBED:
@@ -316,37 +271,10 @@ def index_data_points_by_source(conn, source_types: list) -> None:
         index_data_points(conn, dp_ids)
 
 
-def index_chunks_by_source(conn, source_files: list) -> None:
-    """Deprecated: use index_data_points_by_source() for v3 schema.
-
-    Index all chunks from the given source files (v2 schema).
-    """
-    if not source_files or not HAS_FASTEMBED:
-        return
-    placeholders = ",".join("?" * len(source_files))
-    rows = conn.execute(
-        f"SELECT id FROM chunks WHERE source_file IN ({placeholders})",
-        source_files,
-    ).fetchall()
-    chunk_ids = [r[0] for r in rows]
-    if chunk_ids:
-        index_chunks(conn, chunk_ids)
-
-
 def delete_vec_data(conn, data_point_ids: list) -> None:
     """Delete vec_data rows for the given data_point IDs."""
     for dp_id in data_point_ids:
         conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
-    conn.commit()
-
-
-def delete_vec_chunks(conn, chunk_ids: list) -> None:
-    """Deprecated: use delete_vec_data() for v3 schema.
-
-    Delete vec_chunks rows for the given chunk IDs (v2 schema).
-    """
-    for chunk_id in chunk_ids:
-        conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (chunk_id,))
     conn.commit()
 
 
