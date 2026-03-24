@@ -308,7 +308,7 @@
     {
       "letter": "C",
       "name": "Memory Consolidation Pipeline",
-      "status": "Not Started",
+      "status": "Complete (2026-03-23)",
       "depends_on": [
         "A",
         "B"
@@ -318,7 +318,7 @@
         {
           "id": "C1",
           "name": "Implement consolidation pipeline core (clustering, scoring, LLM merge/skip)",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [
@@ -335,7 +335,7 @@
         {
           "id": "C2",
           "name": "Integrate consolidation into synthesis_cron.py with daily gate",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "C1"
           ],
@@ -355,7 +355,7 @@
         {
           "id": "C3",
           "name": "Add consolidation settings to DEFAULT_SETTINGS and install.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -374,7 +374,7 @@
         {
           "id": "C4",
           "name": "Create /consolidate skill for manual trigger",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "C1"
           ],
@@ -397,7 +397,7 @@
     {
       "letter": "D",
       "name": "Retrieval Benchmarking",
-      "status": "Not Started",
+      "status": "Complete (2026-03-23)",
       "depends_on": [
         "B"
       ],
@@ -406,7 +406,7 @@
         {
           "id": "D1",
           "name": "Create retrieval benchmark harness with seed data and regression detection",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [
