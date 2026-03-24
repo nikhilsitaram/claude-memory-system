@@ -235,6 +235,8 @@ def _sql_ranked_search(conn, scope, top_k):
 async def _search_memories(query, scope=None, top_k=10):
     """Search memories by hybrid search (FTS5 + vector + RRF), with SQL fallback."""
     conn = _db_conn
+    if conn is None:
+        return [{"error": "Database not initialized"}]
 
     results = search_hybrid(conn, query, top_k=top_k, scope=scope)
 
@@ -306,6 +308,8 @@ async def _write_memory(fact, scope, salience=None, entities=None,
     fact = sanitize_secrets(fact)
 
     conn = _db_conn
+    if conn is None:
+        return {"error": "Database not initialized"}
     try:
         conn.execute("BEGIN IMMEDIATE")
 
@@ -374,6 +378,8 @@ async def _write_memory(fact, scope, salience=None, entities=None,
 async def _delete_memory(dp_id, reason=None):
     """Soft-delete a data_point: salience=0, invalidate edges, create deletion marker."""
     conn = _db_conn
+    if conn is None:
+        return {"error": "Database not initialized"}
     target = query_data_point_by_id(conn, dp_id)
     if not target:
         return {"error": f"Data point {dp_id} not found"}
@@ -423,6 +429,8 @@ async def _delete_memory(dp_id, reason=None):
 async def _traverse_graph(entity, depth=2, relationship_type=None):
     """Walk the knowledge graph using a recursive CTE. Returns nodes within depth hops."""
     conn = _db_conn
+    if conn is None:
+        return {"error": "Database not initialized"}
 
     type_clause = "AND e.type = ?" if relationship_type else ""
 

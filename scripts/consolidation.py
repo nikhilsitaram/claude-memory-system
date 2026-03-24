@@ -353,7 +353,26 @@ def write_merge_result(conn, merged_fact, original_ids, entities=None, certainty
 
 
 def run_consolidation(conn, settings=None, backfill=False, dry_run=False):
-    """Run the full consolidation pipeline."""
+    """Run the full consolidation pipeline.
+
+    Uses a directory-based lock to prevent concurrent runs from creating
+    duplicate consolidated memories.
+    """
+    from memory_utils import FileLock, get_memory_dir
+
+    lock = FileLock(str(get_memory_dir() / ".consolidation-lock"), timeout=5)
+    if not lock.acquire():
+        print("Consolidation skipped: another instance is running", file=sys.stderr)
+        return {"clusters_found": 0, "clusters_merged": 0, "clusters_skipped": 0, "memories_consolidated": 0, "skipped_reason": "lock"}
+
+    try:
+        return _run_consolidation_locked(conn, settings, backfill, dry_run)
+    finally:
+        lock.release()
+
+
+def _run_consolidation_locked(conn, settings, backfill, dry_run):
+    """Inner consolidation logic, called while holding the lock."""
     if settings is None:
         settings = load_settings()
 

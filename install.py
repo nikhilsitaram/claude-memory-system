@@ -56,7 +56,7 @@ def detect_python_command() -> str:
     Detect which Python command to use in hooks.
 
     Checks python3 first (preferred on Unix), then python.
-    Returns the command that points to Python 3.9+.
+    Returns the absolute path to a Python 3.9+ interpreter.
     """
     for cmd in ["python3", "python"]:
         try:
@@ -72,7 +72,8 @@ def detect_python_command() -> str:
                 if len(parts) >= 2:
                     major, minor = int(parts[0]), int(parts[1])
                     if major >= 3 and minor >= 9:
-                        return cmd
+                        absolute = shutil.which(cmd)
+                        return absolute if absolute else cmd
         except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
             continue
 
