@@ -29,12 +29,16 @@ from load_memory import (
 from storage import (
     SCHEMA_DDL,
     ChunkRow,
+    DataPointRow,
     EdgeRow,
     NodeRow,
     close_db,
+    ensure_db,
     insert_chunk,
+    insert_data_point,
     insert_edge,
     insert_node,
+    invalidate_edge,
     query_chunks_with_salience,
 )
 
@@ -1364,205 +1368,6 @@ class TestCheckSynthesisErrors:
         assert "error 0" not in result
 
 
-# =============================================================================
-# B2: Access Tracking Tests
-# =============================================================================
-
-
-class TestAccessTracking:
-    """Tests for track_memory_access() and access tracking at SessionStart."""
-
-    def _make_db(self, tmp_path):
-        """Helper: create a DB with v2 schema and return (conn, db_path)."""
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-        return conn, db_path
-
-    def test_served_chunks_get_access_count_incremented(self, tmp_path):
-        """When chunks are served, their access_count increments by 1."""
-        from load_memory import track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            chunk = ChunkRow(content="test entry", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([cid])
-            conn2 = _make_v2_db(db_path)
-            results = query_chunks_with_salience(conn2)
-            assert results[0].access_count == 1
-            close_db(conn2)
-
-    def test_last_accessed_updated_to_utc_now(self, tmp_path):
-        """last_accessed is set to current UTC timestamp."""
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            chunk = ChunkRow(content="timestamp test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01")
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            close_db(conn)
-
-        fixed_ts = "2026-03-21T12:00:00Z"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            with mock.patch("load_memory.datetime") as mock_dt:
-                mock_now = datetime(2026, 3, 21, 12, 0, 0, tzinfo=timezone.utc)
-                mock_dt.now.return_value = mock_now
-                from load_memory import track_memory_access
-                track_memory_access([cid])
-            conn2 = _make_v2_db(db_path)
-            results = query_chunks_with_salience(conn2)
-            assert results[0].last_accessed == fixed_ts
-            close_db(conn2)
-
-    def test_salience_reinforced_with_diminishing_returns(self, tmp_path):
-        """Salience reinforcement: new = min(1.0, old + 0.18 * (1.0 - old))."""
-        from load_memory import REINFORCEMENT_ETA, track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            chunk = ChunkRow(content="salience test", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.5)
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([cid])
-            conn2 = _make_v2_db(db_path)
-            results = query_chunks_with_salience(conn2)
-            expected = 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5)
-            assert abs(results[0].salience - expected) < 1e-9
-            close_db(conn2)
-
-    def test_salience_near_1_converges(self, tmp_path):
-        """Repeated access converges toward 1.0 without overshooting."""
-        from load_memory import track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            chunk = ChunkRow(content="near-max salience", source_file="f.md", source_type="ltm", scope="global", chunk_index=0, created_at="2026-01-01", salience=0.95)
-            cid = insert_chunk(conn, chunk)
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([cid])
-            conn2 = _make_v2_db(db_path)
-            results = query_chunks_with_salience(conn2)
-            assert results[0].salience < 1.0
-            assert results[0].salience > 0.95
-            close_db(conn2)
-
-    def test_db_unavailable_does_not_block_session(self, tmp_path):
-        """If DB doesn't exist, access tracking silently skips."""
-        from load_memory import track_memory_access
-        nonexistent = tmp_path / "nonexistent" / "memory.db"
-        with mock.patch("load_memory.get_db_path", return_value=nonexistent, create=True):
-            track_memory_access(["some-id"])
-
-    def test_concurrent_write_retries_on_busy(self, tmp_path):
-        """BEGIN IMMEDIATE with retry on SQLITE_BUSY."""
-        import sqlite3
-
-        from load_memory import _execute_with_retry
-
-        call_count = [0]
-        mock_conn = mock.MagicMock()
-
-        fetchone_result = mock.MagicMock()
-        fetchone_result.fetchone.return_value = None
-
-        def patched_execute(sql, *args, **kwargs):
-            if "BEGIN IMMEDIATE" in sql and call_count[0] < 1:
-                call_count[0] += 1
-                raise sqlite3.OperationalError("database is locked")
-            return fetchone_result
-
-        mock_conn.execute.side_effect = patched_execute
-
-        with mock.patch("load_memory.time"):
-            with mock.patch("storage.batch_update_access"):
-                with mock.patch("storage.update_chunk_salience"):
-                    with mock.patch("storage.update_node_salience"):
-                        _execute_with_retry(mock_conn, ["chunk-1"], [])
-
-        assert call_count[0] == 1
-
-
-# =============================================================================
-# B3: Associative Reinforcement Tests
-# =============================================================================
-
-
-class TestAssociativeReinforcement:
-    """Tests for associative reinforcement of graph neighbors."""
-
-    def test_neighbor_receives_boost_proportional_to_edge_weight(self, tmp_path):
-        """Neighbor boost = 0.18 * edge_weight * accessed_node.salience."""
-        from load_memory import REINFORCEMENT_ETA, track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            nA = insert_node(conn, NodeRow(name="nodeA", type="concept", scope="global", created_at="2026-01-01", salience=0.8))
-            nB = insert_node(conn, NodeRow(name="nodeB", type="concept", scope="global", created_at="2026-01-01", salience=0.3))
-            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=0.5))
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([], node_ids=[nA])
-            conn2 = _make_v2_db(db_path)
-            row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
-            accessed_row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nA,)).fetchone()
-            accessed_salience_after = accessed_row[0]
-            expected_b = min(1.0, 0.3 + REINFORCEMENT_ETA * 0.5 * accessed_salience_after)
-            assert abs(row[0] - expected_b) < 1e-6
-            close_db(conn2)
-
-    def test_boost_clamped_to_1(self, tmp_path):
-        """Neighbor salience cannot exceed 1.0 after boost."""
-        from load_memory import track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            nA = insert_node(conn, NodeRow(name="nodeA2", type="concept", scope="global", created_at="2026-01-01", salience=1.0))
-            nB = insert_node(conn, NodeRow(name="nodeB2", type="concept", scope="global", created_at="2026-01-01", salience=0.99))
-            insert_edge(conn, EdgeRow(source=nA, target=nB, type="related", created_at="2026-01-01", weight=1.0))
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([], node_ids=[nA])
-            conn2 = _make_v2_db(db_path)
-            row = conn2.execute("SELECT salience FROM nodes WHERE id=?", (nB,)).fetchone()
-            assert row[0] <= 1.0
-            close_db(conn2)
-
-    def test_no_neighbors_no_error(self, tmp_path):
-        """Node with no edges -- associative reinforcement is a no-op."""
-        from load_memory import track_memory_access
-
-        db_path = tmp_path / "memory.db"
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            conn = _make_v2_db(db_path)
-            nA = insert_node(conn, NodeRow(name="isolated2", type="concept", scope="global", created_at="2026-01-01", salience=0.7))
-            conn.commit()
-            close_db(conn)
-
-        with mock.patch("storage.get_db_path", return_value=db_path):
-            track_memory_access([], node_ids=[nA])
-
-
 # ============================================================================
 # C7: CRUD-aware synthesis prompt
 # ============================================================================
@@ -2083,6 +1888,97 @@ class TestSessionContinuity:
 
         assert result is not None
         assert "JWT" in result
+
+
+# =============================================================================
+# Salience Reinforcement Tests (A1)
+# =============================================================================
+
+
+class TestSalienceReinforcement:
+    """Tests for salience reinforcement in _batch_update_data_point_access."""
+
+    def _make_v3_db(self, tmp_path):
+        """Create a v3 DB for testing data_point access tracking."""
+        from unittest.mock import patch
+        with patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_salience_increases_on_access(self, tmp_path):
+        """Accessing a data_point increases its salience via diminishing returns."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.5)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access, REINFORCEMENT_ETA
+        _batch_update_data_point_access(conn, [dp_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        expected = min(1.0, 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5))
+        assert abs(row[0] - expected) < 0.001
+        conn.close()
+
+    def test_salience_capped_at_one(self, tmp_path):
+        """Salience cannot exceed 1.0 even after repeated reinforcement."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.95)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        for _ in range(10):
+            _batch_update_data_point_access(conn, [dp_id])
+            conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] <= 1.0
+        conn.close()
+
+    def test_associative_boost_propagates_to_entities(self, tmp_path):
+        """Accessing a memory boosts salience of connected entity data_points."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="Use Redis for caching", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(conn, EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now))
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] > 0.4, "Entity salience should increase via associative boost"
+        conn.close()
+
+    def test_no_boost_to_invalidated_edges(self, tmp_path):
+        """Entities connected via invalidated edges (valid_to IS NOT NULL) are not boosted."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="test", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="test", content="test", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        edge_row = EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now)
+        insert_edge(conn, edge_row)
+        edge_id = conn.execute("SELECT id FROM edges ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        invalidate_edge(conn, edge_id, valid_to=now, expired_at=now)
+        conn.commit()
+
+        original_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        new_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        assert new_salience == original_salience, "Invalidated edge should not cause boost"
+        conn.close()
 
 
 if __name__ == "__main__":

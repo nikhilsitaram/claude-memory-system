@@ -56,7 +56,7 @@ def detect_python_command() -> str:
     Detect which Python command to use in hooks.
 
     Checks python3 first (preferred on Unix), then python.
-    Returns the command that points to Python 3.9+.
+    Returns the absolute path to a Python 3.9+ interpreter.
     """
     for cmd in ["python3", "python"]:
         try:
@@ -72,7 +72,8 @@ def detect_python_command() -> str:
                 if len(parts) >= 2:
                     major, minor = int(parts[0]), int(parts[1])
                     if major >= 3 and minor >= 9:
-                        return cmd
+                        absolute = shutil.which(cmd)
+                        return absolute if absolute else cmd
         except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
             continue
 
@@ -158,6 +159,8 @@ def link_scripts(script_dir: Path) -> None:
         "backfill.py",  # One-time entity re-extraction for existing chunks
         "web_app.py",  # Web frontend for browsing and managing memory
         "memory_server.py",  # MCP server - search/write/delete/traverse tools
+        "prompt_recall.py",  # UserPromptSubmit hook - proactive memory injection
+        "consolidation.py",  # Memory consolidation and deduplication
     ]
 
     for script_name in scripts_to_link:
@@ -204,7 +207,7 @@ def link_skills(script_dir: Path) -> None:
     """Symlink skill directories to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "settings", "projects"]
+    skills = ["remember", "synthesize", "recall", "settings", "projects", "consolidate"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
@@ -507,6 +510,19 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                     }
                 ],
             },
+        ],
+        # UserPromptSubmit injects relevant memories per-prompt
+        "UserPromptSubmit": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{python_cmd} {scripts_dir}/prompt_recall.py",
+                        "timeout": 2,
+                    }
+                ],
+            }
         ],
         # SessionEnd triggers deferred synthesis (platform-aware)
         "SessionEnd": [

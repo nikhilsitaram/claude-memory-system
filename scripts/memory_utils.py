@@ -78,6 +78,7 @@ __all__ = [
     "is_routed_match",
     "rebuild_projects_index_quiet",
     "FileLock",
+    "sanitize_secrets",
 ]
 
 # Minimum Python version required
@@ -246,6 +247,20 @@ DEFAULT_SETTINGS = {
         "ageDays": 30,
         "projectWorkingDays": 20,
         "archiveRetentionDays": 365,
+    },
+    "consolidation": {
+        "intervalHours": 24,
+        "minMemories": 5,
+        "similarityThreshold": 0.80,
+        "maxClusters": 15,
+        "backfillMaxClusters": 30,
+        "model": "sonnet",
+    },
+    "recall": {
+        "maxPromptLength": 500,
+        "minPromptLength": 15,
+        "maxInjectionsPerPrompt": 3,
+        "maxTokenBudget": 500,
     },
     # totalTokenBudget calculated as sum of 4 components
 }
@@ -1040,3 +1055,40 @@ if __name__ == "__main__":
         print(f"  - {day}")
     if len(working_days) > 5:
         print(f"  ... and {len(working_days) - 5} more")
+
+
+# =============================================================================
+# Secret sanitization
+# =============================================================================
+
+import re as _re
+
+_SECRET_PATTERNS = [
+    (_re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:aws_key]"),
+    (_re.compile(r"sk_live_[a-zA-Z0-9]{20,}"), "[REDACTED:api_key]"),
+    (_re.compile(r"sk_test_[a-zA-Z0-9]{20,}"), "[REDACTED:api_key]"),
+    (_re.compile(r"sk-[a-zA-Z0-9_-]{20,}"), "[REDACTED:api_key]"),
+    (_re.compile(r"(postgres|mysql|mongodb)://[^\s]+"), "[REDACTED:connection_string]"),
+    (_re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[REDACTED:jwt]"),
+    (_re.compile(r"-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----"), "[REDACTED:private_key]"),
+    (_re.compile(r"(token|password|secret|apikey)\s*[=:]\s*['\"][^\s'\"]{8,}['\"]", _re.IGNORECASE), "[REDACTED:secret_assignment]"),
+]
+
+
+def sanitize_secrets(text: str) -> str:
+    """Detect and redact common secret patterns from text.
+
+    Replaces matches with [REDACTED:<type>] markers.
+
+    Args:
+        text: Input text that may contain secrets.
+
+    Returns:
+        Text with secrets replaced by redaction markers.
+    """
+    if not text:
+        return text
+    result = text
+    for pattern, replacement in _SECRET_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result

@@ -609,7 +609,9 @@ def _make_v3_db_for_cron(tmp_path):
             content_hash TEXT,
             simhash INTEGER,
             entities TEXT,
-            properties TEXT
+            properties TEXT,
+            certainty INTEGER DEFAULT NULL,
+            validity_context TEXT DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS edges (
             id TEXT PRIMARY KEY,
@@ -1025,3 +1027,117 @@ class TestV3SessionContextScope:
 
         assert written_scopes[0] != date_label
         assert written_scopes[0] == "myproject"
+
+
+# ---------------------------------------------------------------------------
+# Consolidation gate tests
+# ---------------------------------------------------------------------------
+
+
+def _make_db_with_metadata(tmp_path):
+    """Create a test DB with metadata table for consolidation tests."""
+    from unittest.mock import patch as p
+    from storage import ensure_db
+    db_path = tmp_path / "memory.db"
+    with p("storage.get_db_path", return_value=db_path), \
+         p("storage.get_memory_dir", return_value=tmp_path):
+        conn = ensure_db()
+    return conn
+
+
+class TestConsolidationGate:
+    """Tests for consolidation scheduling in synthesis_cron."""
+
+    def test_skips_when_interval_not_met(self, tmp_path):
+        """Consolidation skips if less than intervalHours since last run."""
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import _should_consolidate
+
+        conn = _make_db_with_metadata(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', ?)", (recent,))
+        conn.commit()
+
+        settings = dict(DEFAULT_SETTINGS)
+        settings["consolidation"] = dict(DEFAULT_SETTINGS.get("consolidation", {}))
+        settings["consolidation"]["intervalHours"] = DEFAULT_SETTINGS["consolidation"]["intervalHours"]
+
+        assert _should_consolidate(conn, settings) is False
+        conn.close()
+
+    def test_runs_when_interval_met(self, tmp_path):
+        """Consolidation runs when interval has elapsed and enough memories exist."""
+        from memory_utils import DEFAULT_SETTINGS
+        from storage import DataPointRow, insert_data_point
+        from synthesis_cron import _should_consolidate
+
+        conn = _make_db_with_metadata(tmp_path)
+        interval = DEFAULT_SETTINGS["consolidation"]["intervalHours"]
+        old = (datetime.now(timezone.utc) - timedelta(hours=interval + 1)).isoformat().replace("+00:00", "Z")
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', ?)", (old,))
+
+        min_mem = DEFAULT_SETTINGS["consolidation"]["minMemories"]
+        for i in range(min_mem + 5):
+            insert_data_point(conn, DataPointRow(type="memory", content=f"fact {i}", scope="global", salience=0.5))
+        conn.commit()
+
+        assert _should_consolidate(conn, DEFAULT_SETTINGS) is True
+        conn.close()
+
+    def test_skips_when_too_few_memories(self, tmp_path):
+        """Consolidation skips if fewer than minMemories active memories."""
+        from memory_utils import DEFAULT_SETTINGS
+        from storage import DataPointRow, insert_data_point
+        from synthesis_cron import _should_consolidate
+
+        conn = _make_db_with_metadata(tmp_path)
+        interval = DEFAULT_SETTINGS["consolidation"]["intervalHours"]
+        old = (datetime.now(timezone.utc) - timedelta(hours=interval + 1)).isoformat().replace("+00:00", "Z")
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', ?)", (old,))
+
+        min_mem = DEFAULT_SETTINGS["consolidation"]["minMemories"]
+        for i in range(min_mem - 2):
+            insert_data_point(conn, DataPointRow(type="memory", content=f"fact {i}", scope="global", salience=0.5))
+        conn.commit()
+
+        assert _should_consolidate(conn, DEFAULT_SETTINGS) is False
+        conn.close()
+
+    def test_first_run_detected_as_backfill(self, tmp_path):
+        """Missing last_consolidation metadata triggers backfill mode."""
+        from memory_utils import DEFAULT_SETTINGS
+        from storage import DataPointRow, insert_data_point
+        from synthesis_cron import _is_backfill, _should_consolidate
+
+        conn = _make_db_with_metadata(tmp_path)
+        min_mem = DEFAULT_SETTINGS["consolidation"]["minMemories"]
+        for i in range(min_mem + 5):
+            insert_data_point(conn, DataPointRow(type="memory", content=f"fact {i}", scope="global", salience=0.5))
+        conn.commit()
+
+        assert _should_consolidate(conn, DEFAULT_SETTINGS) is True
+        assert _is_backfill(conn) is True
+        conn.close()
+
+    def test_updates_timestamp_after_run(self, tmp_path):
+        """last_consolidation metadata is updated after successful run."""
+        from synthesis_cron import _update_consolidation_timestamp
+
+        conn = _make_db_with_metadata(tmp_path)
+        _update_consolidation_timestamp(conn)
+
+        row = conn.execute("SELECT value FROM metadata WHERE key = 'last_consolidation'").fetchone()
+        assert row is not None
+        assert row[0] is not None
+        ts = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+        assert (datetime.now(timezone.utc) - ts).total_seconds() < 5
+        conn.close()
+
+    def test_not_backfill_after_timestamp_set(self, tmp_path):
+        """After timestamp is set, _is_backfill returns False."""
+        from synthesis_cron import _is_backfill, _update_consolidation_timestamp
+
+        conn = _make_db_with_metadata(tmp_path)
+        _update_consolidation_timestamp(conn)
+        assert _is_backfill(conn) is False
+        conn.close()

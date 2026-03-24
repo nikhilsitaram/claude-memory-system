@@ -1,0 +1,123 @@
+[
+  {
+    "type": "design-review",
+    "scope": "design",
+    "iteration": 1,
+    "issues_found": 0,
+    "severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+    "actionable": 0,
+    "dismissed": 0,
+    "dismissals": [],
+    "fixed": 0,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T18:00:00Z"
+  },
+  {
+    "type": "plan-review",
+    "scope": "plan",
+    "iteration": 1,
+    "issues_found": 3,
+    "severity": {"critical": 0, "high": 0, "medium": 0, "low": 3},
+    "actionable": 3,
+    "dismissed": 0,
+    "dismissals": [],
+    "fixed": 3,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T18:30:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-a",
+    "iteration": 1,
+    "issues_found": 8,
+    "severity": {"critical": 0, "high": 1, "medium": 0, "low": 7},
+    "actionable": 1,
+    "dismissed": 7,
+    "dismissals": [
+      {"id": 2, "reason": "Duplicate SQL fallback is harmless, functionally correct"},
+      {"id": 3, "reason": "_model_ready/search_similar partial dead code — low risk cleanup later"},
+      {"id": 4, "reason": "last_consolidation placeholder by design, Phase C will wire"},
+      {"id": 5, "reason": "format_report() missing new fields — JSON output works, secondary"},
+      {"id": 6, "reason": ".venv symlink is worktree artifact, not actually committed to branch"},
+      {"id": 7, "reason": "raise DeprecationWarning unusual but internally consistent and tested"},
+      {"id": 8, "reason": "REINFORCEMENT_ETA location manageable in Phase B"}
+    ],
+    "fixed": 1,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T19:50:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-b",
+    "iteration": 1,
+    "issues_found": 5,
+    "severity": {"critical": 0, "high": 1, "medium": 0, "low": 4},
+    "actionable": 2,
+    "dismissed": 3,
+    "dismissals": [
+      {"id": 3, "reason": "MAX_TOKEN_BUDGET unused — Phase C will wire configurable settings"},
+      {"id": 4, "reason": "validity_context no interface — by design, future phase"},
+      {"id": 5, "reason": "Hardcoded prompt_recall constants — Phase C task C3 will address"}
+    ],
+    "fixed": 2,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T20:15:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-c",
+    "iteration": 1,
+    "issues_found": 3,
+    "severity": {"critical": 0, "high": 0, "medium": 0, "low": 3},
+    "actionable": 0,
+    "dismissed": 3,
+    "dismissals": [
+      {"id": 1, "reason": "METADATA_DDL duplicate in SCHEMA_V3_DDL and standalone -- intentional, SCHEMA_V3_DDL is declarative reference, standalone is executed"},
+      {"id": 2, "reason": "_parse_merge_response regex does not handle nested JSON -- acceptable since expected format has no nested objects"},
+      {"id": 3, "reason": "_get_excluded_pairs IN clause could be slow at scale -- not a concern at typical memory counts"}
+    ],
+    "fixed": 0,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T21:00:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-d",
+    "iteration": 1,
+    "issues_found": 0,
+    "severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+    "actionable": 0,
+    "dismissed": 0,
+    "dismissals": [],
+    "fixed": 0,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T21:10:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "final",
+    "iteration": 1,
+    "issues_found": 6,
+    "severity": {"critical": 0, "high": 0, "medium": 1, "low": 5},
+    "actionable": 0,
+    "dismissed": 6,
+    "dismissals": [
+      {"id": 1, "reason": "Entity lookup inconsistency is pre-existing in memory_server.py, not introduced by Phase 4"},
+      {"id": 2, "reason": "_sql_ranked_search missing epistemic columns only affects degraded fallback path"},
+      {"id": 3, "reason": "prompt_recall hardcoded constants match DEFAULT_SETTINGS; wiring deferred"},
+      {"id": 4, "reason": "run_post_processing deprecated decay call is legacy path, v3 pipeline is correct"},
+      {"id": 5, "reason": "CLAUDE.md updates are documentation task, not blocking"},
+      {"id": 6, "reason": "_parse_merge_response regex handles current LLM contract (flat JSON)"}
+    ],
+    "fixed": 0,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-23T21:30:00Z"
+  }
+]

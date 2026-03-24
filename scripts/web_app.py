@@ -218,7 +218,7 @@ def _get_data_point_detail(conn: sqlite3.Connection, dp_id: str) -> dict:
     edges = [
         {
             "id": e.id, "source": e.source, "target": e.target,
-            "type": e.type, "fact": e.fact, "reason": e.fact, "weight": e.weight,
+            "type": e.type, "fact": e.fact, "reason": e.reason, "weight": e.weight,
             "valid_from": e.valid_from, "valid_to": e.valid_to,
         }
         for e in edges_raw
@@ -374,18 +374,30 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/data_points":
             scope = qp("scope")
             dp_type = qp("type")
-            limit = int(qp("limit", "50"))
-            offset = int(qp("offset", "0"))
+            try:
+                limit = int(qp("limit", "50"))
+            except ValueError:
+                limit = 50
+            try:
+                offset = int(qp("offset", "0"))
+            except ValueError:
+                offset = 0
             self._send_json(_get_data_points(_db_conn, scope=scope, dp_type=dp_type, limit=limit, offset=offset))
 
         elif path == "/api/search":
             q = qp("q", "")
-            limit = int(qp("limit", "20"))
+            try:
+                limit = int(qp("limit", "20"))
+            except ValueError:
+                limit = 20
             self._send_json(_search(_db_conn, q, limit=limit))
 
         elif path == "/api/graph":
             scope = qp("scope")
-            limit = int(qp("limit", "200"))
+            try:
+                limit = int(qp("limit", "200"))
+            except ValueError:
+                limit = 200
             self._send_json(_get_graph(_db_conn, scope=scope, limit=limit))
 
         elif path.startswith("/api/data_point/"):

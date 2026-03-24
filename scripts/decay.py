@@ -145,6 +145,57 @@ def decay_salience(
     return max(0.0, min(1.0, current_salience * factor))
 
 
+def decay_data_points(conn, dry_run: bool = False) -> int:
+    """Apply tiered exponential decay to data_points salience.
+
+    Queries all active memories (type='memory', salience > threshold,
+    not consolidated, not user scope), classifies into hot/warm/cold
+    tiers, and applies decay formula.
+
+    Protected from decay:
+    - type != 'memory' (profile, entity, session_context)
+    - consolidated = 1 (pinned)
+    - scope = 'user' (permanent user preferences)
+
+    Args:
+        conn: SQLite connection with v3 schema.
+        dry_run: If True, count but do not write changes.
+
+    Returns:
+        Count of data_points whose salience was reduced.
+    """
+    rows = conn.execute(
+        "SELECT id, salience, access_count, COALESCE(last_accessed, created_at), certainty "
+        "FROM data_points WHERE type = 'memory' AND salience > ? "
+        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        (ARCHIVE_SALIENCE_THRESHOLD,)
+    ).fetchall()
+
+    decayed = 0
+    for dp_id, salience, access_count, last_accessed, certainty in rows:
+        if certainty is not None and certainty >= 4:
+            continue
+
+        dt = days_since(last_accessed)
+        _tier, lam = pick_tier(dt, access_count or 0, salience or 0)
+
+        if certainty is not None and certainty <= 2:
+            lam = lam * 2.0
+
+        new_sal = decay_salience(salience, dt, lam)
+        if new_sal != salience:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE data_points SET salience = ? WHERE id = ?",
+                    (max(0.0, min(1.0, new_sal)), dp_id)
+                )
+            decayed += 1
+
+    if not dry_run:
+        conn.commit()
+    return decayed
+
+
 def parse_learning_date(line: str) -> date | None:
     """Extract creation date from learning line."""
     match = DATE_PATTERN.search(line)
@@ -239,14 +290,13 @@ def decay_file(
     project_work_days: list[str] | None = None,
     project_decay_threshold: int | None = None,
 ) -> tuple[int, list[str]]:
-    """
-    Process a memory file, archiving old learnings.
+    """Process a memory file, archiving old learnings.
 
-    For project files, pass project_work_days and project_decay_threshold
-    to use working-day-based decay instead of calendar-day decay.
-
-    Returns (archived_count, archived_learnings).
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
     """
+    import warnings as _w
+    _w.warn("decay_file() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not filepath.exists():
         return 0, []
 
@@ -313,7 +363,13 @@ def decay_file(
 
 
 def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
-    """Append archived learnings to decay archive."""
+    """Append archived learnings to decay archive.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("append_to_archive() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not learnings:
         return
 
@@ -359,7 +415,13 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
 
 
 def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
-    """Remove archive sections older than retention_days."""
+    """Remove archive sections older than retention_days.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("purge_old_archives() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     archive_file = get_memory_dir() / ".decay-archive.md"
 
     if not archive_file.exists():
@@ -399,7 +461,13 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
 
 
 def run(dry_run: bool = False) -> int:
-    """Run decay on all memory files. Returns 0 on success."""
+    """Run decay on all memory files. Returns 0 on success.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("run() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     settings = load_settings()
     age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
     project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)

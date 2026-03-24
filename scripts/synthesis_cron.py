@@ -418,7 +418,6 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
             print(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
             failed = True
-            Path(tmp_path).unlink(missing_ok=True)
             continue
         finally:
             Path(tmp_path).unlink(missing_ok=True)
@@ -458,6 +457,89 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
             print(f"No MEMORY_OPS in v3 synthesis output for {date_label}")
 
     return not failed
+
+
+def _run_decay_v3(conn) -> None:
+    """Run tiered decay on data_points. Cheap and idempotent -- runs every invocation."""
+    try:
+        from decay import decay_data_points
+        count = decay_data_points(conn)
+        if count > 0:
+            print(f"Decay: adjusted salience for {count} data_points", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Decay failed: {e}", file=sys.stderr)
+
+
+def _should_consolidate(conn, settings) -> bool:
+    """Check if consolidation should run based on interval and memory count."""
+    import sqlite3
+
+    consol = settings.get("consolidation", {})
+    interval_hours = consol.get("intervalHours", 24)
+    min_memories = consol.get("minMemories", 5)
+
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+
+    if row and row[0]:
+        try:
+            last = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+            elapsed = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+            if elapsed < interval_hours:
+                return False
+        except (ValueError, AttributeError):
+            pass
+
+    count_row = conn.execute(
+        "SELECT COUNT(*) FROM data_points WHERE type = 'memory' AND salience > 0.1 "
+        "AND (source_type IS NULL OR source_type != 'consolidation')"
+    ).fetchone()
+    if not count_row or count_row[0] < min_memories:
+        return False
+
+    return True
+
+
+def _is_backfill(conn) -> bool:
+    """Check if this is the first-ever consolidation run."""
+    import sqlite3
+
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return True
+    return row is None or row[0] is None
+
+
+def _update_consolidation_timestamp(conn):
+    """Update the last_consolidation metadata key."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_consolidation', ?)",
+        (now,)
+    )
+    conn.commit()
+
+
+def _run_consolidation_post_step(conn, settings):
+    """Run consolidation as a post-step after synthesis, if gate conditions met."""
+    if not _should_consolidate(conn, settings):
+        return
+
+    try:
+        from consolidation import run_consolidation
+        backfill = _is_backfill(conn)
+        stats = run_consolidation(conn, settings=settings, backfill=backfill)
+        print(f"Consolidation: merged={stats['clusters_merged']}, skipped={stats['clusters_skipped']}", file=sys.stderr)
+        _update_consolidation_timestamp(conn)
+    except Exception as e:
+        print(f"Warning: Consolidation failed: {e}", file=sys.stderr)
 
 
 def run_synthesis(force: bool = False) -> int:
@@ -522,6 +604,10 @@ def run_synthesis(force: bool = False) -> int:
     try:
         if version >= 3 and conn is not None:
             success = _run_synthesis_v3(conn, model, prompt_files)
+            _run_decay_v3(conn)
+            if success:
+                settings = load_settings()
+                _run_consolidation_post_step(conn, settings)
         else:
             if conn:
                 close_db(conn)

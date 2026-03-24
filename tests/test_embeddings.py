@@ -24,13 +24,10 @@ from embeddings import (
     VEC_SIM_WEIGHT,
     ScoredChunk,
     ScoredDataPoint,
-    delete_vec_chunks,
     delete_vec_data,
     embed_batch,
     embed_text,
     ensure_vec_table,
-    index_chunks,
-    index_chunks_by_source,
     index_data_points,
     reindex_all,
     reindex_changed_files,
@@ -201,10 +198,6 @@ class TestGracefulDegradation:
             results = search_similar(db, "test query")
             assert results == []
 
-    def test_index_chunks_no_fastembed(self, db):
-        with mock.patch("embeddings.HAS_FASTEMBED", False):
-            index_chunks(db, ["id1", "id2"])
-
     def test_reindex_all_no_fastembed(self, db):
         with mock.patch("embeddings.HAS_FASTEMBED", False):
             reindex_all(db)
@@ -213,30 +206,6 @@ class TestGracefulDegradation:
         with mock.patch("embeddings.HAS_SQLITE_VEC", False):
             results = search_similar(db, "test query")
             assert results == []
-
-
-class TestIndexChunks:
-    def test_index_chunks_inserts_vectors(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == len(sample_chunks)
-
-    def test_index_chunks_skips_existing_same_hash(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks[:2])
-        index_chunks(db_with_vec, sample_chunks[:2])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_index_chunks_by_source(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks_by_source(db_with_vec, ["global-long-term-memory.md"])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_delete_vec_chunks(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        delete_vec_chunks(db_with_vec, sample_chunks[:2])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 3
 
 
 class TestScoring:
@@ -283,48 +252,6 @@ class TestScoring:
         score = score_memory(0.3, chunk)
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
-
-
-class TestSearchSimilar:
-    def test_returns_scored_chunks(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "pytest fixtures for testing")
-        assert len(results) > 0
-        assert all(isinstance(r, ScoredChunk) for r in results)
-        assert all(r.score >= 0 for r in results)
-
-    def test_scope_filtering(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "testing", scope="global")
-        assert all(r.data_point.scope == "global" for r in results)
-
-    def test_respects_top_k(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        results = search_similar(db_with_vec, "testing", top_k=2)
-        assert len(results) <= 2
-
-    def test_returns_empty_when_no_vectors(self, db_with_vec, mock_embedder):
-        results = search_similar(db_with_vec, "anything")
-        assert results == []
-
-
-class TestReindex:
-    def test_reindex_all(self, db_with_vec, mock_embedder, sample_chunks):
-        reindex_all(db_with_vec)
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == len(sample_chunks)
-
-    def test_reindex_changed_files(self, db_with_vec, mock_embedder, sample_chunks):
-        reindex_changed_files(db_with_vec, ["global-long-term-memory.md"])
-        count = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count == 2
-
-    def test_reindex_changed_files_replaces_old_vectors(self, db_with_vec, mock_embedder, sample_chunks):
-        index_chunks(db_with_vec, sample_chunks)
-        count_before = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        reindex_changed_files(db_with_vec, ["global-long-term-memory.md"])
-        count_after = db_with_vec.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-        assert count_after == count_before
 
 
 @pytest.mark.skipif(not HAS_FASTEMBED, reason="fastembed not installed")
@@ -450,21 +377,6 @@ class TestBackwardCompatAliases:
         """ScoredChunk must be the same class as ScoredDataPoint."""
         assert ScoredChunk is ScoredDataPoint
 
-    def test_index_chunks_is_importable(self):
-        """index_chunks can still be imported (deprecated wrapper)."""
-        from embeddings import index_chunks
-        assert callable(index_chunks)
-
-    def test_delete_vec_chunks_is_importable(self):
-        """delete_vec_chunks can still be imported (deprecated wrapper)."""
-        from embeddings import delete_vec_chunks
-        assert callable(delete_vec_chunks)
-
-    def test_index_chunks_by_source_is_importable(self):
-        """index_chunks_by_source can still be imported (deprecated wrapper)."""
-        from embeddings import index_chunks_by_source
-        assert callable(index_chunks_by_source)
-
     def test_score_memory_with_data_point_row(self):
         """score_memory accepts DataPointRow (duck-typed alongside ChunkRow)."""
         dp = DataPointRow(
@@ -477,3 +389,124 @@ class TestBackwardCompatAliases:
         score = score_memory(0.0, dp)
         assert isinstance(score, float)
         assert score > 0
+
+
+# =============================================================================
+# A5: Hybrid Search (RRF) Tests
+# =============================================================================
+
+
+class TestHybridSearch:
+    """Tests for RRF hybrid search combining FTS5 + vector KNN."""
+
+    def _make_db_with_fts(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db, insert_data_point, DataPointRow, fts_insert
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        dp1 = DataPointRow(type="memory", content="Redis cache requires explicit TTL", scope="global", salience=0.8)
+        dp2 = DataPointRow(type="memory", content="SQLite WAL mode for concurrency", scope="global", salience=0.7)
+        dp3 = DataPointRow(type="memory", content="Always use pytest fixtures", scope="global", salience=0.6)
+        id1 = insert_data_point(conn, dp1)
+        id2 = insert_data_point(conn, dp2)
+        id3 = insert_data_point(conn, dp3)
+        fts_insert(conn, id1, dp1.content, dp1.scope)
+        fts_insert(conn, id2, dp2.content, dp2.scope)
+        fts_insert(conn, id3, dp3.content, dp3.scope)
+        conn.commit()
+        return conn, [id1, id2, id3]
+
+    def test_fts_only_fallback(self, tmp_path):
+        """When vector search is unavailable, hybrid falls back to FTS5 BM25."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False), \
+             patch("embeddings.HAS_SQLITE_VEC", False):
+            results = search_hybrid(conn, "Redis cache", scope=None, top_k=5)
+        assert len(results) >= 1
+        assert results[0].data_point.id == ids[0]
+        conn.close()
+
+    def test_sql_fallback_when_no_fts_no_vector(self, tmp_path):
+        """When both FTS5 and vector are unavailable, falls back to SQL ranked."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False), \
+             patch("embeddings.HAS_SQLITE_VEC", False), \
+             patch("embeddings._has_table", return_value=False):
+            results = search_hybrid(conn, "cache", scope=None, top_k=5)
+        assert len(results) >= 1
+        conn.close()
+
+    def test_results_ordered_by_score(self, tmp_path):
+        """Results are sorted by composite score, highest first."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "Redis", scope=None, top_k=5)
+        if len(results) >= 2:
+            assert results[0].score >= results[1].score
+        conn.close()
+
+    def test_scope_filtering(self, tmp_path):
+        """Scope parameter limits results to matching scope."""
+        from unittest.mock import patch
+        from storage import insert_data_point, DataPointRow, fts_insert
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        dp = DataPointRow(type="memory", content="Redis project-specific config", scope="my-proj", salience=0.9)
+        dp_id = insert_data_point(conn, dp)
+        fts_insert(conn, dp_id, dp.content, dp.scope)
+        conn.commit()
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "Redis", scope="my-proj", top_k=5)
+        assert all(r.data_point.scope == "my-proj" for r in results)
+        conn.close()
+
+    def test_top_k_limits_results(self, tmp_path):
+        """top_k parameter limits the number of results returned."""
+        from unittest.mock import patch
+        from embeddings import search_hybrid
+        conn, ids = self._make_db_with_fts(tmp_path)
+        with patch("embeddings.HAS_FASTEMBED", False):
+            results = search_hybrid(conn, "cache SQLite pytest", scope=None, top_k=1)
+        assert len(results) <= 1
+        conn.close()
+
+
+class TestCertaintyScoring:
+    """Tests for certainty modulation in score_memory."""
+
+    def test_certainty_modulates_score(self):
+        from embeddings import score_memory
+        from unittest.mock import MagicMock
+
+        high_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=5)
+        low_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=1)
+        no_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=None)
+
+        high_score = score_memory(0.5, high_cert_dp)
+        low_score = score_memory(0.5, low_cert_dp)
+        neutral_score = score_memory(0.5, no_cert_dp)
+
+        assert high_score > low_score, "Higher certainty should produce higher score"
+        assert neutral_score > 0, "None certainty should not crash and produce a positive score"
+
+    def test_certainty_none_is_neutral(self):
+        """certainty=None should not modify salience (backward compatible)."""
+        from embeddings import score_memory
+        from unittest.mock import MagicMock
+
+        dp_none = MagicMock(salience=0.8, last_accessed=None, created_at=None, certainty=None)
+        dp_no_attr = MagicMock(salience=0.8, last_accessed=None, created_at=None, spec=[])
+        del dp_no_attr.certainty
+
+        score_none = score_memory(0.5, dp_none)
+        score_no_attr = score_memory(0.5, dp_no_attr)
+
+        assert score_none == score_no_attr, "None and missing certainty should produce same score"
