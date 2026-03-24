@@ -240,6 +240,7 @@ __all__ = [
     "_archive_markdown_files",
     "FTS5_DDL",
     "_ensure_fts_table",
+    "_backfill_fts",
     "fts_insert",
     "fts_delete",
     "fts_search",
@@ -589,8 +590,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_data USING fts5(
 
 
 def _ensure_fts_table(conn: sqlite3.Connection) -> None:
-    """Create FTS5 table and backfill from data_points if needed."""
+    """Create FTS5 table (backfill is handled by _migrate_schema)."""
     conn.executescript(FTS5_DDL)
+    conn.commit()
+
+
+def _backfill_fts(conn: sqlite3.Connection) -> None:
+    """One-time backfill of existing data_points into FTS5 index.
+
+    Called from _migrate_schema when schema version advances. Uses
+    NOT IN subquery to avoid duplicates.
+    """
     conn.execute("""
         INSERT INTO fts_data(content, data_point_id, scope)
         SELECT dp.content, dp.id, dp.scope
@@ -620,27 +630,28 @@ def fts_search(conn: sqlite3.Connection, query: str, scope: str | None, limit: i
     """Search FTS5 index with BM25 ranking.
 
     Returns list of dicts with 'data_point_id', 'scope', 'rank' keys,
-    ordered by BM25 relevance (best first).
+    ordered by BM25 relevance (best first, bm25 returns negative values
+    where lower/more-negative = better match).
     """
     if not query or not query.strip():
         return []
 
-    safe_query = query.replace('"', '""')
-    terms = safe_query.split()
+    sanitized = re.sub(r'["\(\)\^\*\-]', ' ', query)
+    terms = sanitized.split()
     fts_query = " ".join(f'"{t}"' for t in terms if t.strip())
     if not fts_query:
         return []
 
     if scope:
         rows = conn.execute(
-            "SELECT data_point_id, scope, rank FROM fts_data "
+            "SELECT data_point_id, scope, bm25(fts_data) AS rank FROM fts_data "
             "WHERE fts_data MATCH ? AND scope = ? "
             "ORDER BY rank LIMIT ?",
             (fts_query, scope, limit)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT data_point_id, scope, rank FROM fts_data "
+            "SELECT data_point_id, scope, bm25(fts_data) AS rank FROM fts_data "
             "WHERE fts_data MATCH ? ORDER BY rank LIMIT ?",
             (fts_query, limit)
         ).fetchall()
@@ -667,6 +678,11 @@ def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
         _migrate_salience_data(conn)
     if current_version < 3:
         _migrate_v2_to_v3(conn)
+        try:
+            _ensure_fts_table(conn)
+            _backfill_fts(conn)
+        except sqlite3.OperationalError:
+            pass
 
 
 def ensure_db() -> sqlite3.Connection:
@@ -684,7 +700,10 @@ def ensure_db() -> sqlite3.Connection:
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
     _ensure_epistemic_columns(conn)
-    _ensure_fts_table(conn)
+    try:
+        _ensure_fts_table(conn)
+    except sqlite3.OperationalError as e:
+        print(f"Warning: FTS5 not available, full-text search disabled: {e}", file=sys.stderr)
     return conn
 
 

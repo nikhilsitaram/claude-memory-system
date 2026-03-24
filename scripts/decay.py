@@ -165,7 +165,7 @@ def decay_data_points(conn, dry_run: bool = False) -> int:
         Count of data_points whose salience was reduced.
     """
     rows = conn.execute(
-        "SELECT id, salience, access_count, last_accessed, certainty "
+        "SELECT id, salience, access_count, COALESCE(last_accessed, created_at), certainty "
         "FROM data_points WHERE type = 'memory' AND salience > ? "
         "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
         (ARCHIVE_SALIENCE_THRESHOLD,)

@@ -2488,7 +2488,7 @@ class TestFTS5:
     def test_fts_migration_backfill(self, tmp_path):
         """Migration populates fts_data from existing data_points."""
         from unittest.mock import patch
-        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table
+        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table, _backfill_fts
 
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
@@ -2499,6 +2499,7 @@ class TestFTS5:
         conn.commit()
 
         _ensure_fts_table(conn)
+        _backfill_fts(conn)
 
         results = fts_search(conn, "migration backfill", scope=None, limit=10)
         assert len(results) >= 1
