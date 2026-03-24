@@ -250,3 +250,51 @@ class TestExtendedHealthReport:
         report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, synthesis_errors_7d=5)
         alerts = health_alerts(report)
         assert any("synthesis errors" in a.lower() for a in alerts)
+
+    def test_last_consolidation_populated(self, tmp_path):
+        """last_consolidation is read from metadata table."""
+        from storage import insert_data_point, DataPointRow
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', '2026-03-20T10:00:00Z')")
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.last_consolidation == "2026-03-20T10:00:00Z"
+        conn.close()
+
+    def test_newest_edge_days_populated(self, tmp_path):
+        """newest_edge_days is calculated from the most recent active edge."""
+        from datetime import datetime, timedelta, timezone
+        from storage import insert_data_point, insert_edge, DataPointRow, EdgeRow
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
+        m_id = insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        insert_edge(conn, EdgeRow(source=m_id, target=e_id, type="mentions", created_at=old_ts))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.newest_edge_days >= 9
+        conn.close()
+
+    def test_edge_staleness_alert(self):
+        """Edge staleness alert fires when newest_edge_days > 7."""
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, active_edges=5, newest_edge_days=14)
+        alerts = health_alerts(report)
+        assert any("no new edges" in a.lower() for a in alerts)
+
+    def test_no_edge_staleness_alert_when_recent(self):
+        """No alert when edges are recent."""
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, active_edges=5, newest_edge_days=3)
+        alerts = health_alerts(report)
+        assert not any("no new edges" in a.lower() for a in alerts)
+
+    def test_synthesis_staleness_alert(self):
+        """Synthesis staleness alert fires when last_synthesis > 7 days old."""
+        from datetime import datetime, timedelta, timezone
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, last_synthesis=old_ts)
+        alerts = health_alerts(report)
+        assert any("no synthesis" in a.lower() for a in alerts)

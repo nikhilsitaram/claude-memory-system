@@ -2611,3 +2611,58 @@ class TestMetadataTable:
         row = conn.execute("SELECT value FROM metadata WHERE key = 'k'").fetchone()
         assert row[0] == "v2"
         conn.close()
+
+
+class TestGetOrCreateEntity:
+    """Tests for the unified get_or_create_entity function."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_creates_new_entity(self, tmp_path):
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        entity_id = get_or_create_entity(conn, "Redis", "global")
+        assert entity_id is not None
+        row = conn.execute("SELECT type, name FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] == "entity"
+        assert row[1] == "Redis"
+        conn.close()
+
+    def test_returns_existing_entity(self, tmp_path):
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        id1 = get_or_create_entity(conn, "Redis", "global")
+        id2 = get_or_create_entity(conn, "Redis", "global")
+        assert id1 == id2
+        conn.close()
+
+    def test_dedup_across_scopes(self, tmp_path):
+        """Same entity name resolves to same data_point regardless of scope."""
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        id1 = get_or_create_entity(conn, "JWT", "project-a")
+        id2 = get_or_create_entity(conn, "JWT", "project-b")
+        assert id1 == id2
+        conn.close()
+
+    def test_different_names_different_entities(self, tmp_path):
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        id1 = get_or_create_entity(conn, "Redis", "global")
+        id2 = get_or_create_entity(conn, "PostgreSQL", "global")
+        assert id1 != id2
+        conn.close()
+
+    def test_content_hash_set_correctly(self, tmp_path):
+        from storage import get_or_create_entity, _content_hash
+        conn = self._make_db(tmp_path)
+        entity_id = get_or_create_entity(conn, "pytest", "global")
+        row = conn.execute("SELECT content_hash FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] == _content_hash("entity:pytest")
+        conn.close()

@@ -923,3 +923,66 @@ class TestCertaintyInWriteMemory:
         )
         write_tool = next(t for t in tools if t.name == "write_memory")
         assert "certainty" in write_tool.inputSchema["properties"]
+
+
+# ===========================================================================
+# Conn-is-None guard tests
+# ===========================================================================
+
+
+class TestConnNoneGuards:
+    """All tool handlers return clear error when DB not initialized."""
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_search_returns_error_when_no_db(self):
+        import memory_server
+        memory_server._db_conn = None
+        results = self._run(memory_server._search_memories("test query"))
+        assert isinstance(results, list)
+        assert results[0].get("error") is not None
+
+    def test_write_returns_error_when_no_db(self):
+        import memory_server
+        memory_server._db_conn = None
+        result = self._run(memory_server._write_memory("test fact", scope="test"))
+        assert result.get("error") is not None
+
+    def test_delete_returns_error_when_no_db(self):
+        import memory_server
+        memory_server._db_conn = None
+        result = self._run(memory_server._delete_memory("nonexistent-id"))
+        assert result.get("error") is not None
+
+    def test_traverse_returns_error_when_no_db(self):
+        import memory_server
+        memory_server._db_conn = None
+        result = self._run(memory_server._traverse_graph("test-entity"))
+        assert result.get("error") is not None
+
+
+# ===========================================================================
+# Entity dedup consistency across entry points
+# ===========================================================================
+
+
+class TestGetOrCreateEntityUnified:
+    """Verify unified entity dedup via storage.get_or_create_entity."""
+
+    def test_same_entity_from_storage_and_server(self, db):
+        """storage.get_or_create_entity and memory_server._get_or_create_entity resolve to same ID."""
+        import memory_server
+        from storage import get_or_create_entity
+
+        id_from_storage = get_or_create_entity(db, "JWT", "global")
+        id_from_server = memory_server._get_or_create_entity(db, "JWT", "global")
+        assert id_from_storage == id_from_server
+
+    def test_cross_scope_dedup(self, db):
+        """Same entity name in different scopes resolves to one data_point (content_hash based)."""
+        from storage import get_or_create_entity
+
+        id1 = get_or_create_entity(db, "Redis", "project-a")
+        id2 = get_or_create_entity(db, "Redis", "project-b")
+        assert id1 == id2

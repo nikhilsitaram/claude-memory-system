@@ -131,3 +131,58 @@ class TestStaleStateCleanup:
         cleanup_stale_state_files(tmp_path)
         assert not stale.exists()
         assert fresh.exists()
+
+
+class TestMain:
+    """Tests for the main() hook entry point."""
+
+    def test_short_prompt_produces_no_output(self, capsys):
+        """Short prompts that fail relevance gate produce no output."""
+        from prompt_recall import main
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = json.dumps({"prompt": "ok", "sessionId": "test-1"})
+            main()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_relevant_prompt_searches_and_injects(self, tmp_path, capsys):
+        """A relevant prompt triggers search and injects matching memories."""
+        from prompt_recall import main
+
+        mock_dp = MagicMock()
+        mock_dp.id = "dp-test-1"
+        mock_dp.content = "Redis requires explicit TTL settings"
+        mock_dp.scope = "global"
+        mock_dp.salience = 0.8
+        mock_dp.certainty = 4
+        mock_scored = MagicMock()
+        mock_scored.data_point = mock_dp
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_scored]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-session",
+            })
+            main()
+
+        captured = capsys.readouterr()
+        assert "[memory]" in captured.out
+        assert "Redis" in captured.out
+
+    def test_import_error_produces_no_output(self, capsys):
+        """When storage/embeddings are not importable, main() silently returns."""
+        from prompt_recall import main
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-2",
+            })
+            with patch.dict("sys.modules", {"embeddings": None}):
+                main()
+        captured = capsys.readouterr()
+        assert captured.out == ""

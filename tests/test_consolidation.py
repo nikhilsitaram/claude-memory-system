@@ -341,6 +341,46 @@ class TestRunConsolidation:
         assert call_kwargs[1]["max_clusters"] == DEFAULT_SETTINGS["consolidation"]["backfillMaxClusters"]
         conn.close()
 
+    def test_lock_prevents_concurrent_runs(self, tmp_path):
+        """run_consolidation returns early with skipped_reason when lock is held."""
+        import os
+        from consolidation import run_consolidation
+        conn = self._make_db(tmp_path)
+
+        lock_dir = tmp_path / ".consolidation-lock"
+        lock_dir.mkdir()
+        (lock_dir / "pid").write_text(str(os.getpid()))
+
+        with patch("memory_utils.get_memory_dir", return_value=tmp_path):
+            stats = run_consolidation(conn, settings={"consolidation": {}})
+
+        assert stats.get("skipped_reason") == "lock"
+        assert stats["clusters_merged"] == 0
+        (lock_dir / "pid").unlink()
+        lock_dir.rmdir()
+        conn.close()
+
+    def test_empty_fact_skipped(self, tmp_path):
+        """Clusters where LLM returns empty fact are skipped."""
+        from consolidation import run_consolidation
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(type="memory", content="a", scope="global", salience=0.5))
+        id2 = insert_data_point(conn, DataPointRow(type="memory", content="b", scope="global", salience=0.5))
+        conn.commit()
+
+        mock_merge = MagicMock(return_value={
+            "decision": "MERGE", "fact": "  ", "entities": [], "reason": "dup"
+        })
+
+        with patch("consolidation.find_clusters", return_value=[{"members": [id1, id2]}]), \
+             patch("consolidation.merge_cluster", mock_merge):
+            stats = run_consolidation(conn, settings={"consolidation": {}})
+
+        assert stats["clusters_skipped"] == 1
+        assert stats["clusters_merged"] == 0
+        conn.close()
+
 
 class TestParseResponse:
     """Tests for LLM response parsing."""
