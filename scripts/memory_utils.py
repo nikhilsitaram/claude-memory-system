@@ -607,7 +607,7 @@ def get_global_working_days(n: int) -> list[str]:
             continue
         for jsonl_file in project_folder.glob("*.jsonl"):
             mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime, tz=timezone.utc)
-            dates.add(mtime.strftime("%Y-%m-%d"))
+            dates.add(utc_to_local_datestr(mtime))
 
     result = sorted(dates, reverse=True)[:n]
     _working_days_cache[cache_key] = result
@@ -668,7 +668,7 @@ def get_project_working_days(project_scope: str, n: int) -> list[str]:
     for folder in matching_folders:
         for jsonl_file in folder.glob("*.jsonl"):
             mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime, tz=timezone.utc)
-            dates.add(mtime.strftime("%Y-%m-%d"))
+            dates.add(utc_to_local_datestr(mtime))
 
     result = sorted(dates, reverse=True)[:n]
     _working_days_cache[cache_key] = result

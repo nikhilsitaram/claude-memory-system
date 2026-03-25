@@ -772,16 +772,16 @@ def _load_from_db(project_scope: str) -> str | None:
 
             working_days = get_project_working_days(project_scope, 5)
             if working_days:
-                seven_days_ago = working_days[-1] + "T00:00:00Z"
+                continuity_cutoff = working_days[-1] + "T00:00:00Z"
             else:
-                seven_days_ago = (
+                continuity_cutoff = (
                     datetime.now(timezone.utc) - timedelta(days=7)
                 ).isoformat().replace("+00:00", "Z")
             context_row = conn.execute(
                 "SELECT id, content, properties FROM data_points "
                 "WHERE type='session_context' AND scope=? AND created_at > ? "
                 "ORDER BY created_at DESC LIMIT 1",
-                (project_scope, seven_days_ago),
+                (project_scope, continuity_cutoff),
             ).fetchone()
             if context_row:
                 ctx_id, ctx_content, ctx_props = context_row

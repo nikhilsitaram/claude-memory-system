@@ -634,7 +634,7 @@ def _group_sessions_by_project(sessions):
             if resolved:
                 project_name = resolved
         elif session.project_hash:
-            resolved = resolve_project_path_to_name(session.project_hash)
+            resolved = resolve_project_path_to_name(None, project_hash=session.project_hash)
             if resolved:
                 project_name = resolved
         groups.setdefault(project_name, []).append(session)
@@ -696,6 +696,11 @@ def run_backfill(days=None, import_from=None) -> int:
               f"({result.skipped} skipped as duplicates)")
         for m in result.mismatches:
             print(f"  Mismatch: {m}")
+
+        # Rebuild index so imported sessions are discoverable
+        from memory_utils import rebuild_projects_index_quiet
+
+        rebuild_projects_index_quiet()
 
     # Step 2: Discover sessions
     max_age = days if days is not None else None
