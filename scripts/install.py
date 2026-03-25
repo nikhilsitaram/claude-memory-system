@@ -161,6 +161,7 @@ def link_scripts(script_dir: Path) -> None:
         "memory_server.py",  # MCP server - search/write/delete/traverse tools
         "prompt_recall.py",  # UserPromptSubmit hook - proactive memory injection
         "consolidation.py",  # Memory consolidation and deduplication
+        "session_import.py",  # Cross-machine session import utility
     ]
 
     for script_name in scripts_to_link:

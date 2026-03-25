@@ -813,5 +813,33 @@ class TestResolveProjectNameWorktreePrefix:
         assert result is None
 
 
+# =============================================================================
+# Working-Day Forwarding Tests (B1)
+# =============================================================================
+
+
+class TestGetRecentDaysWorkingDays:
+    """Test that get_recent_days forwards max_age_days."""
+
+    def test_forwards_max_age_days_int(self):
+        """max_age_days=30 forwarded to list_recent_sessions."""
+        from transcript_ops import get_recent_days
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[]) as mock_lrs:
+            get_recent_days(max_age_days=30)
+        mock_lrs.assert_called_once()
+        assert mock_lrs.call_args[1]["max_age_days"] == 30
+
+    def test_default_uses_working_day_sentinel(self):
+        """Default max_age_days=None maps to _USE_WORKING_DAYS sentinel."""
+        from indexing import _USE_WORKING_DAYS
+        from transcript_ops import get_recent_days
+
+        with mock.patch("transcript_ops.list_recent_sessions", return_value=[]) as mock_lrs:
+            get_recent_days()
+        mock_lrs.assert_called_once()
+        assert mock_lrs.call_args[1]["max_age_days"] is _USE_WORKING_DAYS
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

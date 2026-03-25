@@ -768,9 +768,15 @@ def _load_from_db(project_scope: str) -> str | None:
 
         # Tier 2: Session continuity (E2)
         if project_scope:
-            seven_days_ago = (
-                datetime.now(timezone.utc) - timedelta(days=7)
-            ).isoformat().replace("+00:00", "Z")
+            from memory_utils import get_project_working_days
+
+            working_days = get_project_working_days(project_scope, 5)
+            if working_days:
+                seven_days_ago = working_days[-1] + "T00:00:00Z"
+            else:
+                seven_days_ago = (
+                    datetime.now(timezone.utc) - timedelta(days=7)
+                ).isoformat().replace("+00:00", "Z")
             context_row = conn.execute(
                 "SELECT id, content, properties FROM data_points "
                 "WHERE type='session_context' AND scope=? AND created_at > ? "
@@ -833,10 +839,16 @@ def _load_from_db(project_scope: str) -> str | None:
                 sections.append(f"## Global Knowledge\n{mem_text}")
             seen_ids.update(r[0] for r in new_rows)
 
-        # Tier 5: Recent activity (last 3 days)
-        three_days_ago = (
-            datetime.now(timezone.utc) - timedelta(days=3)
-        ).isoformat().replace("+00:00", "Z")
+        # Tier 5: Recent activity (last 3 working days)
+        from memory_utils import get_global_working_days
+
+        global_working = get_global_working_days(3)
+        if global_working:
+            three_days_ago = global_working[-1] + "T00:00:00Z"
+        else:
+            three_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=3)
+            ).isoformat().replace("+00:00", "Z")
         scope_param = project_scope or "global"
         rows = conn.execute(
             "SELECT id, content FROM data_points "
