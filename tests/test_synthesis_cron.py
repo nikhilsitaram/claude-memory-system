@@ -1159,3 +1159,94 @@ class TestConsolidationGate:
         _update_consolidation_timestamp(conn)
         assert _is_backfill(conn) is False
         conn.close()
+
+
+# =============================================================================
+# Backfill Tests (C1)
+# =============================================================================
+
+
+class TestRunBackfill:
+    """Tests for the backfill command."""
+
+    def test_groups_sessions_by_project(self):
+        """Sessions are grouped by resolved project name."""
+        from helpers import make_session_info
+        from synthesis_cron import _group_sessions_by_project
+
+        sessions = [
+            make_session_info("s1", project_path="/home/user/projectA"),
+            make_session_info("s2", project_path="/home/user/projectA"),
+            make_session_info("s3", project_path="/home/user/projectB"),
+        ]
+        with patch("memory_utils.resolve_project_path_to_name",
+                    side_effect=["projA", "projA", "projB"]):
+            groups = _group_sessions_by_project(sessions)
+
+        assert "projA" in groups
+        assert len(groups["projA"]) == 2
+        assert "projB" in groups
+        assert len(groups["projB"]) == 1
+
+    def test_model_selection_per_project(self):
+        """Sessions within project working days get sonnet, older get haiku."""
+        from helpers import make_session_info
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import run_backfill
+
+        sessions = [make_session_info(f"s{i}") for i in range(3)]
+        backfill_wd = DEFAULT_SETTINGS["synthesis"]["backfill"]["recentWorkingDays"]
+
+        with patch("indexing.list_recent_sessions", return_value=sessions), \
+             patch("synthesis_cron._group_sessions_by_project",
+                    return_value={"proj": sessions}), \
+             patch("memory_utils.get_project_working_days",
+                    return_value=["2026-03-25"]) as mock_pwd, \
+             patch("indexing.get_session_date",
+                    side_effect=["2026-03-25", "2026-03-20", "2026-03-10"]), \
+             patch("memory_utils.load_settings", return_value=DEFAULT_SETTINGS), \
+             patch("builtins.input", return_value="y"), \
+             patch("storage.ensure_db") as mock_db, \
+             patch("memory_utils.load_synthesis_state", return_value={"sessions": {}}), \
+             patch("transcript_ops.parse_jsonl_file_from_line", return_value=([], 0)), \
+             patch("memory_utils.update_synthesis_state"), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_db.return_value = MagicMock()
+            run_backfill()
+
+        mock_pwd.assert_called_once_with("proj", backfill_wd)
+
+    def test_days_filter_passed_to_list_recent(self):
+        """--days N passes max_age_days=N to list_recent_sessions."""
+        from synthesis_cron import run_backfill
+
+        with patch("indexing.list_recent_sessions", return_value=[]) as mock_lrs, \
+             patch("memory_utils.load_settings"):
+            run_backfill(days=10)
+
+        mock_lrs.assert_called_once_with(max_age_days=10)
+
+    def test_import_from_calls_import_sessions(self):
+        """--import-from calls import_sessions before discovery."""
+        from session_import import ImportResult
+        from synthesis_cron import run_backfill
+
+        mock_result = ImportResult(copied=5, skipped=2, projects=3)
+        with patch("session_import.import_sessions", return_value=mock_result) as mock_imp, \
+             patch("indexing.list_recent_sessions", return_value=[]), \
+             patch("memory_utils.load_settings"):
+            run_backfill(import_from="/backup/projects")
+
+        mock_imp.assert_called_once_with("/backup/projects")
+
+    def test_cli_backfill_flag(self):
+        """CLI --backfill routes to run_backfill."""
+        from synthesis_cron import main
+
+        with patch("sys.argv", ["synthesis_cron.py", "--backfill"]), \
+             patch("synthesis_cron.run_backfill", return_value=0) as mock_bf:
+            result = main()
+
+        mock_bf.assert_called_once_with(days=None, import_from=None)
+        assert result == 0

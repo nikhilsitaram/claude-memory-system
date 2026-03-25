@@ -33,6 +33,26 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
 
 ---
 
+## Backfill Mode
+
+When the user invokes `/synthesize --backfill`, `/synthesize --backfill --days 30`, or `/synthesize --backfill --import-from /path`:
+
+1. Build the command: `python3 $HOME/.claude/scripts/synthesis_cron.py --backfill [--days N] [--import-from <path>]`
+2. Run via Bash tool (NOT as a subagent — backfill needs interactive confirmation)
+3. The script prints a scope report showing projects, session counts, and model breakdown
+4. The script asks "Proceed? [y/N]" — relay this to the user and pass their response
+5. Stream progress output to the user as it runs
+6. Report final results
+
+**Examples:**
+- `/synthesize --backfill` → `python3 $HOME/.claude/scripts/synthesis_cron.py --backfill`
+- `/synthesize --backfill --days 30` → `python3 $HOME/.claude/scripts/synthesis_cron.py --backfill --days 30`
+- `/synthesize --backfill --import-from /Volumes/Backup/claude/projects` → `python3 $HOME/.claude/scripts/synthesis_cron.py --backfill --import-from /Volumes/Backup/claude/projects`
+
+**Important:** Backfill can take several minutes for large session histories. Set a generous timeout (600000ms) on the Bash tool call.
+
+---
+
 ## Reference: Tag Types
 
 **Actions:** `implement`, `improve`, `document`, `analyze`
