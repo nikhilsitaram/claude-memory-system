@@ -21,7 +21,7 @@ Users can synthesize their full session history into the memory DB with a single
 4. Session continuity loads the most recent session_context based on the last N project working days, not calendar days.
 5. Recent activity loads memories from the last N global working days, not calendar days.
 6. A consolidated memory that hasn't been accessed in 30+ days decays like any other memory.
-8. A user can import sessions from a backup directory on a different machine with `--import-from <path>`, and sessions are correctly remapped to the current machine's path prefix and deduplicated.
+7. A user can import sessions from a backup directory on a different machine with `--import-from <path>`, and sessions are correctly remapped to the current machine's path prefix and deduplicated.
 
 ## Architecture
 
