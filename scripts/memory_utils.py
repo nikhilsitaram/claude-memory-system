@@ -368,6 +368,7 @@ def rebuild_projects_index_quiet() -> None:
     except Exception:
         pass
     _clear_projects_index_cache()
+    _clear_working_days_cache()
 
 
 class FileLock:
@@ -620,7 +621,7 @@ def _load_projects_index_for_working_days() -> dict:
         return _projects_index_for_working_days
     index_file = get_projects_index_file()
     raw = load_json_file(index_file, default={})
-    _projects_index_for_working_days = raw.get("projects", raw)
+    _projects_index_for_working_days = raw.get("projects", {})
     return _projects_index_for_working_days
 
 
