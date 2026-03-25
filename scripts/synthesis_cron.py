@@ -753,12 +753,12 @@ def run_backfill(days=None, import_from=None) -> int:
     conn = ensure_db()
     state = load_synthesis_state()
     sessions_state = state.get("sessions", {})
-    session_updates = {}
     v3_instructions = _build_synthesis_instructions_v3()
 
     try:
         for project_name, batch in project_batches.items():
             print(f"\n  {project_name} ({batch['total']} sessions)...")
+            project_updates = {}
 
             for model_tier, model_name in [("sonnet", default_model), ("haiku", "haiku")]:
                 tier_sessions = batch[model_tier]
@@ -784,7 +784,7 @@ def run_backfill(days=None, import_from=None) -> int:
                         )
                         if messages:
                             transcripts.append({"session_id": sid, "messages": messages})
-                            session_updates[sid] = {
+                            project_updates[sid] = {
                                 "offset": s.file_size, "lines": total_lines,
                             }
 
@@ -813,8 +813,10 @@ def run_backfill(days=None, import_from=None) -> int:
 
                 print(f"    {model_name}: {len(tier_sessions)} sessions processed")
 
-        if session_updates:
-            update_synthesis_state(session_updates)
+            # Flush session state after each project for resumability
+            if project_updates:
+                update_synthesis_state(project_updates)
+                sessions_state.update(project_updates)
 
         _run_decay_v3(conn)
         print("\nBackfill complete.")
@@ -822,8 +824,6 @@ def run_backfill(days=None, import_from=None) -> int:
 
     except Exception as e:
         print(f"Backfill error: {e}", file=sys.stderr)
-        if session_updates:
-            update_synthesis_state(session_updates)
         return 1
     finally:
         conn.close()

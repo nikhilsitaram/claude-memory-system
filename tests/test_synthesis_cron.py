@@ -1250,3 +1250,87 @@ class TestRunBackfill:
 
         mock_bf.assert_called_once_with(days=None, import_from=None)
         assert result == 0
+
+    def test_state_flushed_per_project_for_resumability(self):
+        """Session state is saved after each project so interrupted runs can resume."""
+        from helpers import make_session_info
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import run_backfill
+
+        sessions_a = [make_session_info("a1", file_size=100)]
+        sessions_b = [make_session_info("b1", file_size=200)]
+
+        flush_calls = []
+
+        def track_update(updates):
+            flush_calls.append(dict(updates))
+
+        with patch("indexing.list_recent_sessions",
+                    return_value=sessions_a + sessions_b), \
+             patch("synthesis_cron._group_sessions_by_project",
+                    return_value={"projA": sessions_a, "projB": sessions_b}), \
+             patch("memory_utils.get_project_working_days",
+                    return_value=["2026-03-25"]), \
+             patch("indexing.get_session_date", return_value="2026-03-25"), \
+             patch("memory_utils.load_settings", return_value=DEFAULT_SETTINGS), \
+             patch("builtins.input", return_value="y"), \
+             patch("storage.ensure_db") as mock_db, \
+             patch("memory_utils.load_synthesis_state",
+                    return_value={"sessions": {}}), \
+             patch("transcript_ops.parse_jsonl_file_from_line",
+                    return_value=([{"role": "user", "content": "hi"}], 10)), \
+             patch("memory_utils.update_synthesis_state",
+                    side_effect=track_update), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_claude_backfill", return_value=None), \
+             patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_db.return_value = MagicMock()
+            run_backfill()
+
+        assert len(flush_calls) == 2, (
+            f"Expected 2 flush calls (one per project), got {len(flush_calls)}"
+        )
+        assert "a1" in flush_calls[0]
+        assert "b1" in flush_calls[1]
+
+    def test_resumed_backfill_skips_already_processed_sessions(self):
+        """Sessions already in synthesis state are skipped on re-run."""
+        from helpers import make_session_info
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import run_backfill
+
+        s1 = make_session_info("done-session", file_size=500)
+        s2 = make_session_info("new-session", file_size=300)
+
+        claude_calls = []
+
+        def track_claude(prompt, model):
+            claude_calls.append(prompt)
+            return None
+
+        with patch("indexing.list_recent_sessions", return_value=[s1, s2]), \
+             patch("synthesis_cron._group_sessions_by_project",
+                    return_value={"proj": [s1, s2]}), \
+             patch("memory_utils.get_project_working_days",
+                    return_value=["2026-03-25"]), \
+             patch("indexing.get_session_date", return_value="2026-03-25"), \
+             patch("memory_utils.load_settings", return_value=DEFAULT_SETTINGS), \
+             patch("builtins.input", return_value="y"), \
+             patch("storage.ensure_db") as mock_db, \
+             patch("memory_utils.load_synthesis_state", return_value={
+                    "sessions": {"done-session": {"offset": 500, "lines": 50}}}), \
+             patch("transcript_ops.parse_jsonl_file_from_line",
+                    return_value=([{"role": "user", "content": "hi"}], 10)), \
+             patch("memory_utils.update_synthesis_state"), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_claude_backfill",
+                    side_effect=track_claude), \
+             patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_db.return_value = MagicMock()
+            run_backfill()
+
+        assert len(claude_calls) == 1, (
+            f"Expected 1 claude call (skipping done-session), got {len(claude_calls)}"
+        )
+        assert "new-session" in claude_calls[0]
+        assert "done-session" not in claude_calls[0]
