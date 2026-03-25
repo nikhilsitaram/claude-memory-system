@@ -755,6 +755,7 @@ def run_backfill(days=None, import_from=None) -> int:
     sessions_state = state.get("sessions", {})
     v3_instructions = _build_synthesis_instructions_v3()
 
+    project_updates = {}
     try:
         for project_name, batch in project_batches.items():
             print(f"\n  {project_name} ({batch['total']} sessions)...")
@@ -819,6 +820,7 @@ def run_backfill(days=None, import_from=None) -> int:
             if project_updates:
                 update_synthesis_state(project_updates)
                 sessions_state.update(project_updates)
+                project_updates = {}
 
         _run_decay_v3(conn)
         print("\nBackfill complete.")
