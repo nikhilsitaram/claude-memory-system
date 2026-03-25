@@ -1282,8 +1282,11 @@ class TestRunBackfill:
              patch("memory_utils.update_synthesis_state",
                     side_effect=track_update), \
              patch("synthesis_cron._run_decay_v3"), \
-             patch("synthesis_cron._run_claude_backfill", return_value=None), \
+             patch("synthesis_cron._run_claude_backfill",
+                    return_value="MEMORY_OPS: []"), \
+             patch("synthesis.parse_synthesis_output") as mock_parse, \
              patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_parse.return_value = MagicMock(memory_ops=[])
             mock_db.return_value = MagicMock()
             run_backfill()
 
@@ -1292,6 +1295,97 @@ class TestRunBackfill:
         )
         assert "a1" in flush_calls[0]
         assert "b1" in flush_calls[1]
+
+    def test_failed_claude_call_does_not_mark_sessions_processed(self):
+        """Sessions where Claude fails (returns None) are not saved to state."""
+        from helpers import make_session_info
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import run_backfill
+
+        sessions = [make_session_info("s1", file_size=100)]
+        flush_calls = []
+
+        def track_update(updates):
+            flush_calls.append(dict(updates))
+
+        with patch("indexing.list_recent_sessions", return_value=sessions), \
+             patch("synthesis_cron._group_sessions_by_project",
+                    return_value={"proj": sessions}), \
+             patch("memory_utils.get_project_working_days",
+                    return_value=["2026-03-25"]), \
+             patch("indexing.get_session_date", return_value="2026-03-25"), \
+             patch("memory_utils.load_settings", return_value=DEFAULT_SETTINGS), \
+             patch("builtins.input", return_value="y"), \
+             patch("storage.ensure_db") as mock_db, \
+             patch("memory_utils.load_synthesis_state",
+                    return_value={"sessions": {}}), \
+             patch("transcript_ops.parse_jsonl_file_from_line",
+                    return_value=([{"role": "user", "content": "hi"}], 10)), \
+             patch("memory_utils.update_synthesis_state",
+                    side_effect=track_update), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_claude_backfill", return_value=None), \
+             patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_db.return_value = MagicMock()
+            run_backfill()
+
+        assert len(flush_calls) == 0, (
+            f"Expected 0 flush calls (Claude failed), got {len(flush_calls)}"
+        )
+
+    def test_exception_mid_project_flushes_completed_sessions(self):
+        """If an exception occurs mid-project, already-completed sessions are flushed."""
+        from helpers import make_session_info
+        from memory_utils import DEFAULT_SETTINGS
+        from synthesis_cron import run_backfill
+
+        s1 = make_session_info("s1", file_size=100)
+        s2 = make_session_info("s2", file_size=200)
+        flush_calls = []
+
+        def track_update(updates):
+            flush_calls.append(dict(updates))
+
+        call_count = [0]
+
+        def claude_with_error(prompt, model):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return "MEMORY_OPS: []"
+            raise RuntimeError("API timeout")
+
+        with patch("indexing.list_recent_sessions", return_value=[s1, s2]), \
+             patch("synthesis_cron._group_sessions_by_project",
+                    return_value={"proj": [s1, s2]}), \
+             patch("memory_utils.get_project_working_days",
+                    return_value=["2026-03-25", "2026-03-24"]), \
+             patch("indexing.get_session_date",
+                    side_effect=["2026-03-25", "2026-03-24",
+                                 "2026-03-25", "2026-03-24"]), \
+             patch("memory_utils.load_settings", return_value=DEFAULT_SETTINGS), \
+             patch("builtins.input", return_value="y"), \
+             patch("storage.ensure_db") as mock_db, \
+             patch("memory_utils.load_synthesis_state",
+                    return_value={"sessions": {}}), \
+             patch("transcript_ops.parse_jsonl_file_from_line",
+                    return_value=([{"role": "user", "content": "hi"}], 10)), \
+             patch("memory_utils.update_synthesis_state",
+                    side_effect=track_update), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_claude_backfill",
+                    side_effect=claude_with_error), \
+             patch("synthesis.parse_synthesis_output") as mock_parse, \
+             patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_parse.return_value = MagicMock(memory_ops=[])
+            mock_db.return_value = MagicMock()
+            result = run_backfill()
+
+        assert result == 1
+        assert len(flush_calls) == 1, (
+            f"Expected 1 flush call (partial progress), got {len(flush_calls)}"
+        )
+        assert "s2" in flush_calls[0], "s2 (earlier date, succeeded) should be flushed"
+        assert "s1" not in flush_calls[0], "s1 (later date, failed) should not be flushed"
 
     def test_resumed_backfill_skips_already_processed_sessions(self):
         """Sessions already in synthesis state are skipped on re-run."""
@@ -1306,7 +1400,7 @@ class TestRunBackfill:
 
         def track_claude(prompt, model):
             claude_calls.append(prompt)
-            return None
+            return "MEMORY_OPS: []"
 
         with patch("indexing.list_recent_sessions", return_value=[s1, s2]), \
              patch("synthesis_cron._group_sessions_by_project",
@@ -1325,7 +1419,9 @@ class TestRunBackfill:
              patch("synthesis_cron._run_decay_v3"), \
              patch("synthesis_cron._run_claude_backfill",
                     side_effect=track_claude), \
+             patch("synthesis.parse_synthesis_output") as mock_parse, \
              patch("load_memory._build_synthesis_instructions_v3", return_value=""):
+            mock_parse.return_value = MagicMock(memory_ops=[])
             mock_db.return_value = MagicMock()
             run_backfill()
 
