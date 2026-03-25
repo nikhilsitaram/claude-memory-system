@@ -61,6 +61,9 @@ __all__ = [
     "filter_daily_content",
     "find_current_project",
     "get_working_days",
+    "get_global_working_days",
+    "get_project_working_days",
+    "_clear_working_days_cache",
     # Synthesis state
     "get_synthesis_state_file",
     "load_synthesis_state",
@@ -242,6 +245,10 @@ DEFAULT_SETTINGS = {
         "background": True,
         "deferred": True,
         "minSessionMessages": 10,
+        "recentWorkingDays": 7,
+        "backfill": {
+            "recentWorkingDays": 7,
+        },
     },
     "decay": {
         "ageDays": 30,
@@ -554,6 +561,117 @@ def get_working_days(days_limit: int) -> list[str]:
 
     # Return the most recent N dates
     return [f.stem for f in daily_files[:days_limit]]
+
+
+# =============================================================================
+# Working Days from JSONL Session Files
+# =============================================================================
+
+_working_days_cache: dict[str, list[str]] = {}
+_projects_index_for_working_days: dict | None = None
+
+
+def _clear_working_days_cache() -> None:
+    """Clear the working days cache (for testing and between sessions)."""
+    global _projects_index_for_working_days
+    _working_days_cache.clear()
+    _projects_index_for_working_days = None
+
+
+def get_global_working_days(n: int) -> list[str]:
+    """Get the most recent N working days across all projects.
+
+    Scans .jsonl file mtimes in ``~/.claude/projects/`` to determine which
+    calendar dates had session activity.  Results are cached in the
+    module-level ``_working_days_cache`` dict.
+
+    Args:
+        n: Maximum number of dates to return.
+
+    Returns:
+        List of date strings (``YYYY-MM-DD``), sorted newest-first.
+    """
+    cache_key = f"global:{n}"
+    if cache_key in _working_days_cache:
+        return _working_days_cache[cache_key]
+
+    projects_dir = get_projects_dir()
+    if not projects_dir.exists():
+        _working_days_cache[cache_key] = []
+        return []
+
+    dates: set[str] = set()
+    for project_folder in projects_dir.iterdir():
+        if not project_folder.is_dir():
+            continue
+        for jsonl_file in project_folder.glob("*.jsonl"):
+            mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime, tz=timezone.utc)
+            dates.add(mtime.strftime("%Y-%m-%d"))
+
+    result = sorted(dates, reverse=True)[:n]
+    _working_days_cache[cache_key] = result
+    return result
+
+
+def _load_projects_index_for_working_days() -> dict:
+    """Load projects-index.json for working day lookups (cached separately)."""
+    global _projects_index_for_working_days
+    if _projects_index_for_working_days is not None:
+        return _projects_index_for_working_days
+    index_file = get_projects_index_file()
+    raw = load_json_file(index_file, default={})
+    _projects_index_for_working_days = raw.get("projects", raw)
+    return _projects_index_for_working_days
+
+
+def get_project_working_days(project_scope: str, n: int) -> list[str]:
+    """Get the most recent N working days for a specific project.
+
+    Looks up project folders via ``projects-index.json`` (matching on
+    project name), including worktree variants.  Falls back to suffix
+    matching on folder names if the index has no match.
+
+    Args:
+        project_scope: Project name (as stored in projects-index).
+        n: Maximum number of dates to return.
+
+    Returns:
+        List of date strings (``YYYY-MM-DD``), sorted newest-first.
+    """
+    cache_key = f"project:{project_scope}:{n}"
+    if cache_key in _working_days_cache:
+        return _working_days_cache[cache_key]
+
+    projects_dir = get_projects_dir()
+    if not projects_dir.exists():
+        _working_days_cache[cache_key] = []
+        return []
+
+    # Look up matching folders from projects-index.json
+    index = _load_projects_index_for_working_days()
+    matching_folders: list[Path] = []
+    for _proj_path, info in index.items():
+        if info.get("name") == project_scope:
+            for encoded_path in info.get("encodedPaths", []):
+                folder_path = projects_dir / encoded_path
+                if folder_path.exists():
+                    matching_folders.append(folder_path)
+
+    # Fallback: suffix match on folder name
+    if not matching_folders:
+        for project_folder in projects_dir.iterdir():
+            if project_folder.is_dir() and project_folder.name.endswith(f"-{project_scope}"):
+                matching_folders.append(project_folder)
+
+    dates: set[str] = set()
+    for folder in matching_folders:
+        for jsonl_file in folder.glob("*.jsonl"):
+            mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime, tz=timezone.utc)
+            dates.add(mtime.strftime("%Y-%m-%d"))
+
+    result = sorted(dates, reverse=True)[:n]
+    _working_days_cache[cache_key] = result
+    return result
 
 
 # Regex to extract scope(s) from tagged entries: [scope/type] or [scope1|scope2/type]
