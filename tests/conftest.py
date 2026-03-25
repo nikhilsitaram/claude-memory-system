@@ -21,5 +21,5 @@ def shared_db(tmp_path):
     with patch("storage.get_db_path", return_value=db_path), \
          patch("storage.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
-    yield conn
+        yield conn
     conn.close()

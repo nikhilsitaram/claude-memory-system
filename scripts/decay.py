@@ -234,8 +234,8 @@ def cleanup_near_zero_salience(conn, threshold: float = ARCHIVE_SALIENCE_THRESHO
         )
         try:
             fts_delete(conn, dp_id)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: FTS5 delete failed for {dp_id} during cleanup: {e}", file=sys.stderr)
 
     conn.commit()
     return len(rows)

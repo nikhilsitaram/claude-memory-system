@@ -345,7 +345,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": "memory.db not found"}))
         else:
-            print("Error: memory.db not found. Run install.py to create it.")
+            print("Error: memory.db not found. Run scripts/install.py to create it.")
         return 1
 
     try:

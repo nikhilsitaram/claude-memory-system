@@ -250,7 +250,7 @@ class TestSearchMemories:
         assert "Alice" in results[0]["entities"]
 
     def test_vector_search_path(self, db):
-        """When _model_ready is set, search_similar is called."""
+        """When _model_ready is set, search_hybrid is called."""
         import memory_server
         from embeddings import ScoredDataPoint
 
@@ -266,7 +266,7 @@ class TestSearchMemories:
         memory_server._model_ready.set()
         mock_results = [ScoredDataPoint(data_point=dp_with_id, score=0.9, vec_similarity=0.9)]
 
-        with patch("memory_server.search_similar", return_value=mock_results):
+        with patch("memory_server.search_hybrid", return_value=mock_results):
             results = self._run(memory_server._search_memories("searchable fact", scope="global"))
 
         assert len(results) == 1

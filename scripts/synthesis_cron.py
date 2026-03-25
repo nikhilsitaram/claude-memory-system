@@ -452,10 +452,13 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
 def _run_decay_v3(conn) -> None:
     """Run tiered decay on data_points. Cheap and idempotent -- runs every invocation."""
     try:
-        from decay import decay_data_points
+        from decay import cleanup_near_zero_salience, decay_data_points
         count = decay_data_points(conn)
         if count > 0:
             print(f"Decay: adjusted salience for {count} data_points", file=sys.stderr)
+        cleaned = cleanup_near_zero_salience(conn)
+        if cleaned > 0:
+            print(f"Cleanup: soft-deleted {cleaned} near-zero salience data_points", file=sys.stderr)
     except Exception as e:
         print(f"Warning: Decay failed: {e}", file=sys.stderr)
 

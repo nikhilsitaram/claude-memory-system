@@ -58,7 +58,8 @@ from storage import (
 def db_dir(tmp_path):
     """Provide a temporary directory for the DB and patch get_db_path."""
     db_path = tmp_path / "memory.db"
-    with mock.patch("storage.get_db_path", return_value=db_path):
+    with mock.patch("storage.get_db_path", return_value=db_path), \
+         mock.patch("storage.get_memory_dir", return_value=tmp_path):
         yield tmp_path
 
 

@@ -243,6 +243,8 @@ __all__ = [
     "fts_insert",
     "fts_delete",
     "fts_search",
+    # Maintenance
+    "prune_session_contexts",
     # v2-only (migration support — do not use for new code)
     "ChunkRow",
     "NodeRow",
@@ -778,6 +780,17 @@ def get_or_create_entity(conn: sqlite3.Connection, entity_name: str, scope: str 
         "SELECT id, name FROM data_points WHERE type='entity' AND content_hash=?",
         (content_hash,),
     ).fetchone()
+    # Fallback: find entities stored with old case-sensitive hash and rehash them
+    if row is None:
+        row = conn.execute(
+            "SELECT id, name FROM data_points WHERE type='entity' AND LOWER(name) = LOWER(?)",
+            (entity_name,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE data_points SET content_hash = ? WHERE id = ?",
+                (content_hash, row[0]),
+            )
     if row:
         existing_id, existing_name = row
         # Prefer the form with more uppercase letters (better display name)
@@ -1484,12 +1497,12 @@ def prune_session_contexts(
         )
         try:
             fts_delete(conn, dp_id)
-        except Exception:
-            pass
-        # Invalidate connected edges
+        except Exception as e:
+            print(f"Warning: FTS5 delete failed for {dp_id} during session context pruning: {e}", file=sys.stderr)
+        # Invalidate connected edges (set both valid_to and expired_at for consistency with invalidate_edge)
         conn.execute(
-            "UPDATE edges SET valid_to = ? WHERE (source = ? OR target = ?) AND valid_to IS NULL",
-            (now_iso, dp_id, dp_id),
+            "UPDATE edges SET valid_to = ?, expired_at = ? WHERE (source = ? OR target = ?) AND valid_to IS NULL",
+            (now_iso, now_iso, dp_id, dp_id),
         )
         pruned += 1
     return pruned
