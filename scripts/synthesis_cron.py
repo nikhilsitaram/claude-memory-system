@@ -157,6 +157,8 @@ def build_claude_command(model: str) -> list[str]:
         "--model", model,
         "--permission-mode", "bypassPermissions",
         "--allowedTools", "Write,Bash,Read",
+        "--disable-slash-commands",
+        "--settings", '{"disableAllHooks": true, "mcpServers": {}}',
     ]
 
 
