@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "Not Yet Started",
+  "status": "In Development",
   "workflow": "pr-create",
   "execution_mode": "subagents",
   "goal": "Enable synthesis of full session history via --backfill, switch all time windows to working days, remove consolidated decay immunity, and add cross-machine session import.",
@@ -10,14 +10,14 @@
     {
       "letter": "A",
       "name": "Working-Day Infrastructure + Decay Fix",
-      "status": "Not Started",
+      "status": "Complete (2026-03-25)",
       "depends_on": [],
       "rationale": "Foundation layer: working-day functions are imported by Phases B and C. Decay fix is independent but groups naturally here as a standalone change with no downstream consumers.",
       "tasks": [
         {
           "id": "A1",
           "name": "Add working-day functions and synthesis settings to memory_utils.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -34,7 +34,7 @@
         {
           "id": "A2",
           "name": "Remove consolidated immunity from decay",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],

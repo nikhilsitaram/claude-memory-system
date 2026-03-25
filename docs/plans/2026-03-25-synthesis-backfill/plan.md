@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Enable synthesis of full session history via --backfill, switch all time windows to working days, remove consolidated decay immunity, and add cross-machine session import. Implementation Plan
@@ -13,10 +13,10 @@ status: Not Yet Started
 ---
 
 ## Phase A — Working-Day Infrastructure + Decay Fix
-**Status:** Not Started | **Rationale:** Foundation layer: working-day functions are imported by Phases B and C. Decay fix is independent but groups naturally here as a standalone change with no downstream consumers.
+**Status:** Complete (2026-03-25) | **Rationale:** Foundation layer: working-day functions are imported by Phases B and C. Decay fix is independent but groups naturally here as a standalone change with no downstream consumers.
 
-- [ ] A1: Add working-day functions and synthesis settings to memory_utils.py — *get_global_working_days(n) and get_project_working_days(project_scope, n) exist, return date strings sorted newest-first derived from .jsonl file mtimes in ~/.claude/projects/. Both use module-level _working_days_cache dict (keyed by function+args, cleared between sessions). DEFAULT_SETTINGS gains synthesis.recentWorkingDays=7 and synthesis.backfill (nested dict with recentWorkingDays=7). Tests verify: correct date extraction from .jsonl mtimes, per-project vs global scoping, caching behavior, empty directory handling, working days across weekends/gaps. 5/5 tests pass.*
-- [ ] A2: Remove consolidated immunity from decay — *decay_data_points() and cleanup_near_zero_salience() no longer have 'AND consolidated != 1' in their WHERE clauses. Docstrings updated to reflect consolidated memories participate in normal decay (only scope='user' is exempt). Existing tests updated, new tests verify: consolidated memory with old last_accessed gets decayed, consolidated memory with recent access survives via salience reinforcement, cleanup removes near-zero consolidated entries. 3/3 new tests pass.*
+- [x] A1: Add working-day functions and synthesis settings to memory_utils.py — *get_global_working_days(n) and get_project_working_days(project_scope, n) exist, return date strings sorted newest-first derived from .jsonl file mtimes in ~/.claude/projects/. Both use module-level _working_days_cache dict (keyed by function+args, cleared between sessions). DEFAULT_SETTINGS gains synthesis.recentWorkingDays=7 and synthesis.backfill (nested dict with recentWorkingDays=7). Tests verify: correct date extraction from .jsonl mtimes, per-project vs global scoping, caching behavior, empty directory handling, working days across weekends/gaps. 5/5 tests pass.*
+- [x] A2: Remove consolidated immunity from decay — *decay_data_points() and cleanup_near_zero_salience() no longer have 'AND consolidated != 1' in their WHERE clauses. Docstrings updated to reflect consolidated memories participate in normal decay (only scope='user' is exempt). Existing tests updated, new tests verify: consolidated memory with old last_accessed gets decayed, consolidated memory with recent access survives via salience reinforcement, cleanup removes near-zero consolidated entries. 3/3 new tests pass.*
 
 ## Phase B — Pipeline Integration + Session Import
 **Status:** Not Started | **Rationale:** All three tasks consume Phase A's working-day functions. They touch disjoint file sets (indexing+transcript_ops, load_memory, session_import+install) so they run in parallel. Session import must land before Phase C wires it into the backfill flow.
