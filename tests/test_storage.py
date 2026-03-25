@@ -2666,5 +2666,145 @@ class TestGetOrCreateEntity:
         conn = self._make_db(tmp_path)
         entity_id = get_or_create_entity(conn, "pytest", "global")
         row = conn.execute("SELECT content_hash FROM data_points WHERE id = ?", (entity_id,)).fetchone()
-        assert row[0] == _content_hash("entity:pytest")
+        assert row[0] == _content_hash("entity:pytest")  # already lowercase
         conn.close()
+
+    def test_case_insensitive_dedup(self, tmp_path):
+        """Creating 'github' then 'GitHub' returns the same entity ID."""
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        id1 = get_or_create_entity(conn, "github", "global")
+        id2 = get_or_create_entity(conn, "GitHub", "global")
+        assert id1 == id2
+        count = conn.execute("SELECT COUNT(*) FROM data_points WHERE type='entity'").fetchone()[0]
+        assert count == 1
+        conn.close()
+
+    def test_preserves_capitalized_name(self, tmp_path):
+        """After creating 'github' then 'GitHub', the stored name is 'GitHub'."""
+        from storage import get_or_create_entity
+        conn = self._make_db(tmp_path)
+        entity_id = get_or_create_entity(conn, "github", "global")
+        get_or_create_entity(conn, "GitHub", "global")
+        row = conn.execute("SELECT name FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] == "GitHub"
+        conn.close()
+
+
+class TestPruneSessionContexts:
+    """Tests for session_context pruning to prevent accumulation."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch
+
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_session_context_pruning(self, tmp_path):
+        """Inserting 5 session_contexts for same scope keeps only MAX_SESSION_CONTEXTS_PER_SCOPE."""
+        from storage import (
+            MAX_SESSION_CONTEXTS_PER_SCOPE,
+            DataPointRow,
+            insert_data_point,
+            prune_session_contexts,
+        )
+        conn = self._make_db(tmp_path)
+        scope = "test-project"
+        inserted_ids = []
+        for i in range(5):
+            dp = DataPointRow(
+                type="session_context", content=f"session {i}", scope=scope,
+                salience=0.8, source_type="session_end",
+                created_at=f"2025-01-0{i+1}T00:00:00Z",
+            )
+            dp_id = insert_data_point(conn, dp)
+            inserted_ids.append(dp_id)
+        conn.commit()
+
+        pruned = prune_session_contexts(conn, scope)
+        conn.commit()
+
+        assert pruned == 5 - MAX_SESSION_CONTEXTS_PER_SCOPE
+        active = conn.execute(
+            "SELECT id FROM data_points WHERE type='session_context' AND scope=? AND salience > 0 "
+            "ORDER BY created_at DESC",
+            (scope,),
+        ).fetchall()
+        assert len(active) == MAX_SESSION_CONTEXTS_PER_SCOPE
+        # The most recent ones should survive
+        active_ids = [r[0] for r in active]
+        for kept_id in inserted_ids[-MAX_SESSION_CONTEXTS_PER_SCOPE:]:
+            assert kept_id in active_ids
+        conn.close()
+
+    def test_no_pruning_when_under_limit(self, tmp_path):
+        """No pruning occurs when count is at or below the limit."""
+        from storage import MAX_SESSION_CONTEXTS_PER_SCOPE, DataPointRow, insert_data_point, prune_session_contexts
+        conn = self._make_db(tmp_path)
+        scope = "small-project"
+        for i in range(MAX_SESSION_CONTEXTS_PER_SCOPE):
+            dp = DataPointRow(
+                type="session_context", content=f"session {i}", scope=scope,
+                salience=0.8, source_type="session_end",
+                created_at=f"2025-01-0{i+1}T00:00:00Z",
+            )
+            insert_data_point(conn, dp)
+        conn.commit()
+
+        pruned = prune_session_contexts(conn, scope)
+        assert pruned == 0
+        conn.close()
+
+    def test_pruning_scoped_independently(self, tmp_path):
+        """Session contexts for different scopes are pruned independently."""
+        from storage import MAX_SESSION_CONTEXTS_PER_SCOPE, DataPointRow, insert_data_point, prune_session_contexts
+        conn = self._make_db(tmp_path)
+        for scope in ("project-a", "project-b"):
+            for i in range(5):
+                dp = DataPointRow(
+                    type="session_context", content=f"session {i}", scope=scope,
+                    salience=0.8, source_type="session_end",
+                    created_at=f"2025-01-0{i+1}T00:00:00Z",
+                )
+                insert_data_point(conn, dp)
+        conn.commit()
+
+        prune_session_contexts(conn, "project-a")
+        conn.commit()
+
+        active_a = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context' AND scope='project-a' AND salience > 0"
+        ).fetchone()[0]
+        active_b = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context' AND scope='project-b' AND salience > 0"
+        ).fetchone()[0]
+        assert active_a == MAX_SESSION_CONTEXTS_PER_SCOPE
+        assert active_b == 5  # untouched
+        conn.close()
+
+
+class TestDBFixtureIsolation:
+    """Guard tests: verify test DB fixtures never touch the production database."""
+
+    def test_shared_db_fixture_uses_temp_path(self, shared_db, tmp_path):
+        """shared_db fixture creates DB under tmp_path, not ~/.claude/memory/."""
+        import pathlib
+        db_path = pathlib.Path(shared_db.execute("PRAGMA database_list").fetchone()[2])
+        home_memory = pathlib.Path.home() / ".claude" / "memory"
+        assert not str(db_path).startswith(str(home_memory)), (
+            f"shared_db created database at {db_path}, under ~/.claude/memory/ — "
+            "test data would corrupt the production database!"
+        )
+
+    def test_db_fixture_uses_temp_path(self, db, tmp_path):
+        """db fixture creates DB under tmp_path, not ~/.claude/memory/."""
+        import pathlib
+        db_path = pathlib.Path(db.execute("PRAGMA database_list").fetchone()[2])
+        home_memory = pathlib.Path.home() / ".claude" / "memory"
+        assert not str(db_path).startswith(str(home_memory)), (
+            f"db fixture created database at {db_path}, under ~/.claude/memory/ — "
+            "test data would corrupt the production database!"
+        )

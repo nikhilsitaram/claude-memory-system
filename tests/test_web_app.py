@@ -365,3 +365,24 @@ class TestWriteDeleteAPI:
         ).fetchone()
         assert row is not None
         assert row[0] is not None, "Edge valid_to should be set after deletion"
+
+
+# ---------------------------------------------------------------------------
+# D3: DB isolation guard
+# ---------------------------------------------------------------------------
+
+class TestDBIsolation:
+    def test_db_fixture_uses_temp_path(self, db, tmp_path):
+        """Guard: the db fixture must create the database under tmp_path, not ~/.claude/memory/."""
+        import pathlib
+
+        db_path = pathlib.Path(db.execute("PRAGMA database_list").fetchone()[2])
+        home_memory = pathlib.Path.home() / ".claude" / "memory"
+        assert str(db_path).startswith(str(tmp_path)), (
+            f"DB fixture created database at {db_path}, which is NOT under tmp_path ({tmp_path}). "
+            "Test data would leak to the production database!"
+        )
+        assert not str(db_path).startswith(str(home_memory)), (
+            f"DB fixture created database at {db_path}, which is under ~/.claude/memory/. "
+            "This would corrupt the production database!"
+        )

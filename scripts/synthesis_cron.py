@@ -207,7 +207,7 @@ def _write_session_context(
     """
     import json as _json
 
-    from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+    from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge, prune_session_contexts
 
     # Idempotency check: escape LIKE wildcards in session_id to prevent injection
     safe_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -258,6 +258,9 @@ def _write_session_context(
             ))
         except Exception:
             pass
+
+    # Prune older session_contexts beyond the retention limit for this scope
+    prune_session_contexts(conn, project_name)
 
     conn.commit()
     return dp_id
