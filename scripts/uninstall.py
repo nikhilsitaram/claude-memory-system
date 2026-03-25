@@ -8,8 +8,8 @@ This script:
 3. Optionally deletes all memory data with --purge flag
 
 Usage:
-    python3 uninstall.py           # Remove hooks/permissions, keep data
-    python3 uninstall.py --purge   # Remove everything including memory data
+    python3 scripts/uninstall.py           # Remove hooks/permissions, keep data
+    python3 scripts/uninstall.py --purge   # Remove everything including memory data
 
 Requirements: Python 3.9+
 """
@@ -270,7 +270,7 @@ def print_cleanup_instructions() -> None:
     print("Memory data preserved at: ~/.claude/memory/")
     print()
     print("To fully remove all files, run:")
-    print("  python3 uninstall.py --purge")
+    print("  python3 scripts/uninstall.py --purge")
     print()
     print("Or manually:")
     print()

@@ -15,12 +15,15 @@ from project_manager import (  # noqa: I001
     decode_path_best_effort,
     encode_path,
     find_orphaned_folders,
+    find_stale_entries,
     get_original_path_from_folder,
+    list_backups,
     list_projects,
     merge_sessions_index,
     plan_cleanup,
     plan_merge_orphan,
     plan_move,
+    rebuild_sessions_index,
     restore_from_backup,
     rewrite_paths_in_file,
     update_session_index_paths,
@@ -841,6 +844,310 @@ class TestFindOrphanedFolders:
 
         orphans = self._find_orphans(tmp_path, index)
         assert len(orphans) == 0
+
+
+# =============================================================================
+# Find Stale Entries Tests
+# =============================================================================
+
+
+class TestFindStaleEntries:
+    """Tests for find_stale_entries function."""
+
+    def test_entry_with_nonexistent_path_is_stale(self, tmp_path):
+        """Entry pointing to a non-existent path should be flagged as stale."""
+        index_data = {
+            "projects": {
+                "/nonexistent/project/path": {
+                    "name": "ghost-project",
+                    "originalPath": "/nonexistent/project/path",
+                    "workDays": ["2026-01-10", "2026-01-11"],
+                    "encodedPaths": ["-nonexistent-project-path"],
+                }
+            }
+        }
+
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.load_json_file", return_value=index_data):
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            stale = find_stale_entries()
+
+        assert len(stale) == 1
+        assert stale[0]["canonical_path"] == "/nonexistent/project/path"
+        assert stale[0]["name"] == "ghost-project"
+        assert stale[0]["work_days"] == ["2026-01-10", "2026-01-11"]
+        assert stale[0]["encoded_paths"] == ["-nonexistent-project-path"]
+
+    def test_entry_with_existing_path_not_stale(self, tmp_path):
+        """Entry pointing to a valid path should not be flagged."""
+        real_dir = tmp_path / "real-project"
+        real_dir.mkdir()
+
+        index_data = {
+            "projects": {
+                str(real_dir).lower(): {
+                    "name": "real-project",
+                    "originalPath": str(real_dir),
+                    "workDays": ["2026-02-01"],
+                    "encodedPaths": ["-real-project"],
+                }
+            }
+        }
+
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.load_json_file", return_value=index_data):
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            stale = find_stale_entries()
+
+        assert len(stale) == 0
+
+    def test_mixed_stale_and_valid(self, tmp_path):
+        """Only entries with non-existent paths are returned."""
+        real_dir = tmp_path / "exists"
+        real_dir.mkdir()
+
+        index_data = {
+            "projects": {
+                str(real_dir).lower(): {
+                    "name": "exists",
+                    "originalPath": str(real_dir),
+                    "workDays": ["2026-01-01"],
+                    "encodedPaths": ["-exists"],
+                },
+                "/gone/forever": {
+                    "name": "gone",
+                    "originalPath": "/gone/forever",
+                    "workDays": ["2026-01-02"],
+                    "encodedPaths": ["-gone-forever"],
+                },
+            }
+        }
+
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.load_json_file", return_value=index_data):
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            stale = find_stale_entries()
+
+        assert len(stale) == 1
+        assert stale[0]["name"] == "gone"
+
+    def test_empty_index_returns_empty(self, tmp_path):
+        """Empty projects index returns no stale entries."""
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.load_json_file", return_value={"projects": {}}):
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            stale = find_stale_entries()
+
+        assert stale == []
+
+    def test_uses_original_path_not_canonical_key(self, tmp_path):
+        """Stale check uses originalPath (not the canonical lowercase key) for existence."""
+        real_dir = tmp_path / "MyProject"
+        real_dir.mkdir()
+
+        index_data = {
+            "projects": {
+                str(real_dir).lower(): {
+                    "name": "MyProject",
+                    "originalPath": str(real_dir),
+                    "workDays": ["2026-03-01"],
+                    "encodedPaths": ["-myproject"],
+                }
+            }
+        }
+
+        with mock.patch("project_manager.get_projects_index_file") as mock_idx, \
+             mock.patch("project_manager.load_json_file", return_value=index_data):
+            mock_idx.return_value = tmp_path / "projects-index.json"
+            stale = find_stale_entries()
+
+        assert len(stale) == 0
+
+
+# =============================================================================
+# List Backups Tests
+# =============================================================================
+
+
+class TestListBackups:
+    """Tests for list_backups function."""
+
+    def test_empty_backup_directory(self, tmp_path):
+        """Empty backup directory returns empty list."""
+        backups_dir = tmp_path / "memory" / ".backups"
+        backups_dir.mkdir(parents=True)
+
+        with mock.patch("project_manager.get_memory_dir", return_value=tmp_path / "memory"):
+            result = list_backups()
+
+        assert result == []
+
+    def test_no_backup_directory(self, tmp_path):
+        """Non-existent backup directory returns empty list."""
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+
+        with mock.patch("project_manager.get_memory_dir", return_value=memory_dir):
+            result = list_backups()
+
+        assert result == []
+
+    def test_with_backup_subdirectories(self, tmp_path):
+        """Backup directories with files are returned with metadata."""
+        backups_dir = tmp_path / "memory" / ".backups"
+        backups_dir.mkdir(parents=True)
+
+        backup1 = backups_dir / "20260301-100000"
+        backup1.mkdir()
+        (backup1 / "projects-index.json").write_text('{"test": 1}')
+        (backup1 / "sessions-index.json").write_text('{"test": 2}')
+
+        backup2 = backups_dir / "20260302-120000"
+        backup2.mkdir()
+        (backup2 / "projects-index.json").write_text('{"test": 3}')
+
+        with mock.patch("project_manager.get_memory_dir", return_value=tmp_path / "memory"):
+            result = list_backups()
+
+        assert len(result) == 2
+        assert result[0]["timestamp"] == "20260302-120000"
+        assert result[1]["timestamp"] == "20260301-100000"
+        assert "projects-index.json" in result[0]["files"]
+        assert len(result[1]["files"]) == 2
+
+    def test_skips_non_directory_entries(self, tmp_path):
+        """Files directly in .backups/ are not treated as backups."""
+        backups_dir = tmp_path / "memory" / ".backups"
+        backups_dir.mkdir(parents=True)
+
+        (backups_dir / "stray-file.txt").write_text("not a backup")
+
+        backup = backups_dir / "20260301-100000"
+        backup.mkdir()
+        (backup / "data.json").write_text("{}")
+
+        with mock.patch("project_manager.get_memory_dir", return_value=tmp_path / "memory"):
+            result = list_backups()
+
+        assert len(result) == 1
+        assert result[0]["timestamp"] == "20260301-100000"
+
+    def test_backup_path_is_absolute_string(self, tmp_path):
+        """Backup path in result is an absolute string path."""
+        backups_dir = tmp_path / "memory" / ".backups"
+        backups_dir.mkdir(parents=True)
+
+        backup = backups_dir / "20260301-100000"
+        backup.mkdir()
+        (backup / "file.json").write_text("{}")
+
+        with mock.patch("project_manager.get_memory_dir", return_value=tmp_path / "memory"):
+            result = list_backups()
+
+        assert len(result) == 1
+        assert result[0]["path"] == str(backup)
+
+
+# =============================================================================
+# Rebuild Sessions Index Tests
+# =============================================================================
+
+
+class TestRebuildSessionsIndex:
+    """Tests for rebuild_sessions_index function."""
+
+    def test_creates_index_from_jsonl_files(self, tmp_path):
+        """Builds sessions-index from .jsonl files in a folder."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        line1 = json.dumps({"type": "human", "message": {"role": "human", "content": "Fix the bug"}})
+        (folder / "sess-aaa.jsonl").write_text(line1 + "\n", encoding="utf-8")
+
+        line2 = json.dumps({"type": "human", "message": {"role": "human", "content": "Add tests"}})
+        (folder / "sess-bbb.jsonl").write_text(line2 + "\n", encoding="utf-8")
+
+        result = rebuild_sessions_index(folder, "/home/user/project")
+
+        assert result["version"] == 1
+        assert result["originalPath"] == "/home/user/project"
+        assert len(result["entries"]) == 2
+
+        session_ids = {e["sessionId"] for e in result["entries"]}
+        assert "sess-aaa" in session_ids
+        assert "sess-bbb" in session_ids
+
+    def test_extracts_first_human_prompt(self, tmp_path):
+        """First human message content is captured as firstPrompt."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = (
+            json.dumps({"type": "system", "message": {"role": "system", "content": "sys msg"}}) + "\n"
+            + json.dumps({"type": "human", "message": {"role": "human", "content": "Please review my code"}}) + "\n"
+        )
+        (folder / "sess.jsonl").write_text(lines, encoding="utf-8")
+
+        result = rebuild_sessions_index(folder, "/project")
+
+        assert len(result["entries"]) == 1
+        assert result["entries"][0]["firstPrompt"] == "Please review my code"
+
+    def test_handles_empty_folder(self, tmp_path):
+        """Empty folder produces index with no entries."""
+        folder = tmp_path / "empty-project"
+        folder.mkdir()
+
+        result = rebuild_sessions_index(folder, "/home/user/empty")
+
+        assert result["version"] == 1
+        assert result["originalPath"] == "/home/user/empty"
+        assert result["entries"] == []
+
+    def test_entries_sorted_by_created(self, tmp_path):
+        """Entries are sorted by created timestamp."""
+        import time
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        line = json.dumps({"type": "human", "message": {"role": "human", "content": "hello"}})
+        older = folder / "older-sess.jsonl"
+        older.write_text(line + "\n", encoding="utf-8")
+        old_time = time.time() - 200
+        import os
+        os.utime(older, (old_time, old_time))
+
+        newer = folder / "newer-sess.jsonl"
+        newer.write_text(line + "\n", encoding="utf-8")
+
+        result = rebuild_sessions_index(folder, "/project")
+
+        assert len(result["entries"]) == 2
+        assert result["entries"][0]["sessionId"] == "older-sess"
+        assert result["entries"][1]["sessionId"] == "newer-sess"
+
+    def test_sets_project_path_on_entries(self, tmp_path):
+        """Each entry's projectPath matches the provided project_path."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        line = json.dumps({"type": "human", "message": {"role": "human", "content": "hi"}})
+        (folder / "sess.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        result = rebuild_sessions_index(folder, "/my/project")
+
+        assert result["entries"][0]["projectPath"] == "/my/project"
+
+    def test_malformed_jsonl_uses_default_prompt(self, tmp_path):
+        """Malformed JSONL still creates an entry with default prompt."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "bad-sess.jsonl").write_text("not valid json\n", encoding="utf-8")
+
+        result = rebuild_sessions_index(folder, "/project")
+
+        assert len(result["entries"]) == 1
+        assert result["entries"][0]["firstPrompt"] == "(recovered session)"
 
 
 if __name__ == "__main__":

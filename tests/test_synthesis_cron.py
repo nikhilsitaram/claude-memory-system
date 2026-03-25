@@ -110,8 +110,25 @@ class TestBuildClaudeCommand:
     def test_no_positional_prompt(self):
         """Prompt is piped via stdin, not as a positional arg."""
         cmd = build_claude_command(model="sonnet")
-        # Last element should be a flag value, not a prompt string
-        assert cmd[-1] == "Write,Bash,Read"
+        # Every element should be a known flag or flag value, not a bare prompt
+        assert cmd[0] == "claude"
+        assert "-p" in cmd
+        assert all(
+            el.startswith("-") or el in ("claude", "sonnet", "bypassPermissions", "Write,Bash,Read")
+            or el.startswith("{")  # --settings JSON
+            for el in cmd
+        )
+
+    def test_disables_hooks_and_mcp(self):
+        """Headless synthesis disables hooks, MCP, and skills to minimize overhead."""
+        cmd = build_claude_command(model="sonnet")
+        assert "--disable-slash-commands" in cmd
+        assert "--settings" in cmd
+        settings_idx = cmd.index("--settings") + 1
+        import json
+        settings = json.loads(cmd[settings_idx])
+        assert settings["disableAllHooks"] is True
+        assert settings["mcpServers"] == {}
 
     def test_returns_list(self):
         cmd = build_claude_command(model="sonnet")
@@ -1037,6 +1054,7 @@ class TestV3SessionContextScope:
 def _make_db_with_metadata(tmp_path):
     """Create a test DB with metadata table for consolidation tests."""
     from unittest.mock import patch as p
+
     from storage import ensure_db
     db_path = tmp_path / "memory.db"
     with p("storage.get_db_path", return_value=db_path), \

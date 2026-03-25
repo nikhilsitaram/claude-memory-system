@@ -10,7 +10,7 @@ Usage:
     python3 health.py --json       # Output as JSON
     python3 health.py --alerts     # Only show alerts (non-zero exit if any)
 
-Requirements: Python 3.9+, memory.db must exist (run install.py first)
+Requirements: Python 3.9+, memory.db must exist (run scripts/install.py first)
 """
 
 import argparse
@@ -345,7 +345,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": "memory.db not found"}))
         else:
-            print("Error: memory.db not found. Run install.py to create it.")
+            print("Error: memory.db not found. Run scripts/install.py to create it.")
         return 1
 
     try:

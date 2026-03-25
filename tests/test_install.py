@@ -6,8 +6,13 @@ from collections import namedtuple
 from pathlib import Path
 from unittest import mock
 
+import install
 import pytest
 from memory_utils import MIN_PYTHON as UTILS_MIN_PYTHON
+from memory_utils import get_claude_dir as utils_get_claude_dir
+from memory_utils import get_memory_dir as utils_get_memory_dir
+from memory_utils import load_json_file as utils_load_json_file
+from memory_utils import save_json_file as utils_save_json_file
 
 # Fake version_info that supports both tuple comparison and .major/.minor attrs
 _VersionInfo = namedtuple("version_info", "major minor micro releaselevel serial")
@@ -15,13 +20,6 @@ _VersionInfo = namedtuple("version_info", "major minor micro releaselevel serial
 
 def _version(major, minor):
     return _VersionInfo(major, minor, 0, "final", 0)
-
-from memory_utils import get_claude_dir as utils_get_claude_dir
-from memory_utils import get_memory_dir as utils_get_memory_dir
-from memory_utils import load_json_file as utils_load_json_file
-from memory_utils import save_json_file as utils_save_json_file
-
-import install
 
 # ---------------------------------------------------------------------------
 # Shared import tests — install.py re-exports from memory_utils
@@ -88,6 +86,37 @@ class TestDetectPythonCommand:
         with mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
             result = install.detect_python_command()
             assert result == sys.executable
+
+    def test_returns_absolute_path_from_which(self):
+        """When subprocess succeeds with valid version, returns absolute path from shutil.which."""
+        mock_result = mock.Mock(returncode=0, stdout="3.11\n")
+        with mock.patch("install.subprocess.run", return_value=mock_result), \
+             mock.patch("install.shutil.which", return_value="/usr/local/bin/python3"):
+            result = install.detect_python_command()
+        assert result == "/usr/local/bin/python3"
+
+    def test_skips_old_python_version(self):
+        """python3 returns 3.8 (too old), falls back to python which returns 3.11."""
+        old_result = mock.Mock(returncode=0, stdout="3.8\n")
+        new_result = mock.Mock(returncode=0, stdout="3.11\n")
+
+        def run_side_effect(cmd, **kwargs):
+            if cmd[0] == "python3":
+                return old_result
+            return new_result
+
+        with mock.patch("install.subprocess.run", side_effect=run_side_effect), \
+             mock.patch("install.shutil.which", return_value="/usr/bin/python"):
+            result = install.detect_python_command()
+        assert result == "/usr/bin/python"
+
+    def test_returns_cmd_when_which_returns_none(self):
+        """When subprocess succeeds but shutil.which returns None, returns bare command name."""
+        mock_result = mock.Mock(returncode=0, stdout="3.11\n")
+        with mock.patch("install.subprocess.run", return_value=mock_result), \
+             mock.patch("install.shutil.which", return_value=None):
+            result = install.detect_python_command()
+        assert result == "python3"
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +786,7 @@ class TestMCPInstall:
     def test_memory_server_in_link_scripts(self):
         """memory_server.py is in the scripts_to_link list."""
         source = open(
-            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+            str(Path(__file__).parent.parent / "scripts" / "install.py"), encoding="utf-8"
         ).read()
         assert "memory_server.py" in source
 
@@ -788,7 +817,7 @@ class TestPromptRecallHook:
     def test_prompt_recall_in_link_scripts(self):
         """prompt_recall.py is in the scripts_to_link list."""
         source = open(
-            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+            str(Path(__file__).parent.parent / "scripts" / "install.py"), encoding="utf-8"
         ).read()
         assert "prompt_recall.py" in source
 
@@ -802,7 +831,7 @@ class TestConsolidationInstall:
     def test_consolidation_py_in_link_scripts(self):
         """consolidation.py is included in the link_scripts list."""
         source = open(
-            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+            str(Path(__file__).parent.parent / "scripts" / "install.py"), encoding="utf-8"
         ).read()
         assert "consolidation.py" in source
 
@@ -816,6 +845,6 @@ class TestConsolidateSkill:
     def test_consolidate_skill_in_link_list(self):
         """The 'consolidate' skill is in the link_skills list."""
         source = open(
-            str(Path(__file__).parent.parent / "install.py"), encoding="utf-8"
+            str(Path(__file__).parent.parent / "scripts" / "install.py"), encoding="utf-8"
         ).read()
         assert "consolidate" in source

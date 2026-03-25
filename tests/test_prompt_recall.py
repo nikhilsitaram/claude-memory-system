@@ -7,9 +7,7 @@ Run with: python3 -m pytest tests/test_prompt_recall.py -v
 
 import json
 import time
-
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestRelevanceGate:
@@ -24,7 +22,7 @@ class TestRelevanceGate:
         assert should_search("") is False
 
     def test_long_prompt_skipped(self):
-        from prompt_recall import should_search, MAX_PROMPT_LENGTH
+        from prompt_recall import MAX_PROMPT_LENGTH, should_search
         assert should_search("x" * (MAX_PROMPT_LENGTH + 100)) is False
 
     def test_confirmation_pattern_skipped(self):
@@ -65,13 +63,13 @@ class TestSessionDedup:
         assert is_recently_injected("dp-1", state_file, current_prompt_index=2) is True
 
     def test_old_injection_not_deduped(self, tmp_path):
-        from prompt_recall import is_recently_injected, record_injection, DEDUP_WINDOW
+        from prompt_recall import DEDUP_WINDOW, is_recently_injected, record_injection
         state_file = tmp_path / ".prompt-recall-state-test"
         record_injection("dp-1", state_file, prompt_index=1)
         assert is_recently_injected("dp-1", state_file, current_prompt_index=1 + DEDUP_WINDOW + 1) is False
 
     def test_state_keeps_last_n(self, tmp_path):
-        from prompt_recall import record_injection, MAX_INJECTIONS, DEDUP_WINDOW
+        from prompt_recall import DEDUP_WINDOW, MAX_INJECTIONS, record_injection
         state_file = tmp_path / ".prompt-recall-state-test"
         cap = MAX_INJECTIONS * DEDUP_WINDOW
         for i in range(cap + 5):
@@ -111,7 +109,7 @@ class TestOutputFormat:
         assert format_injection([]) == ""
 
     def test_max_injections_limit(self):
-        from prompt_recall import format_injection, MAX_INJECTIONS
+        from prompt_recall import MAX_INJECTIONS, format_injection
         memories = [{"content": f"fact {i}", "certainty": 3, "scope": "global"} for i in range(10)]
         output = format_injection(memories)
         assert output.count("- (") == MAX_INJECTIONS

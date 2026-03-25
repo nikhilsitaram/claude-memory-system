@@ -157,6 +157,8 @@ def build_claude_command(model: str) -> list[str]:
         "--model", model,
         "--permission-mode", "bypassPermissions",
         "--allowedTools", "Write,Bash,Read",
+        "--disable-slash-commands",
+        "--settings", '{"disableAllHooks": true, "mcpServers": {}}',
     ]
 
 
@@ -207,7 +209,7 @@ def _write_session_context(
     """
     import json as _json
 
-    from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+    from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge, prune_session_contexts
 
     # Idempotency check: escape LIKE wildcards in session_id to prevent injection
     safe_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -258,6 +260,9 @@ def _write_session_context(
             ))
         except Exception:
             pass
+
+    # Prune older session_contexts beyond the retention limit for this scope
+    prune_session_contexts(conn, project_name)
 
     conn.commit()
     return dp_id
@@ -447,10 +452,13 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
 def _run_decay_v3(conn) -> None:
     """Run tiered decay on data_points. Cheap and idempotent -- runs every invocation."""
     try:
-        from decay import decay_data_points
+        from decay import cleanup_near_zero_salience, decay_data_points
         count = decay_data_points(conn)
         if count > 0:
             print(f"Decay: adjusted salience for {count} data_points", file=sys.stderr)
+        cleaned = cleanup_near_zero_salience(conn)
+        if cleaned > 0:
+            print(f"Cleanup: soft-deleted {cleaned} near-zero salience data_points", file=sys.stderr)
     except Exception as e:
         print(f"Warning: Decay failed: {e}", file=sys.stderr)
 

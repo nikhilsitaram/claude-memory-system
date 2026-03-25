@@ -51,7 +51,7 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
 
     if do_all or args.mode == "install-only":
         print("Running install.py...")
-        rc, out, err = _run([sys.executable, str(REPO_DIR / "install.py")])
+        rc, out, err = _run([sys.executable, str(REPO_DIR / "scripts" / "install.py")])
         _print_result("install.py", rc == 0, err.strip()[:80] if rc != 0 else "")
         if rc != 0:
             failures += 1

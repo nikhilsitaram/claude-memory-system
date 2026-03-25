@@ -30,7 +30,6 @@ from embeddings import (
     ensure_vec_table,
     index_data_points,
     reindex_all,
-    reindex_changed_files,
     score_memory,
     search_similar,
 )
@@ -401,7 +400,8 @@ class TestHybridSearch:
 
     def _make_db_with_fts(self, tmp_path):
         from unittest.mock import patch
-        from storage import ensure_db, insert_data_point, DataPointRow, fts_insert
+
+        from storage import DataPointRow, ensure_db, fts_insert, insert_data_point
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
              patch("storage.get_memory_dir", return_value=tmp_path):
@@ -421,6 +421,7 @@ class TestHybridSearch:
     def test_fts_only_fallback(self, tmp_path):
         """When vector search is unavailable, hybrid falls back to FTS5 BM25."""
         from unittest.mock import patch
+
         from embeddings import search_hybrid
         conn, ids = self._make_db_with_fts(tmp_path)
         with patch("embeddings.HAS_FASTEMBED", False), \
@@ -433,6 +434,7 @@ class TestHybridSearch:
     def test_sql_fallback_when_no_fts_no_vector(self, tmp_path):
         """When both FTS5 and vector are unavailable, falls back to SQL ranked."""
         from unittest.mock import patch
+
         from embeddings import search_hybrid
         conn, ids = self._make_db_with_fts(tmp_path)
         with patch("embeddings.HAS_FASTEMBED", False), \
@@ -445,6 +447,7 @@ class TestHybridSearch:
     def test_results_ordered_by_score(self, tmp_path):
         """Results are sorted by composite score, highest first."""
         from unittest.mock import patch
+
         from embeddings import search_hybrid
         conn, ids = self._make_db_with_fts(tmp_path)
         with patch("embeddings.HAS_FASTEMBED", False):
@@ -456,8 +459,9 @@ class TestHybridSearch:
     def test_scope_filtering(self, tmp_path):
         """Scope parameter limits results to matching scope."""
         from unittest.mock import patch
-        from storage import insert_data_point, DataPointRow, fts_insert
+
         from embeddings import search_hybrid
+        from storage import DataPointRow, fts_insert, insert_data_point
         conn, ids = self._make_db_with_fts(tmp_path)
         dp = DataPointRow(type="memory", content="Redis project-specific config", scope="my-proj", salience=0.9)
         dp_id = insert_data_point(conn, dp)
@@ -471,6 +475,7 @@ class TestHybridSearch:
     def test_top_k_limits_results(self, tmp_path):
         """top_k parameter limits the number of results returned."""
         from unittest.mock import patch
+
         from embeddings import search_hybrid
         conn, ids = self._make_db_with_fts(tmp_path)
         with patch("embeddings.HAS_FASTEMBED", False):
@@ -483,8 +488,9 @@ class TestCertaintyScoring:
     """Tests for certainty modulation in score_memory."""
 
     def test_certainty_modulates_score(self):
-        from embeddings import score_memory
         from unittest.mock import MagicMock
+
+        from embeddings import score_memory
 
         high_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=5)
         low_cert_dp = MagicMock(salience=0.5, last_accessed=None, created_at=None, certainty=1)
@@ -499,8 +505,9 @@ class TestCertaintyScoring:
 
     def test_certainty_none_is_neutral(self):
         """certainty=None should not modify salience (backward compatible)."""
-        from embeddings import score_memory
         from unittest.mock import MagicMock
+
+        from embeddings import score_memory
 
         dp_none = MagicMock(salience=0.8, last_accessed=None, created_at=None, certainty=None)
         dp_no_attr = MagicMock(salience=0.8, last_accessed=None, created_at=None, spec=[])

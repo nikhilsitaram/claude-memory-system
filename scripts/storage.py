@@ -27,6 +27,9 @@ from memory_utils import get_db_path, get_memory_dir  # noqa: E402
 
 SCHEMA_VERSION = 3
 
+# Maximum session_context entries kept per scope (oldest beyond this are pruned)
+MAX_SESSION_CONTEXTS_PER_SCOPE = 3
+
 # Whitelist for query_data_points order_by validation (Issue 1: SQL injection prevention)
 _ALLOWED_ORDER_COLUMNS = {"salience", "created_at", "last_accessed", "access_count", "evidence_count"}
 _ALLOWED_DIRECTIONS = {"ASC", "DESC"}
@@ -240,6 +243,8 @@ __all__ = [
     "fts_insert",
     "fts_delete",
     "fts_search",
+    # Maintenance
+    "prune_session_contexts",
     # v2-only (migration support — do not use for new code)
     "ChunkRow",
     "NodeRow",
@@ -765,16 +770,36 @@ def _generate_id() -> str:
 def get_or_create_entity(conn: sqlite3.Connection, entity_name: str, scope: str | None) -> str:
     """Return the ID of an entity data_point, creating it if absent.
 
-    Uses content_hash("entity:{name}") for dedup so the same entity name
-    always resolves to one data_point regardless of which entry point created it.
+    Uses content_hash("entity:{name_lower}") for case-insensitive dedup so
+    "GitHub" and "github" resolve to the same data_point. The display name
+    is preserved as-is; when a more-capitalized variant is seen, the stored
+    name is updated (e.g. "github" -> "GitHub").
     """
-    content_hash = _content_hash(f"entity:{entity_name}")
+    content_hash = _content_hash(f"entity:{entity_name.lower()}")
     row = conn.execute(
-        "SELECT id FROM data_points WHERE type='entity' AND content_hash=?",
+        "SELECT id, name FROM data_points WHERE type='entity' AND content_hash=?",
         (content_hash,),
     ).fetchone()
+    # Fallback: find entities stored with old case-sensitive hash and rehash them
+    if row is None:
+        row = conn.execute(
+            "SELECT id, name FROM data_points WHERE type='entity' AND LOWER(name) = LOWER(?)",
+            (entity_name,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE data_points SET content_hash = ? WHERE id = ?",
+                (content_hash, row[0]),
+            )
     if row:
-        return row[0]
+        existing_id, existing_name = row
+        # Prefer the form with more uppercase letters (better display name)
+        if existing_name and sum(1 for c in entity_name if c.isupper()) > sum(1 for c in existing_name if c.isupper()):
+            conn.execute(
+                "UPDATE data_points SET name = ?, content = ? WHERE id = ?",
+                (entity_name, entity_name, existing_id),
+            )
+        return existing_id
     return insert_data_point(conn, DataPointRow(
         type="entity", name=entity_name, scope=scope,
         content=entity_name, content_hash=content_hash,
@@ -1431,6 +1456,56 @@ def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
 
 # Alias for compatibility
 delete_data_point_soft = soft_delete_data_point
+
+
+def prune_session_contexts(
+    conn: sqlite3.Connection,
+    scope: str,
+    max_keep: int = MAX_SESSION_CONTEXTS_PER_SCOPE,
+) -> int:
+    """Delete older session_context entries for a scope, keeping the newest *max_keep*.
+
+    Soft-deletes (salience=0) and removes FTS entries for pruned data_points.
+    Also invalidates edges connected to pruned data_points.
+
+    Args:
+        conn: Database connection.
+        scope: Project scope to prune session_contexts for.
+        max_keep: Maximum number of session_context entries to retain per scope.
+
+    Returns:
+        Number of session_context entries pruned.
+
+    Note: Does not call conn.commit(). Caller must commit explicitly.
+    """
+    rows = conn.execute(
+        "SELECT id FROM data_points "
+        "WHERE type='session_context' AND scope=? AND salience > 0 "
+        "ORDER BY created_at DESC",
+        (scope,),
+    ).fetchall()
+
+    if len(rows) <= max_keep:
+        return 0
+
+    to_prune = [r[0] for r in rows[max_keep:]]
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    pruned = 0
+    for dp_id in to_prune:
+        conn.execute(
+            "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+        )
+        try:
+            fts_delete(conn, dp_id)
+        except Exception as e:
+            print(f"Warning: FTS5 delete failed for {dp_id} during session context pruning: {e}", file=sys.stderr)
+        # Invalidate connected edges (set both valid_to and expired_at for consistency with invalidate_edge)
+        conn.execute(
+            "UPDATE edges SET valid_to = ?, expired_at = ? WHERE (source = ? OR target = ?) AND valid_to IS NULL",
+            (now_iso, now_iso, dp_id, dp_id),
+        )
+        pruned += 1
+    return pruned
 
 
 def query_edges_for_data_point(

@@ -196,6 +196,51 @@ def decay_data_points(conn, dry_run: bool = False) -> int:
     return decayed
 
 
+def cleanup_near_zero_salience(conn, threshold: float = ARCHIVE_SALIENCE_THRESHOLD, dry_run: bool = False) -> int:
+    """Soft-delete data_points whose salience has decayed to near-zero.
+
+    Finds memories with salience > 0 but <= threshold and soft-deletes them
+    (sets salience=0, removes FTS entries). This prevents accumulation of
+    near-zero salience data_points that clutter the DB without being useful.
+
+    Protected from cleanup:
+    - type != 'memory' (profile, entity, session_context)
+    - consolidated = 1 (pinned)
+    - scope = 'user' (permanent user preferences)
+
+    Args:
+        conn: SQLite connection with v3 schema.
+        threshold: Salience at or below which memories are cleaned up.
+        dry_run: If True, count but do not write changes.
+
+    Returns:
+        Count of data_points cleaned up (soft-deleted).
+    """
+    from storage import fts_delete
+
+    rows = conn.execute(
+        "SELECT id FROM data_points WHERE type = 'memory' "
+        "AND salience > 0 AND salience <= ? "
+        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        (threshold,)
+    ).fetchall()
+
+    if dry_run or not rows:
+        return len(rows)
+
+    for (dp_id,) in rows:
+        conn.execute(
+            "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+        )
+        try:
+            fts_delete(conn, dp_id)
+        except Exception as e:
+            print(f"Warning: FTS5 delete failed for {dp_id} during cleanup: {e}", file=sys.stderr)
+
+    conn.commit()
+    return len(rows)
+
+
 def parse_learning_date(line: str) -> date | None:
     """Extract creation date from learning line."""
     match = DATE_PATTERN.search(line)

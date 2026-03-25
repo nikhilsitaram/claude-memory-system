@@ -21,7 +21,7 @@ A markdown-based memory system for Claude Code that persists context across sess
 ```bash
 git clone https://github.com/nikhilsitaram/claude-memory-system.git
 cd claude-memory-system
-python3 install.py    # or: python install.py
+python3 scripts/install.py    # or: python scripts/install.py
 ```
 
 Start a new Claude Code session to activate the memory system.
@@ -33,9 +33,9 @@ Start a new Claude Code session to activate the memory system.
 
 | Platform | Notes |
 |----------|-------|
-| **Linux** | Fully supported. Use `python3 install.py`. |
-| **macOS** | Fully supported. Use `python3 install.py`. |
-| **Windows** | Best-effort. Use `python install.py`. Recommended: WSL for full compatibility. |
+| **Linux** | Fully supported. Use `python3 scripts/install.py`. |
+| **macOS** | Fully supported. Use `python3 scripts/install.py`. |
+| **Windows** | Best-effort. Use `python scripts/install.py`. Recommended: WSL for full compatibility. |
 
 The installer detects your Python command and configures hooks with absolute paths.
 
@@ -219,8 +219,8 @@ The memory system uses a **PreToolUse hook** to auto-approve memory operations w
 
 ```bash
 cd claude-memory-system
-python3 uninstall.py           # Remove hooks/permissions, keep memory data
-python3 uninstall.py --purge   # Remove everything including memory data
+python3 scripts/uninstall.py           # Remove hooks/permissions, keep memory data
+python3 scripts/uninstall.py --purge   # Remove everything including memory data
 ```
 
 ## Updates
@@ -228,7 +228,7 @@ python3 uninstall.py --purge   # Remove everything including memory data
 ```bash
 cd claude-memory-system
 git pull
-python3 install.py
+python3 scripts/install.py
 ```
 
 The installer is idempotent and preserves existing memory data.

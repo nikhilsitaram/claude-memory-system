@@ -19,7 +19,6 @@ import json
 import os
 import sqlite3
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -862,7 +861,7 @@ def _load_from_db(project_scope: str) -> str | None:
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
 
         try:
-            from health import health_report, health_alerts
+            from health import health_alerts, health_report
             hr = health_report(conn)
             alerts = health_alerts(hr)
             if alerts:
@@ -931,7 +930,7 @@ def main() -> None:
     # with v3's DB-only writes. Force deferred mode when on v3.
     if not synthesis_deferred:
         try:
-            from storage import _get_schema_version, get_db, close_db
+            from storage import _get_schema_version, close_db, get_db
             _check_conn = get_db()
             if _get_schema_version(_check_conn) >= 3:
                 synthesis_deferred = True

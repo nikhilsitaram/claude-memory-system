@@ -9,7 +9,6 @@ import sqlite3  # noqa: I001
 from pathlib import Path  # noqa: F401
 
 from synthesis import (
-    MemoryOp,
     SynthesisResult,  # noqa: F401
     parse_synthesis_output,
 )
@@ -851,8 +850,8 @@ class TestCertaintyInMemoryOps:
         assert result.memory_ops[0].certainty is None
 
     def test_apply_add_v3_writes_certainty(self, tmp_path):
-        from synthesis import MemoryOp, _apply_add_v3
         from storage import query_data_point_by_id
+        from synthesis import MemoryOp, _apply_add_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         op = MemoryOp(action="ADD", fact="certain fact", scope="global", certainty=4)
         result = _apply_add_v3(conn, op)
@@ -860,10 +859,56 @@ class TestCertaintyInMemoryOps:
         assert dp.certainty == 4
 
     def test_apply_add_v3_defaults_certainty_to_2(self, tmp_path):
-        from synthesis import MemoryOp, _apply_add_v3
         from storage import query_data_point_by_id
+        from synthesis import MemoryOp, _apply_add_v3
         conn = _make_v3_db_for_synthesis(tmp_path)
         op = MemoryOp(action="ADD", fact="no certainty", scope="global")
         result = _apply_add_v3(conn, op)
         dp = query_data_point_by_id(conn, result["id"])
         assert dp.certainty == 2
+
+
+# =============================================================================
+# Entity dedup idempotency — two ADDs mentioning the same entity
+# =============================================================================
+
+
+class TestEntityDedupIdempotency:
+    """Two ADD ops referencing the same entity should produce exactly 1 entity data_point."""
+
+    def test_two_adds_same_entity_produce_one_entity(self, tmp_path):
+        from synthesis import MemoryOp, apply_memory_ops_v3
+
+        conn = _make_v3_db_for_synthesis(tmp_path)
+        ops = [
+            MemoryOp(action="ADD", fact="gRPC used for internal services", scope="proj",
+                     entities=["gRPC"]),
+            MemoryOp(action="ADD", fact="gRPC requires protobuf definitions", scope="proj",
+                     entities=["gRPC"]),
+        ]
+        apply_memory_ops_v3(conn, ops)
+
+        # 2 memory data_points created (one per ADD)
+        memory_rows = conn.execute(
+            "SELECT id FROM data_points WHERE type='memory'"
+        ).fetchall()
+        assert len(memory_rows) == 2
+
+        # Exactly 1 entity with name "gRPC"
+        entity_rows = conn.execute(
+            "SELECT id FROM data_points WHERE type='entity' AND name='gRPC'"
+        ).fetchall()
+        assert len(entity_rows) == 1
+
+        # 2 "mentions" edges, both pointing to the same entity
+        entity_id = entity_rows[0][0]
+        mention_edges = conn.execute(
+            "SELECT source, target FROM edges WHERE type='mentions' AND target=?",
+            (entity_id,),
+        ).fetchall()
+        assert len(mention_edges) == 2
+
+        # Each edge source is a different memory data_point
+        edge_sources = {e[0] for e in mention_edges}
+        memory_ids = {r[0] for r in memory_rows}
+        assert edge_sources == memory_ids

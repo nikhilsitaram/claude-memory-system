@@ -1,6 +1,7 @@
 """Tests for web_app.py — HTTP server, read-only API, and write/delete API."""
 from unittest.mock import MagicMock, patch
 
+import pytest
 from storage import (
     DataPointRow,
     EdgeRow,
@@ -24,15 +25,18 @@ from web_app import (
 )
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_db(tmp_path):
-    """Create a v3 in-memory DB and insert a few data_points for testing."""
-    tmp_path / "memory.db"
-    with patch("storage.get_memory_dir", return_value=tmp_path):
+@pytest.fixture
+def db(tmp_path):
+    """Create a fresh DB in tmp_path and return the connection."""
+    db_path = tmp_path / "memory.db"
+    with patch("storage.get_db_path", return_value=db_path), \
+         patch("storage.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
-    return conn
+        yield conn
+    conn.close()
 
 
 def _insert_dp(conn, dp_type="memory", scope="global", content="test content", name=None, salience=1.0):
@@ -53,135 +57,105 @@ def _insert_dp(conn, dp_type="memory", scope="global", content="test content", n
 # ---------------------------------------------------------------------------
 
 class TestWebAppAPI:
-    def test_stats_endpoint_returns_json(self, tmp_path):
+    def test_stats_endpoint_returns_json(self, db):
         """GET /api/stats returns JSON with memory count and salience distribution."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, scope="global", content="hello world")
-        _insert_dp(conn, dp_type="entity", scope="global", content="an entity")
+        _insert_dp(db, scope="global", content="hello world")
+        _insert_dp(db, dp_type="entity", scope="global", content="an entity")
 
-        stats = _get_stats(conn)
+        stats = _get_stats(db)
 
         assert "total_memories" in stats
         assert stats["total_memories"] >= 2
         assert "salience_distribution" in stats
         assert "recent_activity" in stats
         assert isinstance(stats["salience_distribution"], dict)
-        conn.close()
 
-    def test_data_points_endpoint_filters_by_scope(self, tmp_path):
+    def test_data_points_endpoint_filters_by_scope(self, db):
         """GET /api/data_points?scope=global returns only global data_points."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, scope="global", content="global item")
-        _insert_dp(conn, scope="project-x", content="project item")
+        _insert_dp(db, scope="global", content="global item")
+        _insert_dp(db, scope="project-x", content="project item")
 
-        results = _get_data_points(conn, scope="global")
+        results = _get_data_points(db, scope="global")
 
         assert len(results) >= 1
         assert all(r["scope"] == "global" for r in results)
-        conn.close()
 
-    def test_data_points_endpoint_filters_by_type(self, tmp_path):
+    def test_data_points_endpoint_filters_by_type(self, db):
         """GET /api/data_points?type=entity returns only entities."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, dp_type="memory", scope="global")
-        _insert_dp(conn, dp_type="entity", scope="global", content="an entity")
+        _insert_dp(db, dp_type="memory", scope="global")
+        _insert_dp(db, dp_type="entity", scope="global", content="an entity")
 
-        results = _get_data_points(conn, dp_type="entity")
+        results = _get_data_points(db, dp_type="entity")
 
         assert len(results) >= 1
         assert all(r["type"] == "entity" for r in results)
-        conn.close()
 
-    def test_data_points_endpoint_pagination(self, tmp_path):
+    def test_data_points_endpoint_pagination(self, db):
         """GET /api/data_points?limit=5&offset=0 paginates correctly."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
         for i in range(10):
-            _insert_dp(conn, content=f"item {i}")
+            _insert_dp(db, content=f"item {i}")
 
-        page1 = _get_data_points(conn, limit=5, offset=0)
-        page2 = _get_data_points(conn, limit=5, offset=5)
+        page1 = _get_data_points(db, limit=5, offset=0)
+        page2 = _get_data_points(db, limit=5, offset=5)
 
         assert len(page1) == 5
         assert len(page2) == 5
         ids1 = {r["id"] for r in page1}
         ids2 = {r["id"] for r in page2}
         assert ids1.isdisjoint(ids2), "Pages should not overlap"
-        conn.close()
 
-    def test_search_endpoint(self, tmp_path):
+    def test_search_endpoint(self, db):
         """GET /api/search?q=gRPC returns matching data_points."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, content="gRPC service definition")
-        _insert_dp(conn, content="unrelated item")
+        _insert_dp(db, content="gRPC service definition")
+        _insert_dp(db, content="unrelated item")
 
-        results = _search(conn, "gRPC")
+        results = _search(db, "gRPC")
 
         assert isinstance(results, list)
         assert len(results) >= 1
         assert any("gRPC" in (r.get("content") or "") for r in results)
-        conn.close()
 
-    def test_search_empty_query(self, tmp_path):
+    def test_search_empty_query(self, db):
         """Empty query returns empty list."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        results = _search(conn, "")
+        results = _search(db, "")
         assert results == []
-        conn.close()
 
-    def test_graph_endpoint(self, tmp_path):
+    def test_graph_endpoint(self, db):
         """GET /api/graph returns nodes and edges for vis.js."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, scope="global")
+        _insert_dp(db, scope="global")
 
-        graph = _get_graph(conn, scope="global")
+        graph = _get_graph(db, scope="global")
 
         assert "nodes" in graph
         assert "edges" in graph
         assert isinstance(graph["nodes"], list)
         assert isinstance(graph["edges"], list)
-        conn.close()
 
-    def test_graph_node_has_required_fields(self, tmp_path):
+    def test_graph_node_has_required_fields(self, db):
         """Graph nodes contain id, label, type, scope, salience."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, scope="global", content="test node")
+        _insert_dp(db, scope="global", content="test node")
 
-        graph = _get_graph(conn, scope="global")
+        graph = _get_graph(db, scope="global")
 
         assert len(graph["nodes"]) >= 1
         node = graph["nodes"][0]
         for field in ("id", "label", "type", "scope", "salience"):
             assert field in node, f"Missing field: {field}"
-        conn.close()
 
-    def test_single_data_point_endpoint(self, tmp_path):
+    def test_single_data_point_endpoint(self, db):
         """GET /api/data_point/:id returns data_point with edges."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, content="detail test")
+        dp_id = _insert_dp(db, content="detail test")
 
-        result = _get_data_point_detail(conn, dp_id)
+        result = _get_data_point_detail(db, dp_id)
 
         assert "id" in result
         assert result["id"] == dp_id
         assert "edges" in result
-        conn.close()
 
-    def test_single_data_point_not_found(self, tmp_path):
+    def test_single_data_point_not_found(self, db):
         """GET /api/data_point/nonexistent returns error."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        result = _get_data_point_detail(conn, "nonexistent_id")
+        result = _get_data_point_detail(db, "nonexistent_id")
         assert "error" in result
-        conn.close()
 
     def test_csrf_token_generated(self):
         """Server generates a CSRF token at startup."""
@@ -209,55 +183,43 @@ class TestWebAppAPI:
         assert MAX_PORT >= DEFAULT_PORT
         assert MAX_PORT <= 8749
 
-    def test_stats_salience_distribution_buckets(self, tmp_path):
+    def test_stats_salience_distribution_buckets(self, db):
         """Salience distribution covers all five buckets."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        stats = _get_stats(conn)
+        stats = _get_stats(db)
         dist = stats["salience_distribution"]
         expected_buckets = {"0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"}
         assert set(dist.keys()) == expected_buckets
-        conn.close()
 
-    def test_stats_by_type(self, tmp_path):
+    def test_stats_by_type(self, db):
         """Stats include per-type breakdown."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        _insert_dp(conn, dp_type="memory")
-        _insert_dp(conn, dp_type="entity", content="ent")
+        _insert_dp(db, dp_type="memory")
+        _insert_dp(db, dp_type="entity", content="ent")
 
-        stats = _get_stats(conn)
+        stats = _get_stats(db)
 
         assert "by_type" in stats
         assert "memory" in stats["by_type"]
         assert "entity" in stats["by_type"]
-        conn.close()
 
-    def test_get_data_points_no_filter(self, tmp_path):
+    def test_get_data_points_no_filter(self, db):
         """_get_data_points with no filters returns all active data_points."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
         for i in range(3):
-            _insert_dp(conn, content=f"item {i}")
+            _insert_dp(db, content=f"item {i}")
 
-        results = _get_data_points(conn)
+        results = _get_data_points(db)
 
         assert len(results) >= 3
-        conn.close()
 
-    def test_get_data_points_excludes_soft_deleted(self, tmp_path):
+    def test_get_data_points_excludes_soft_deleted(self, db):
         """_get_data_points excludes data_points with salience=0."""
         from storage import soft_delete_data_point
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, content="to be deleted")
-        soft_delete_data_point(conn, dp_id)
-        conn.commit()
+        dp_id = _insert_dp(db, content="to be deleted")
+        soft_delete_data_point(db, dp_id)
+        db.commit()
 
-        results = _get_data_points(conn)
+        results = _get_data_points(db)
         ids = [r["id"] for r in results]
         assert dp_id not in ids
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -265,80 +227,60 @@ class TestWebAppAPI:
 # ---------------------------------------------------------------------------
 
 class TestWriteDeleteAPI:
-    def test_edit_updates_content(self, tmp_path):
+    def test_edit_updates_content(self, db):
         """_edit_data_point updates content field."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, content="original content")
+        dp_id = _insert_dp(db, content="original content")
 
-        result = _edit_data_point(conn, dp_id, {"content": "updated content"})
+        result = _edit_data_point(db, dp_id, {"content": "updated content"})
 
         assert result["status"] == "updated"
-        dp = query_data_point_by_id(conn, dp_id)
+        dp = query_data_point_by_id(db, dp_id)
         assert dp.content == "updated content"
-        conn.close()
 
-    def test_edit_updates_salience(self, tmp_path):
+    def test_edit_updates_salience(self, db):
         """_edit_data_point updates salience field."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, salience=1.0)
+        dp_id = _insert_dp(db, salience=1.0)
 
-        result = _edit_data_point(conn, dp_id, {"salience": 0.9})
+        result = _edit_data_point(db, dp_id, {"salience": 0.9})
 
         assert result["status"] == "updated"
-        dp = query_data_point_by_id(conn, dp_id)
+        dp = query_data_point_by_id(db, dp_id)
         assert abs(dp.salience - 0.9) < 0.001
-        conn.close()
 
-    def test_edit_updates_content_and_salience(self, tmp_path):
+    def test_edit_updates_content_and_salience(self, db):
         """_edit_data_point can update both content and salience at once."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, content="old", salience=0.5)
+        dp_id = _insert_dp(db, content="old", salience=0.5)
 
-        result = _edit_data_point(conn, dp_id, {"content": "new", "salience": 0.9})
+        result = _edit_data_point(db, dp_id, {"content": "new", "salience": 0.9})
 
         assert result["status"] == "updated"
-        dp = query_data_point_by_id(conn, dp_id)
+        dp = query_data_point_by_id(db, dp_id)
         assert dp.content == "new"
         assert abs(dp.salience - 0.9) < 0.001
-        conn.close()
 
-    def test_delete_soft_deletes(self, tmp_path):
+    def test_delete_soft_deletes(self, db):
         """_delete_data_point sets salience to 0.0."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn)
+        dp_id = _insert_dp(db)
 
-        result = _delete_data_point(conn, dp_id, "No longer relevant")
+        result = _delete_data_point(db, dp_id, "No longer relevant")
 
         assert result["status"] == "deleted"
-        dp = query_data_point_by_id(conn, dp_id)
+        dp = query_data_point_by_id(db, dp_id)
         assert dp.salience == 0.0
-        conn.close()
 
-    def test_edit_nonexistent_returns_error(self, tmp_path):
+    def test_edit_nonexistent_returns_error(self, db):
         """_edit_data_point returns error dict for nonexistent ID."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        result = _edit_data_point(conn, "nonexistent_id", {"content": "x"})
+        result = _edit_data_point(db, "nonexistent_id", {"content": "x"})
         assert "error" in result
-        conn.close()
 
-    def test_delete_nonexistent_returns_error(self, tmp_path):
+    def test_delete_nonexistent_returns_error(self, db):
         """_delete_data_point returns error dict for nonexistent ID."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        result = _delete_data_point(conn, "nonexistent_id")
+        result = _delete_data_point(db, "nonexistent_id")
         assert "error" in result
-        conn.close()
 
-    def test_edit_triggers_reembedding(self, tmp_path):
+    def test_edit_triggers_reembedding(self, db):
         """After edit, index_data_points is called when embeddings available."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn, content="original")
+        dp_id = _insert_dp(db, content="original")
 
         mock_index = MagicMock()
         mock_ensure_vec = MagicMock()
@@ -350,23 +292,20 @@ class TestWriteDeleteAPI:
 
             import web_app
             importlib.reload(web_app)
-            with patch("web_app._db_conn", conn):
-                result = web_app._edit_data_point(conn, dp_id, {"content": "updated"})
+            with patch("web_app._db_conn", db):
+                result = web_app._edit_data_point(db, dp_id, {"content": "updated"})
 
         assert result["status"] == "updated"
-        conn.close()
 
-    def test_csrf_required_for_edit(self, tmp_path):
+    def test_csrf_required_for_edit(self, db):
         """POST without X-CSRF-Token header returns 403."""
         from io import BytesIO
 
         import web_app
 
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn)
+        dp_id = _insert_dp(db)
 
-        web_app._db_conn = conn
+        web_app._db_conn = db
         web_app._csrf_token = "real-token"
 
         # Simulate handler with no CSRF header
@@ -383,17 +322,14 @@ class TestWriteDeleteAPI:
         handler.do_POST()
 
         assert responses[0][0] == 403
-        conn.close()
 
-    def test_csrf_required_for_delete(self, tmp_path):
+    def test_csrf_required_for_delete(self, db):
         """DELETE without X-CSRF-Token header returns 403."""
         import web_app
 
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn)
+        dp_id = _insert_dp(db)
 
-        web_app._db_conn = conn
+        web_app._db_conn = db
         web_app._csrf_token = "real-token"
 
         handler = object.__new__(web_app.MemoryAPIHandler)
@@ -408,29 +344,46 @@ class TestWriteDeleteAPI:
         handler.do_DELETE()
 
         assert responses[0][0] == 403
-        conn.close()
 
-    def test_delete_invalidates_edges(self, tmp_path):
+    def test_delete_invalidates_edges(self, db):
         """Deleting a data_point sets valid_to on its connected edges."""
-        with patch("storage.get_memory_dir", return_value=tmp_path):
-            conn = ensure_db()
-        dp_id = _insert_dp(conn)
-        other_id = _insert_dp(conn, content="other")
+        dp_id = _insert_dp(db)
+        other_id = _insert_dp(db, content="other")
 
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
         edge = EdgeRow(source=dp_id, target=other_id, type="related_to", fact="test fact", created_at=now_iso)
-        insert_edge(conn, edge)
-        conn.commit()
+        insert_edge(db, edge)
+        db.commit()
 
-        result = _delete_data_point(conn, dp_id)
+        result = _delete_data_point(db, dp_id)
 
         assert result["status"] == "deleted"
         # Edge should be invalidated (valid_to set)
-        row = conn.execute(
+        row = db.execute(
             "SELECT valid_to FROM edges WHERE source = ? OR target = ?",
             (dp_id, dp_id),
         ).fetchone()
         assert row is not None
         assert row[0] is not None, "Edge valid_to should be set after deletion"
-        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# D3: DB isolation guard
+# ---------------------------------------------------------------------------
+
+class TestDBIsolation:
+    def test_db_fixture_uses_temp_path(self, db, tmp_path):
+        """Guard: the db fixture must create the database under tmp_path, not ~/.claude/memory/."""
+        import pathlib
+
+        db_path = pathlib.Path(db.execute("PRAGMA database_list").fetchone()[2])
+        home_memory = pathlib.Path.home() / ".claude" / "memory"
+        assert str(db_path).startswith(str(tmp_path)), (
+            f"DB fixture created database at {db_path}, which is NOT under tmp_path ({tmp_path}). "
+            "Test data would leak to the production database!"
+        )
+        assert not str(db_path).startswith(str(home_memory)), (
+            f"DB fixture created database at {db_path}, which is under ~/.claude/memory/. "
+            "This would corrupt the production database!"
+        )

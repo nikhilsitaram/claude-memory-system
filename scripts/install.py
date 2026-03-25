@@ -13,8 +13,8 @@ This script:
 8. Builds project index
 
 Usage:
-    python3 install.py
-    python install.py
+    python3 scripts/install.py
+    python scripts/install.py
 
 Requirements: Python 3.9+
 """
@@ -25,8 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Import shared utilities from scripts/memory_utils.py (same repo, no symlink needed)
-sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+# Import shared utilities (install.py is inside scripts/, so just add this directory)
+sys.path.insert(0, str(Path(__file__).parent))
 from memory_utils import (  # noqa: E402
     MIN_PYTHON,
     get_claude_dir,
@@ -87,7 +87,7 @@ def get_script_dir() -> Path:
     If running from a git worktree, resolves to the main working tree
     so that symlinks remain valid after worktree cleanup.
     """
-    this_dir = Path(__file__).parent.resolve()
+    this_dir = Path(__file__).parent.parent.resolve()
 
     # .git is a file (not a directory) in worktrees — detect and redirect
     git_marker = this_dir / ".git"
@@ -101,7 +101,7 @@ def get_script_dir() -> Path:
                 for line in result.stdout.splitlines():
                     if line.startswith("worktree "):
                         main_tree = Path(line.split(" ", 1)[1])
-                        if main_tree != this_dir and (main_tree / "install.py").exists():
+                        if main_tree != this_dir and (main_tree / "scripts" / "install.py").exists():
                             print(f"Note: Running from worktree; symlinks will target main repo: {main_tree}")
                             return main_tree
                         break  # First entry is always the main worktree

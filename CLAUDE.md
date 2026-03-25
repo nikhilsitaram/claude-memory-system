@@ -6,8 +6,9 @@ SQL-backed knowledge graph memory persistence for Claude Code. See README.md for
 
 ```
 claude-memory-system/
-├── install.py / uninstall.py   # Cross-platform installers
 ├── scripts/
+│   ├── install.py              # Cross-platform installer
+│   ├── uninstall.py            # Cross-platform uninstaller
 │   ├── memory_utils.py         # Shared utilities: paths, settings, filtering, locking
 │   ├── load_memory.py          # SessionStart hook - SQL-ranked context loading
 │   ├── memory_server.py        # MCP server - search/write/delete/traverse tools
@@ -35,12 +36,12 @@ claude-memory-system/
 
 ### Adding a Skill
 1. Create `skills/<name>/SKILL.md` with frontmatter
-2. Update `install.py`: add to `skills` list in `link_skills()`
-3. Update `uninstall.py`: add to cleanup instructions
+2. Update `scripts/install.py`: add to `skills` list in `link_skills()`
+3. Update `scripts/uninstall.py`: add to cleanup instructions
 
 ### Adding a Script
 1. Create `scripts/<name>.py`
-2. Add to `link_scripts()` in `install.py`
+2. Add to `link_scripts()` in `scripts/install.py`
 3. If it needs a hook, add in `merge_hooks()` function
 
 ## Testing
@@ -52,7 +53,7 @@ Tests live in `tests/test_<module>.py` matching the script they test.
 ```bash
 python3 -m pytest tests/ -q                  # Run all (do this first)
 python3 -m pytest tests/ -v                  # Verbose for debugging
-python3 install.py                           # Apply changes
+python3 scripts/install.py                    # Apply changes
 python3 ~/.claude/scripts/load_memory.py     # Test memory loading
 python3 ~/.claude/scripts/indexing.py list-recent  # Test session listing
 python3 ~/.claude/scripts/decay.py --dry-run # Test decay
@@ -96,7 +97,7 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 ## Implementation Details
 
-### Hooks (defined in `install.py` `merge_hooks()`)
+### Hooks (defined in `scripts/install.py` `merge_hooks()`)
 - `SessionStart` — loads memory context via `load_memory.py`
 - `PreToolUse` — auto-approves operations targeting `.claude/memory` paths
 - `SessionEnd` — triggers deferred synthesis via systemd
