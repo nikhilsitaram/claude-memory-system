@@ -114,8 +114,8 @@ def main():
 
     try:
         from embeddings import search_hybrid
-        from storage import get_db, close_db
         from memory_utils import get_memory_dir, sanitize_secrets
+        from storage import close_db, get_db
     except ImportError:
         return
 

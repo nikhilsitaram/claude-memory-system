@@ -29,9 +29,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (  # noqa: E402
-    get_global_memory_file,
     get_memory_dir,
-    get_project_memory_dir,
     get_projects_dir,
     prune_stale_state_entries,
     rebuild_projects_index_quiet,

@@ -2448,7 +2448,7 @@ class TestFTS5:
 
     def test_fts_delete(self, tmp_path):
         """Deleted entries no longer appear in search results."""
-        from storage import fts_insert, fts_delete, fts_search
+        from storage import fts_delete, fts_insert, fts_search
         conn = self._make_db(tmp_path)
         fts_insert(conn, "dp-del", "unique findable content xyz", "global")
         conn.commit()
@@ -2473,7 +2473,7 @@ class TestFTS5:
 
     def test_soft_delete_removes_fts_entry(self, tmp_path):
         """soft_delete_data_point also removes the FTS5 index entry."""
-        from storage import DataPointRow, insert_data_point, fts_insert, fts_search, soft_delete_data_point
+        from storage import DataPointRow, fts_insert, fts_search, insert_data_point, soft_delete_data_point
         conn = self._make_db(tmp_path)
         dp = DataPointRow(type="memory", content="unique deletable content xyz", scope="global", salience=0.8)
         dp_id = insert_data_point(conn, dp)
@@ -2488,7 +2488,8 @@ class TestFTS5:
     def test_fts_migration_backfill(self, tmp_path):
         """Migration populates fts_data from existing data_points."""
         from unittest.mock import patch
-        from storage import DataPointRow, insert_data_point, fts_search, _ensure_fts_table, _backfill_fts
+
+        from storage import DataPointRow, _backfill_fts, _ensure_fts_table, fts_search, insert_data_point
 
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
@@ -2544,7 +2545,7 @@ class TestEpistemicMetadata:
         assert dp.validity_context == "Verified in prod"
 
     def test_insert_and_query_with_certainty(self, tmp_path):
-        from storage import insert_data_point, query_data_point_by_id, DataPointRow
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
         conn = self._make_db(tmp_path)
         dp = DataPointRow(type="memory", content="certain fact", scope="global", certainty=4, validity_context="Verified in prod")
         dp_id = insert_data_point(conn, dp)
@@ -2555,7 +2556,7 @@ class TestEpistemicMetadata:
         conn.close()
 
     def test_insert_without_certainty_returns_none(self, tmp_path):
-        from storage import insert_data_point, query_data_point_by_id, DataPointRow
+        from storage import DataPointRow, insert_data_point, query_data_point_by_id
         conn = self._make_db(tmp_path)
         dp = DataPointRow(type="memory", content="no certainty", scope="global")
         dp_id = insert_data_point(conn, dp)
@@ -2618,6 +2619,7 @@ class TestGetOrCreateEntity:
 
     def _make_db(self, tmp_path):
         from unittest.mock import patch
+
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
@@ -2660,7 +2662,7 @@ class TestGetOrCreateEntity:
         conn.close()
 
     def test_content_hash_set_correctly(self, tmp_path):
-        from storage import get_or_create_entity, _content_hash
+        from storage import _content_hash, get_or_create_entity
         conn = self._make_db(tmp_path)
         entity_id = get_or_create_entity(conn, "pytest", "global")
         row = conn.execute("SELECT content_hash FROM data_points WHERE id = ?", (entity_id,)).fetchone()

@@ -1037,6 +1037,7 @@ class TestV3SessionContextScope:
 def _make_db_with_metadata(tmp_path):
     """Create a test DB with metadata table for consolidation tests."""
     from unittest.mock import patch as p
+
     from storage import ensure_db
     db_path = tmp_path / "memory.db"
     with p("storage.get_db_path", return_value=db_path), \

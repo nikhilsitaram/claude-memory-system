@@ -694,6 +694,7 @@ class TestDecayDataPoints:
     def _make_v3_db(self, tmp_path):
         """Create a v3 DB with data_points table for testing."""
         from unittest.mock import patch as _patch
+
         from storage import ensure_db
 
         db_path = tmp_path / "memory.db"
@@ -704,8 +705,8 @@ class TestDecayDataPoints:
 
     def test_decays_old_memory_data_points(self, tmp_path):
         """A memory not accessed in 30+ days gets its salience reduced."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
@@ -721,8 +722,8 @@ class TestDecayDataPoints:
 
     def test_skips_profile_type_data_points(self, tmp_path):
         """Profile data_points (type='profile') are never decayed."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat().replace("+00:00", "Z")
@@ -737,8 +738,8 @@ class TestDecayDataPoints:
 
     def test_skips_consolidated_data_points(self, tmp_path):
         """Consolidated (pinned) data_points are not decayed."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
@@ -753,8 +754,8 @@ class TestDecayDataPoints:
 
     def test_skips_user_scope_data_points(self, tmp_path):
         """User-scope memories are not decayed."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
@@ -769,8 +770,8 @@ class TestDecayDataPoints:
 
     def test_dry_run_no_changes_data_points(self, tmp_path):
         """dry_run=True counts but does not modify salience."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
@@ -786,8 +787,8 @@ class TestDecayDataPoints:
 
     def test_tier_classification_data_points(self, tmp_path):
         """Verify tier classification applies correct decay rates."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         now = datetime.now(timezone.utc)
@@ -812,6 +813,7 @@ class TestCertaintyDecay:
 
     def _make_v3_db(self, tmp_path):
         from unittest.mock import patch as _patch
+
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
@@ -821,8 +823,8 @@ class TestCertaintyDecay:
 
     def test_certainty_4_immune_to_decay(self, tmp_path):
         """Certainty 4-5 data_points are not decayed."""
-        from storage import insert_data_point, DataPointRow
-        from decay import decay_data_points, DEFAULT_AGE_DAYS
+        from decay import DEFAULT_AGE_DAYS, decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).isoformat().replace("+00:00", "Z")
@@ -837,8 +839,8 @@ class TestCertaintyDecay:
 
     def test_certainty_5_immune_to_decay(self, tmp_path):
         """Certainty 5 data_points are also immune to decay."""
-        from storage import insert_data_point, DataPointRow
-        from decay import decay_data_points, DEFAULT_AGE_DAYS
+        from decay import DEFAULT_AGE_DAYS, decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS * 2)).isoformat().replace("+00:00", "Z")
@@ -853,8 +855,8 @@ class TestCertaintyDecay:
 
     def test_certainty_1_decays_faster(self, tmp_path):
         """Certainty 1-2 data_points decay at 2x rate."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS)).isoformat().replace("+00:00", "Z")
@@ -872,8 +874,8 @@ class TestCertaintyDecay:
 
     def test_certainty_none_decays_normally(self, tmp_path):
         """Certainty NULL behaves like normal decay (no modifier)."""
-        from storage import insert_data_point, DataPointRow
         from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=DEFAULT_AGE_DAYS)).isoformat().replace("+00:00", "Z")

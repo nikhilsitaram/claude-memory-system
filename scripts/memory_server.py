@@ -28,7 +28,7 @@ try:
 except ImportError:
     HAS_MCP = False
 
-from embeddings import _serialize_vector, embed_text, search_hybrid, search_similar
+from embeddings import _serialize_vector, embed_text, search_hybrid, search_similar  # noqa: F401
 from storage import (
     PROVENANCE_TYPES,
     DataPointRow,

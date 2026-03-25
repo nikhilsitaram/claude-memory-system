@@ -1,6 +1,9 @@
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestFindClusters:
@@ -343,7 +346,6 @@ class TestRunConsolidation:
 
     def test_lock_prevents_concurrent_runs(self, tmp_path):
         """run_consolidation returns early with skipped_reason when lock is held."""
-        import os
         from consolidation import run_consolidation
         conn = self._make_db(tmp_path)
 
@@ -417,3 +419,172 @@ class TestBuildMergePrompt:
         assert "Redis provides caching" in prompt
         assert "MERGE" in prompt
         assert "SKIP" in prompt
+
+
+class TestConnectedComponents:
+    """Tests for the union-find _connected_components algorithm."""
+
+    def test_single_pair(self):
+        from consolidation import _connected_components
+        result = _connected_components([("a", "b", 0.9)], ["a", "b"])
+        members = [set(comp[0]) for comp in result]
+        assert members == [{"a", "b"}]
+
+    def test_disjoint_pairs(self):
+        from consolidation import _connected_components
+        result = _connected_components(
+            [("a", "b", 0.9), ("c", "d", 0.85)], ["a", "b", "c", "d"]
+        )
+        members = sorted([set(comp[0]) for comp in result], key=len)
+        assert len(members) == 2
+        assert {"a", "b"} in members
+        assert {"c", "d"} in members
+
+    def test_transitive_merge(self):
+        from consolidation import _connected_components
+        result = _connected_components(
+            [("a", "b", 0.9), ("b", "c", 0.85)], ["a", "b", "c"]
+        )
+        members = [set(comp[0]) for comp in result]
+        assert len(members) == 1
+        assert members[0] == {"a", "b", "c"}
+
+    def test_empty_input(self):
+        from consolidation import _connected_components
+        result = _connected_components([], [])
+        assert result == []
+
+    def test_complex_graph(self):
+        """Multiple pairs forming exactly 2 components."""
+        from consolidation import _connected_components
+        pairs = [
+            ("a", "b", 0.9),
+            ("b", "c", 0.85),
+            ("d", "e", 0.88),
+            ("e", "f", 0.92),
+        ]
+        result = _connected_components(pairs, ["a", "b", "c", "d", "e", "f"])
+        members = sorted([set(comp[0]) for comp in result], key=len)
+        assert len(members) == 2
+        assert {"a", "b", "c"} in members
+        assert {"d", "e", "f"} in members
+
+
+class TestEnrichClusterMetadata:
+    """Tests for _enrich_cluster_metadata populating avg_salience and max_recency."""
+
+    def test_avg_salience_computed(self, shared_db):
+        from consolidation import _enrich_cluster_metadata
+        from storage import DataPointRow, insert_data_point
+
+        id1 = insert_data_point(shared_db, DataPointRow(type="memory", content="a", scope="global", salience=0.4))
+        id2 = insert_data_point(shared_db, DataPointRow(type="memory", content="b", scope="global", salience=0.8))
+        shared_db.commit()
+
+        cluster = {"members": [id1, id2], "similarities": []}
+        _enrich_cluster_metadata(shared_db, cluster)
+
+        assert cluster["avg_salience"] == pytest.approx(0.6)
+
+    def test_max_recency_recent(self, shared_db):
+        """A data_point created now should have max_recency close to 1.0."""
+        from consolidation import _enrich_cluster_metadata
+        from storage import DataPointRow, insert_data_point
+
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        id1 = insert_data_point(shared_db, DataPointRow(
+            type="memory", content="recent", scope="global", salience=0.5, created_at=now,
+        ))
+        shared_db.commit()
+
+        cluster = {"members": [id1], "similarities": []}
+        _enrich_cluster_metadata(shared_db, cluster)
+
+        assert cluster["max_recency"] > 0.99
+
+    def test_max_recency_old(self, shared_db):
+        """A data_point created 180 days ago should have max_recency ~0.507."""
+        from consolidation import _enrich_cluster_metadata
+        from storage import DataPointRow, insert_data_point
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat().replace("+00:00", "Z")
+        id1 = insert_data_point(shared_db, DataPointRow(
+            type="memory", content="old", scope="global", salience=0.5, created_at=old_ts,
+        ))
+        shared_db.commit()
+
+        cluster = {"members": [id1], "similarities": []}
+        _enrich_cluster_metadata(shared_db, cluster)
+
+        expected = max(0.0, 1.0 - 180 / 365.0)
+        assert cluster["max_recency"] == pytest.approx(expected, abs=0.02)
+
+    def test_picks_most_recent_timestamp(self, shared_db):
+        """max_recency should reflect the most recent member, not the oldest."""
+        from consolidation import _enrich_cluster_metadata
+        from storage import DataPointRow, insert_data_point
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=300)).isoformat().replace("+00:00", "Z")
+        new_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        id_old = insert_data_point(shared_db, DataPointRow(
+            type="memory", content="old", scope="global", salience=0.5, created_at=old_ts,
+        ))
+        id_new = insert_data_point(shared_db, DataPointRow(
+            type="memory", content="new", scope="global", salience=0.5, created_at=new_ts,
+        ))
+        shared_db.commit()
+
+        cluster = {"members": [id_old, id_new], "similarities": []}
+        _enrich_cluster_metadata(shared_db, cluster)
+
+        assert cluster["max_recency"] > 0.99
+
+
+class TestGetExcludedPairs:
+    """Tests for _get_excluded_pairs returning supersedes/contradicts pairs."""
+
+    def test_returns_contradicts_pairs(self, shared_db):
+        from consolidation import _get_excluded_pairs
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        id1 = insert_data_point(shared_db, DataPointRow(type="memory", content="a", scope="global", salience=0.5))
+        id2 = insert_data_point(shared_db, DataPointRow(type="memory", content="b", scope="global", salience=0.5))
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(shared_db, EdgeRow(source=id1, target=id2, type="contradicts", created_at=now))
+        shared_db.commit()
+
+        excluded = _get_excluded_pairs(shared_db, [id1, id2])
+        assert (id1, id2) in excluded
+
+    def test_returns_supersedes_pairs(self, shared_db):
+        from consolidation import _get_excluded_pairs
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        id1 = insert_data_point(shared_db, DataPointRow(type="memory", content="a", scope="global", salience=0.5))
+        id2 = insert_data_point(shared_db, DataPointRow(type="memory", content="b", scope="global", salience=0.5))
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(shared_db, EdgeRow(source=id1, target=id2, type="supersedes", created_at=now))
+        shared_db.commit()
+
+        excluded = _get_excluded_pairs(shared_db, [id1, id2])
+        assert (id1, id2) in excluded
+
+    def test_expired_edges_excluded(self, shared_db):
+        """Edges with valid_to set should NOT appear in excluded pairs."""
+        from consolidation import _get_excluded_pairs
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        id1 = insert_data_point(shared_db, DataPointRow(type="memory", content="a", scope="global", salience=0.5))
+        id2 = insert_data_point(shared_db, DataPointRow(type="memory", content="b", scope="global", salience=0.5))
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        insert_edge(shared_db, EdgeRow(source=id1, target=id2, type="contradicts", created_at=now, valid_to=past))
+        shared_db.commit()
+
+        excluded = _get_excluded_pairs(shared_db, [id1, id2])
+        assert (id1, id2) not in excluded
+
+    def test_empty_active_ids(self, shared_db):
+        from consolidation import _get_excluded_pairs
+        excluded = _get_excluded_pairs(shared_db, [])
+        assert excluded == set()

@@ -429,7 +429,7 @@ def _sql_ranked_fallback(conn, scope, top_k):
 
     When scope is None, returns memories across all scopes (no filter).
     """
-    from storage import query_data_points_by_scope, query_data_points
+    from storage import query_data_points, query_data_points_by_scope
     if scope is None:
         dps = query_data_points(
             conn, dp_type="memory", min_salience=0.0,

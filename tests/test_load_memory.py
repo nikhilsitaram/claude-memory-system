@@ -28,18 +28,12 @@ from load_memory import (
 )
 from storage import (
     SCHEMA_DDL,
-    ChunkRow,
     DataPointRow,
     EdgeRow,
-    NodeRow,
-    close_db,
     ensure_db,
-    insert_chunk,
     insert_data_point,
     insert_edge,
-    insert_node,
     invalidate_edge,
-    query_chunks_with_salience,
 )
 
 
@@ -1918,7 +1912,7 @@ class TestSalienceReinforcement:
         dp_id = insert_data_point(conn, dp)
         conn.commit()
 
-        from load_memory import _batch_update_data_point_access, REINFORCEMENT_ETA
+        from load_memory import REINFORCEMENT_ETA, _batch_update_data_point_access
         _batch_update_data_point_access(conn, [dp_id])
         conn.commit()
 

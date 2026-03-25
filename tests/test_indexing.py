@@ -6,6 +6,7 @@ Run with: python -m pytest tests/test_indexing.py -v
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -14,9 +15,12 @@ import pytest
 from helpers import make_jsonl_line, make_session_info  # noqa: I001
 from indexing import (
     MIN_SESSION_SIZE_BYTES,
+    _extract_from_jsonl,
+    _parse_index_datetime,
     build_projects_index,
     get_session_date,
     has_assistant_message,
+    list_all_sessions,
 )
 from transcript_ops import (
     extract_text_content,
@@ -711,6 +715,310 @@ class TestBuildProjectsIndex:
         assert len(projects) == 1, f"Expected 1 project, got {len(projects)}: {list(projects.keys())}"
         assert "2026-01-15" in projects[canonical]["workDays"]
         assert "2026-01-16" in projects[canonical]["workDays"]
+
+
+# =============================================================================
+# _parse_index_datetime Tests
+# =============================================================================
+
+
+class TestParseIndexDatetime:
+    def test_valid_iso_datetime_returns_datetime(self):
+        """Valid ISO datetime string with Z suffix returns datetime object."""
+        result = _parse_index_datetime("2026-01-25T21:48:21.826Z")
+        assert isinstance(result, datetime)
+        assert result.year == 2026
+        assert result.month == 1
+        assert result.day == 25
+        assert result.hour == 21
+        assert result.minute == 48
+        assert result.tzinfo is not None
+
+    def test_valid_iso_datetime_with_offset(self):
+        """Valid ISO datetime string with +00:00 suffix returns datetime object."""
+        result = _parse_index_datetime("2026-03-10T14:30:00+00:00")
+        assert isinstance(result, datetime)
+        assert result.year == 2026
+        assert result.month == 3
+
+    def test_empty_string_returns_none(self):
+        """Empty string returns None."""
+        assert _parse_index_datetime("") is None
+
+    def test_invalid_string_returns_none(self):
+        """Invalid/unparseable string returns None."""
+        assert _parse_index_datetime("not-a-date") is None
+
+    def test_partial_date_returns_none(self):
+        """Partial date string that can't parse returns None."""
+        assert _parse_index_datetime("2026-13-45") is None
+
+
+# =============================================================================
+# _extract_from_jsonl Tests
+# =============================================================================
+
+
+class TestExtractFromJsonl:
+    def test_valid_jsonl_with_cwd(self, tmp_path):
+        """Valid .jsonl file with cwd in first line returns path and work days."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        line = json.dumps({
+            "cwd": "/home/user/myproject",
+            "timestamp": "2026-02-15T10:30:00Z",
+            "type": "user",
+        })
+        (folder / "session1.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == "/home/user/myproject"
+        assert "2026-02-15" in work_days
+
+    def test_multiple_jsonl_files_first_cwd_wins(self, tmp_path):
+        """First valid cwd found across sorted files is used as original_path."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        line_a = json.dumps({
+            "cwd": "/home/user/project-a",
+            "timestamp": "2026-02-10T10:00:00Z",
+        })
+        (folder / "aaa.jsonl").write_text(line_a + "\n", encoding="utf-8")
+
+        line_b = json.dumps({
+            "cwd": "/home/user/project-b",
+            "timestamp": "2026-02-11T10:00:00Z",
+        })
+        (folder / "bbb.jsonl").write_text(line_b + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == "/home/user/project-a"
+        assert "2026-02-10" in work_days
+        assert "2026-02-11" in work_days
+
+    def test_missing_cwd_field(self, tmp_path):
+        """File with no cwd field returns empty path."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        line = json.dumps({
+            "type": "user",
+            "timestamp": "2026-02-15T10:00:00Z",
+        })
+        (folder / "session.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == ""
+        assert "2026-02-15" in work_days
+
+    def test_empty_file(self, tmp_path):
+        """Empty file is skipped gracefully."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "empty.jsonl").write_text("", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == ""
+        assert len(work_days) == 0
+
+    def test_malformed_json(self, tmp_path):
+        """Malformed JSON line is skipped gracefully."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "bad.jsonl").write_text("not valid json\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == ""
+        assert len(work_days) == 0
+
+    def test_no_jsonl_files(self, tmp_path):
+        """Folder with no .jsonl files returns empty results."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        (folder / "readme.txt").write_text("hello", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == ""
+        assert len(work_days) == 0
+
+    def test_missing_timestamp_still_extracts_cwd(self, tmp_path):
+        """File with cwd but no timestamp still extracts the path."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        line = json.dumps({"cwd": "/home/user/proj"})
+        (folder / "session.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == "/home/user/proj"
+        assert len(work_days) == 0
+
+
+# =============================================================================
+# list_all_sessions Tests
+# =============================================================================
+
+
+class TestListAllSessions:
+    def test_finds_sessions_from_jsonl_files(self, tmp_path):
+        """Discovers sessions from .jsonl files in project directories."""
+        projects_dir = tmp_path / "projects"
+        project_folder = projects_dir / "-home-user-myproject"
+        project_folder.mkdir(parents=True)
+
+        line = json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}})
+        (project_folder / "sess-abc.jsonl").write_text(line + "\n", encoding="utf-8")
+        (project_folder / "sess-def.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 2
+        session_ids = {s.session_id for s in sessions}
+        assert "sess-abc" in session_ids
+        assert "sess-def" in session_ids
+
+    def test_skips_subagent_files(self, tmp_path):
+        """Files with 'subagent' in the name are excluded."""
+        projects_dir = tmp_path / "projects"
+        project_folder = projects_dir / "-home-user-proj"
+        project_folder.mkdir(parents=True)
+
+        line = json.dumps({"type": "user"})
+        (project_folder / "normal-session.jsonl").write_text(line + "\n", encoding="utf-8")
+        (project_folder / "subagent-123.jsonl").write_text(line + "\n", encoding="utf-8")
+        (project_folder / "task-subagent-456.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 1
+        assert sessions[0].session_id == "normal-session"
+
+    def test_sorted_by_mtime_descending(self, tmp_path):
+        """Sessions are sorted by file modification time, newest first."""
+        import time
+
+        projects_dir = tmp_path / "projects"
+        project_folder = projects_dir / "-home-user-proj"
+        project_folder.mkdir(parents=True)
+
+        line = json.dumps({"type": "user"})
+
+        older_file = project_folder / "older.jsonl"
+        older_file.write_text(line + "\n", encoding="utf-8")
+        old_mtime = time.time() - 100
+        os.utime(older_file, (old_mtime, old_mtime))
+
+        newer_file = project_folder / "newer.jsonl"
+        newer_file.write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 2
+        assert sessions[0].session_id == "newer"
+        assert sessions[1].session_id == "older"
+
+    def test_returns_empty_for_nonexistent_dir(self, tmp_path):
+        """Returns empty list when projects directory doesn't exist."""
+        nonexistent = tmp_path / "does-not-exist"
+        with mock.patch("indexing.get_projects_dir", return_value=nonexistent):
+            sessions = list_all_sessions()
+        assert sessions == []
+
+    def test_populates_session_info_fields(self, tmp_path):
+        """SessionInfo objects have correct fields populated."""
+        projects_dir = tmp_path / "projects"
+        project_folder = projects_dir / "-home-user-proj"
+        project_folder.mkdir(parents=True)
+
+        line = json.dumps({"type": "user"})
+        (project_folder / "test-sess.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.session_id == "test-sess"
+        assert s.project_hash == "-home-user-proj"
+        assert s.file_size > 0
+        assert s.file_mtime is not None
+        assert s.transcript_path == project_folder / "test-sess.jsonl"
+
+    def test_enriches_from_sessions_index(self, tmp_path):
+        """Session metadata is enriched from sessions-index.json when available."""
+        projects_dir = tmp_path / "projects"
+        project_folder = projects_dir / "-home-user-proj"
+        project_folder.mkdir(parents=True)
+
+        line = json.dumps({"type": "user"})
+        (project_folder / "sess-enriched.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        sessions_index = {
+            "version": 1,
+            "originalPath": "/home/user/proj",
+            "entries": [
+                {
+                    "sessionId": "sess-enriched",
+                    "created": "2026-02-20T14:00:00Z",
+                    "summary": "Worked on feature X",
+                }
+            ],
+        }
+        (project_folder / "sessions-index.json").write_text(
+            json.dumps(sessions_index), encoding="utf-8"
+        )
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.project_path == "/home/user/proj"
+        assert s.summary == "Worked on feature X"
+        assert s.created is not None
+        assert s.created.year == 2026
+        assert s.created.month == 2
+        assert s.created.day == 20
+
+    def test_multiple_project_folders(self, tmp_path):
+        """Sessions from multiple project folders are all discovered."""
+        projects_dir = tmp_path / "projects"
+
+        for name in ["-proj-a", "-proj-b"]:
+            folder = projects_dir / name
+            folder.mkdir(parents=True)
+            line = json.dumps({"type": "user"})
+            (folder / f"sess-{name}.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 2
+
+    def test_skips_non_directory_entries(self, tmp_path):
+        """Files directly under projects_dir (not directories) are skipped."""
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir(parents=True)
+        (projects_dir / "stray-file.txt").write_text("hello", encoding="utf-8")
+
+        project_folder = projects_dir / "-home-user-proj"
+        project_folder.mkdir()
+        line = json.dumps({"type": "user"})
+        (project_folder / "sess.jsonl").write_text(line + "\n", encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 1
 
 
 if __name__ == "__main__":

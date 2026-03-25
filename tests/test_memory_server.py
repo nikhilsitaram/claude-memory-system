@@ -843,8 +843,9 @@ class TestSearchMemoriesHybrid:
 
     def test_uses_search_hybrid(self):
         """_search_memories calls search_hybrid when available."""
-        from unittest.mock import patch, MagicMock
         import asyncio
+        from unittest.mock import MagicMock, patch
+
         import memory_server
         from memory_server import _search_memories
 
@@ -863,15 +864,16 @@ class TestSearchMemoriesHybrid:
         with patch("memory_server.search_hybrid", return_value=[mock_result]) as mock_hybrid, \
              patch("memory_server.query_edges_for_data_point", return_value=[]), \
              patch.object(memory_server, '_db_conn', mock_conn):
-            result = asyncio.get_event_loop().run_until_complete(
+            asyncio.get_event_loop().run_until_complete(
                 _search_memories("Redis cache", scope=None, top_k=5)
             )
             mock_hybrid.assert_called_once()
 
     def test_falls_back_to_sql_when_hybrid_empty(self):
         """Falls back to _sql_ranked_search when search_hybrid returns nothing."""
-        from unittest.mock import patch, MagicMock
         import asyncio
+        from unittest.mock import patch
+
         from memory_server import _search_memories
 
         with patch("memory_server.search_hybrid", return_value=[]), \
@@ -918,7 +920,9 @@ class TestCertaintyInWriteMemory:
             pytest.skip("MCP not available")
         # Verify certainty is in the tool definition source code directly
         # (MCP server internal handler API varies across versions)
-        import memory_server, inspect
+        import inspect
+
+        import memory_server
         source = inspect.getsource(memory_server)
         assert '"certainty"' in source
         assert "write_memory" in TOOL_NAMES

@@ -179,6 +179,7 @@ class TestExtendedHealthReport:
 
     def _make_v3_db(self, tmp_path):
         from unittest.mock import patch
+
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
@@ -188,7 +189,7 @@ class TestExtendedHealthReport:
         return conn
 
     def test_memories_by_scope(self, tmp_path):
-        from storage import insert_data_point, DataPointRow
+        from storage import DataPointRow, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="g1", scope="global", salience=0.5))
         insert_data_point(conn, DataPointRow(type="memory", content="p1", scope="my-project", salience=0.5))
@@ -200,7 +201,7 @@ class TestExtendedHealthReport:
         conn.close()
 
     def test_memories_by_type(self, tmp_path):
-        from storage import insert_data_point, DataPointRow
+        from storage import DataPointRow, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
         insert_data_point(conn, DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.5))
@@ -212,7 +213,7 @@ class TestExtendedHealthReport:
         conn.close()
 
     def test_never_accessed_pct(self, tmp_path):
-        from storage import insert_data_point, DataPointRow
+        from storage import DataPointRow, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="never", scope="global", salience=0.5, access_count=0))
         insert_data_point(conn, DataPointRow(type="memory", content="once", scope="global", salience=0.5, access_count=1))
@@ -224,7 +225,8 @@ class TestExtendedHealthReport:
 
     def test_edges_per_entity(self, tmp_path):
         from datetime import datetime, timezone
-        from storage import insert_data_point, insert_edge, DataPointRow, EdgeRow
+
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
         conn = self._make_v3_db(tmp_path)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
@@ -253,7 +255,7 @@ class TestExtendedHealthReport:
 
     def test_last_consolidation_populated(self, tmp_path):
         """last_consolidation is read from metadata table."""
-        from storage import insert_data_point, DataPointRow
+        from storage import DataPointRow, insert_data_point
         conn = self._make_v3_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
         conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
@@ -267,7 +269,8 @@ class TestExtendedHealthReport:
     def test_newest_edge_days_populated(self, tmp_path):
         """newest_edge_days is calculated from the most recent active edge."""
         from datetime import datetime, timedelta, timezone
-        from storage import insert_data_point, insert_edge, DataPointRow, EdgeRow
+
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
         conn = self._make_v3_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
         e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))

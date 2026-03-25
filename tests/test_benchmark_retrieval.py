@@ -10,15 +10,12 @@ Usage:
 """
 import json
 import math
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from storage import ensure_db, insert_data_point, DataPointRow, fts_insert
-
+from storage import DataPointRow, ensure_db, fts_insert, insert_data_point
 
 BASELINE_PATH = Path(__file__).parent / "benchmark_baseline.json"
 
