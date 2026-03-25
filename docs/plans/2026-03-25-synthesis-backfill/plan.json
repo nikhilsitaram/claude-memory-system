@@ -53,7 +53,7 @@
     {
       "letter": "B",
       "name": "Pipeline Integration + Session Import",
-      "status": "Not Started",
+      "status": "Complete (2026-03-25)",
       "depends_on": [
         "A"
       ],
@@ -62,7 +62,7 @@
         {
           "id": "B1",
           "name": "Switch list_recent_sessions and get_recent_days to working days",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -81,7 +81,7 @@
         {
           "id": "B2",
           "name": "Switch session continuity and recent activity loading to working days",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -98,7 +98,7 @@
         {
           "id": "B3",
           "name": "Create session import utility",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [
