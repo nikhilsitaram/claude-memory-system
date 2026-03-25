@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "In Development",
+  "status": "Complete",
   "workflow": "pr-create",
   "execution_mode": "subagents",
   "goal": "Enable synthesis of full session history via --backfill, switch all time windows to working days, remove consolidated decay immunity, and add cross-machine session import.",
@@ -120,7 +120,7 @@
     {
       "letter": "C",
       "name": "Backfill Feature",
-      "status": "Not Started",
+      "status": "Complete (2026-03-25)",
       "depends_on": [
         "A",
         "B"
@@ -130,7 +130,7 @@
         {
           "id": "C1",
           "name": "Add backfill command to synthesis_cron.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -147,7 +147,7 @@
         {
           "id": "C2",
           "name": "Update /synthesize skill for backfill and import flags",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [
             "C1"
           ],
