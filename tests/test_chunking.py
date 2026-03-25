@@ -545,7 +545,7 @@ class TestChunkingIntegration:
         assert "global|claude-memory" in scopes
 
     def test_near_duplicate_entries_have_close_simhash(self):
-        from simhash import hamming_distance, DEFAULT_HAMMING_THRESHOLD
+        from simhash import DEFAULT_HAMMING_THRESHOLD, hamming_distance
 
         content = (
             "## Key Actions\n"
@@ -561,7 +561,7 @@ class TestChunkingIntegration:
         assert dist <= DEFAULT_HAMMING_THRESHOLD * 3
 
     def test_different_entries_have_distant_simhash(self):
-        from simhash import hamming_distance, DEFAULT_HAMMING_THRESHOLD
+        from simhash import DEFAULT_HAMMING_THRESHOLD, hamming_distance
 
         content = (
             "## Key Actions\n"

@@ -1,16 +1,27 @@
 [project]
 name = "claude-memory-system"
-version = "0.1.0"
-requires-python = ">=3.13"
+version = "1.0.0"
+description = "SQL-first knowledge graph memory persistence for Claude Code"
+requires-python = ">=3.10"
 dependencies = [
-    "sqlite-vec>=0.1.7",
     "Pygments>=2.19",
+    "sqlite-vec>=0.1.7",
+    "fastembed>=0.4.0",
+    "mcp>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "ruff>=0.9",
 ]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120

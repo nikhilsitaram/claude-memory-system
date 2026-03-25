@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Claude Memory System</title>
+    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f1117;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* ---- Nav ---- */
+        #nav {
+            background: #1a1d2e;
+            border-bottom: 1px solid #2d3052;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            height: 48px;
+        }
+        #nav .brand {
+            font-weight: 700;
+            font-size: 15px;
+            color: #7c8cff;
+            margin-right: 20px;
+            letter-spacing: -0.3px;
+        }
+        #nav button {
+            background: none;
+            border: none;
+            color: #a0a8c0;
+            padding: 6px 14px;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: background 0.15s, color 0.15s;
+        }
+        #nav button:hover { background: #252840; color: #e0e0e0; }
+        #nav button.active { background: #2d3360; color: #7c8cff; font-weight: 600; }
+
+        /* ---- Main ---- */
+        #main { padding: 24px; max-width: 1200px; }
+
+        section { display: none; }
+        section.active { display: block; }
+
+        /* ---- Cards ---- */
+        .card-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+        .stat-card {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            border-radius: 10px;
+            padding: 18px 24px;
+            min-width: 160px;
+            flex: 1;
+        }
+        .stat-card .label { font-size: 12px; color: #6b7494; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: #7c8cff; margin-top: 4px; }
+
+        /* ---- Histogram ---- */
+        .histogram { background: #1a1d2e; border: 1px solid #2d3052; border-radius: 10px; padding: 16px 20px; margin-bottom: 24px; }
+        .histogram h3 { font-size: 13px; color: #6b7494; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+        .hist-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+        .hist-label { width: 70px; color: #a0a8c0; text-align: right; flex-shrink: 0; }
+        .hist-bar-wrap { flex: 1; background: #252840; border-radius: 4px; height: 14px; }
+        .hist-bar { height: 14px; border-radius: 4px; background: #7c8cff; transition: width 0.3s; }
+        .hist-count { width: 40px; color: #6b7494; font-size: 11px; }
+
+        /* ---- Recent list ---- */
+        .section-title { font-size: 13px; color: #6b7494; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+        .dp-list { display: flex; flex-direction: column; gap: 8px; }
+        .dp-item {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            border-radius: 8px;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .dp-item:hover { border-color: #7c8cff; background: #1e2138; }
+        .dp-item .dp-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .dp-item .dp-content { font-size: 13px; color: #c0c8e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+        .badge-memory   { background: #1e2d6e; color: #7c8cff; }
+        .badge-entity   { background: #1a3d2a; color: #4ade80; }
+        .badge-session  { background: #3d2a12; color: #fb923c; }
+        .badge-profile  { background: #3d3a10; color: #facc15; }
+        .badge-default  { background: #252840; color: #a0a8c0; }
+        .scope-tag { font-size: 11px; color: #6b7494; }
+        .sal-tag   { font-size: 11px; color: #a0a8c0; margin-left: auto; }
+
+        /* ---- Browse / table ---- */
+        .filter-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+        .filter-row label { font-size: 13px; color: #a0a8c0; }
+        .filter-row select, .filter-row input {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            color: #e0e0e0;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .filter-row button {
+            background: #2d3360;
+            border: none;
+            color: #7c8cff;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .filter-row button:hover { background: #363d80; }
+
+        .pagination { display: flex; gap: 8px; margin-top: 16px; align-items: center; }
+        .pagination button {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            color: #a0a8c0;
+            padding: 5px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .pagination button:disabled { opacity: 0.4; cursor: default; }
+        .pagination button:hover:not(:disabled) { border-color: #7c8cff; color: #7c8cff; }
+        .pagination .page-info { font-size: 13px; color: #6b7494; }
+
+        /* ---- Search ---- */
+        .search-row { display: flex; gap: 10px; margin-bottom: 20px; }
+        .search-row input {
+            flex: 1;
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            color: #e0e0e0;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .search-row input:focus { outline: none; border-color: #7c8cff; }
+        .search-row button {
+            background: #2d3360;
+            border: none;
+            color: #7c8cff;
+            padding: 8px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .search-row button:hover { background: #363d80; }
+        .search-hint { font-size: 12px; color: #6b7494; margin-bottom: 14px; }
+
+        /* ---- Graph ---- */
+        #graph-controls { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+        #graph-controls select {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            color: #e0e0e0;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        #graph-controls button {
+            background: #2d3360;
+            border: none;
+            color: #7c8cff;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #graph-container {
+            width: 100%;
+            height: 560px;
+            background: #13162a;
+            border: 1px solid #2d3052;
+            border-radius: 10px;
+        }
+        .graph-legend { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a0a8c0; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+        /* ---- Modal ---- */
+        #modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.65);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        #modal-overlay.open { display: flex; }
+        #modal {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            border-radius: 12px;
+            width: 680px;
+            max-width: 95vw;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 28px;
+        }
+        #modal h2 { font-size: 16px; color: #e0e0e0; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+        #modal .close-btn {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: #6b7494;
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+        }
+        .detail-field { margin-bottom: 12px; }
+        .detail-field .field-label { font-size: 11px; color: #6b7494; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+        .detail-field .field-value { font-size: 13px; color: #c0c8e0; word-break: break-word; }
+        .detail-field textarea {
+            width: 100%;
+            background: #13162a;
+            border: 1px solid #2d3052;
+            color: #e0e0e0;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            resize: vertical;
+            min-height: 80px;
+        }
+        .detail-field input[type=number] {
+            background: #13162a;
+            border: 1px solid #2d3052;
+            color: #e0e0e0;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 120px;
+        }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .btn-edit {
+            background: #2d3360;
+            border: none;
+            color: #7c8cff;
+            padding: 8px 18px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .btn-edit:hover { background: #363d80; }
+        .btn-save {
+            background: #1a3d2a;
+            border: none;
+            color: #4ade80;
+            padding: 8px 18px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .btn-save:hover { background: #1e5035; }
+        .btn-delete {
+            background: #3d1a1a;
+            border: none;
+            color: #f87171;
+            padding: 8px 18px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .btn-delete:hover { background: #5a2020; }
+        .btn-cancel {
+            background: none;
+            border: 1px solid #2d3052;
+            color: #a0a8c0;
+            padding: 8px 14px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .edges-section { margin-top: 16px; }
+        .edges-section h3 { font-size: 12px; color: #6b7494; text-transform: uppercase; margin-bottom: 8px; }
+        .edge-item { font-size: 12px; color: #a0a8c0; padding: 5px 0; border-bottom: 1px solid #252840; }
+        .edge-item:last-child { border-bottom: none; }
+
+        /* ---- Toast ---- */
+        #toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(40px);
+            background: #2d3360;
+            color: #7c8cff;
+            padding: 10px 22px;
+            border-radius: 8px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.2s, transform 0.2s;
+            z-index: 2000;
+        }
+        #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        #toast.error { background: #3d1a1a; color: #f87171; }
+
+        /* ---- Loading ---- */
+        .loading { color: #6b7494; font-size: 14px; padding: 20px 0; text-align: center; }
+        .empty-state { color: #6b7494; font-size: 14px; padding: 32px 0; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div id="nav">
+    <span class="brand">Claude Memory</span>
+    <button class="active" onclick="showSection('dashboard')">Dashboard</button>
+    <button onclick="showSection('browse')">Browse</button>
+    <button onclick="showSection('search')">Search</button>
+    <button onclick="showSection('graph')">Graph</button>
+</div>
+
+<div id="main">
+    <!-- Dashboard -->
+    <section id="section-dashboard" class="active">
+        <div id="dash-stats" class="card-row"></div>
+        <div class="histogram">
+            <h3>Salience Distribution</h3>
+            <div id="salience-hist"></div>
+        </div>
+        <div class="section-title">Recent Activity</div>
+        <div id="recent-list" class="dp-list"></div>
+    </section>
+
+    <!-- Browse -->
+    <section id="section-browse">
+        <div class="filter-row">
+            <label>Scope
+                <select id="browse-scope">
+                    <option value="">All</option>
+                    <option value="global">global</option>
+                </select>
+            </label>
+            <label>Type
+                <select id="browse-type">
+                    <option value="">All</option>
+                    <option value="memory">memory</option>
+                    <option value="entity">entity</option>
+                    <option value="session_context">session_context</option>
+                    <option value="profile">profile</option>
+                </select>
+            </label>
+            <label>Limit
+                <select id="browse-limit">
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                </select>
+            </label>
+            <button onclick="loadBrowse(0)">Apply</button>
+        </div>
+        <div id="browse-list" class="dp-list"></div>
+        <div class="pagination">
+            <button id="prev-btn" onclick="browsePage(-1)" disabled>Prev</button>
+            <span class="page-info" id="browse-page-info">Page 1</span>
+            <button id="next-btn" onclick="browsePage(1)">Next</button>
+        </div>
+    </section>
+
+    <!-- Search -->
+    <section id="section-search">
+        <div class="search-row">
+            <input type="text" id="search-input" placeholder="Search memories..." onkeydown="if(event.key==='Enter')doSearch()">
+            <button onclick="doSearch()">Search</button>
+        </div>
+        <div class="search-hint">Searches content and name fields. Results ordered by salience.</div>
+        <div id="search-results" class="dp-list"></div>
+    </section>
+
+    <!-- Graph -->
+    <section id="section-graph">
+        <div id="graph-controls">
+            <label>Scope
+                <select id="graph-scope">
+                    <option value="">All</option>
+                    <option value="global">global</option>
+                </select>
+            </label>
+            <label>Limit
+                <select id="graph-limit">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                </select>
+            </label>
+            <button onclick="loadGraph()">Reload</button>
+        </div>
+        <div id="graph-container"></div>
+        <div class="graph-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#7c8cff"></div>memory</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div>entity</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#fb923c"></div>session_context</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#facc15"></div>profile</div>
+        </div>
+    </section>
+</div>
+
+<!-- Detail Modal -->
+<div id="modal-overlay">
+    <div id="modal">
+        <h2 id="modal-title">Data Point<button class="close-btn" onclick="closeModal()">&#x2715;</button></h2>
+        <div id="modal-body"></div>
+        <div class="modal-actions" id="modal-actions"></div>
+    </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<script>
+    const CSRF_TOKEN = "{{CSRF_TOKEN}}";
+
+    // -----------------------------------------------------------------------
+    // Nav
+    // -----------------------------------------------------------------------
+    let _currentSection = 'dashboard';
+
+    function showSection(name) {
+        _currentSection = name;
+        document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+        document.getElementById('section-' + name).classList.add('active');
+        document.querySelectorAll('#nav button').forEach(b => b.classList.remove('active'));
+        event.target.classList.add('active');
+        if (name === 'dashboard') loadDashboard();
+        if (name === 'browse') loadBrowse(0);
+        if (name === 'graph') loadGraph();
+    }
+
+    function _refreshCurrentView() {
+        if (_currentSection === 'browse') loadBrowse(browseOffset);
+        else if (_currentSection === 'graph') loadGraph();
+        else loadDashboard();
+    }
+
+    // -----------------------------------------------------------------------
+    // Toast
+    // -----------------------------------------------------------------------
+    function toast(msg, isError) {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = isError ? 'show error' : 'show';
+        setTimeout(() => { el.className = ''; }, 3000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Type badge
+    // -----------------------------------------------------------------------
+    function typeBadge(type) {
+        const cls = {memory: 'badge-memory', entity: 'badge-entity', session_context: 'badge-session', profile: 'badge-profile'}[type] || 'badge-default';
+        return `<span class="badge ${cls}">${type || 'unknown'}</span>`;
+    }
+
+    function renderDpItem(dp, onclick) {
+        const content = (dp.content || dp.name || '').substring(0, 120);
+        return `<div class="dp-item" onclick="${onclick}">
+            <div class="dp-header">
+                ${typeBadge(dp.type)}
+                <span class="scope-tag">${dp.scope || ''}</span>
+                <span class="sal-tag">&#9679; ${(dp.salience || 0).toFixed(2)}</span>
+            </div>
+            <div class="dp-content">${escHtml(content)}</div>
+        </div>`;
+    }
+
+    function escHtml(s) {
+        return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // -----------------------------------------------------------------------
+    // Dashboard
+    // -----------------------------------------------------------------------
+    async function loadDashboard() {
+        const statsEl = document.getElementById('dash-stats');
+        const histEl = document.getElementById('salience-hist');
+        const recentEl = document.getElementById('recent-list');
+        statsEl.innerHTML = '<div class="loading">Loading...</div>';
+        try {
+            const data = await fetch('/api/stats').then(r => r.json());
+            const byType = data.by_type || {};
+            statsEl.innerHTML = `
+                <div class="stat-card"><div class="label">Total Memories</div><div class="value">${data.total_memories}</div></div>
+                <div class="stat-card"><div class="label">Entities</div><div class="value">${byType.entity || 0}</div></div>
+                <div class="stat-card"><div class="label">Sessions</div><div class="value">${byType.session_context || 0}</div></div>
+                <div class="stat-card"><div class="label">Profiles</div><div class="value">${byType.profile || 0}</div></div>
+            `;
+
+            // Histogram
+            const dist = data.salience_distribution || {};
+            const maxCount = Math.max(1, ...Object.values(dist));
+            histEl.innerHTML = Object.entries(dist).map(([k, v]) => `
+                <div class="hist-bar-row">
+                    <div class="hist-label">${k}</div>
+                    <div class="hist-bar-wrap"><div class="hist-bar" style="width:${Math.round(v/maxCount*100)}%"></div></div>
+                    <div class="hist-count">${v}</div>
+                </div>
+            `).join('');
+
+            // Recent
+            recentEl.innerHTML = (data.recent_activity || []).map(dp =>
+                renderDpItem(dp, `openDetail('${dp.id}')`)
+            ).join('') || '<div class="empty-state">No memories yet.</div>';
+        } catch(e) {
+            statsEl.innerHTML = '<div class="empty-state">Failed to load stats.</div>';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Browse
+    // -----------------------------------------------------------------------
+    let browseOffset = 0;
+
+    function browsePage(dir) {
+        const limit = parseInt(document.getElementById('browse-limit').value);
+        browseOffset = Math.max(0, browseOffset + dir * limit);
+        loadBrowse(browseOffset);
+    }
+
+    async function loadBrowse(offset) {
+        browseOffset = offset;
+        const scope = document.getElementById('browse-scope').value;
+        const type = document.getElementById('browse-type').value;
+        const limit = parseInt(document.getElementById('browse-limit').value);
+        const listEl = document.getElementById('browse-list');
+        listEl.innerHTML = '<div class="loading">Loading...</div>';
+
+        let url = `/api/data_points?limit=${limit}&offset=${offset}`;
+        if (scope) url += `&scope=${encodeURIComponent(scope)}`;
+        if (type) url += `&type=${encodeURIComponent(type)}`;
+
+        try {
+            const items = await fetch(url).then(r => r.json());
+            listEl.innerHTML = items.map(dp =>
+                renderDpItem(dp, `openDetail('${dp.id}')`)
+            ).join('') || '<div class="empty-state">No results.</div>';
+
+            document.getElementById('prev-btn').disabled = offset <= 0;
+            document.getElementById('next-btn').disabled = items.length < limit;
+            document.getElementById('browse-page-info').textContent =
+                `Page ${Math.floor(offset / limit) + 1}`;
+        } catch(e) {
+            listEl.innerHTML = '<div class="empty-state">Failed to load.</div>';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Search
+    // -----------------------------------------------------------------------
+    async function doSearch() {
+        const q = document.getElementById('search-input').value.trim();
+        if (!q) return;
+        const resultsEl = document.getElementById('search-results');
+        resultsEl.innerHTML = '<div class="loading">Searching...</div>';
+        try {
+            const items = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+            resultsEl.innerHTML = items.map(dp =>
+                renderDpItem(dp, `openDetail('${dp.id}')`)
+            ).join('') || '<div class="empty-state">No results found.</div>';
+        } catch(e) {
+            resultsEl.innerHTML = '<div class="empty-state">Search failed.</div>';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Graph
+    // -----------------------------------------------------------------------
+    let _network = null;
+    const TYPE_COLORS = {
+        memory: '#7c8cff', entity: '#4ade80',
+        session_context: '#fb923c', profile: '#facc15',
+    };
+
+    async function loadGraph() {
+        const scope = document.getElementById('graph-scope').value;
+        const limit = document.getElementById('graph-limit').value;
+        let url = `/api/graph?limit=${limit}`;
+        if (scope) url += `&scope=${encodeURIComponent(scope)}`;
+        const container = document.getElementById('graph-container');
+        container.innerHTML = '<div class="loading">Loading graph...</div>';
+
+        try {
+            const data = await fetch(url).then(r => r.json());
+            container.innerHTML = '';
+
+            const nodes = new vis.DataSet(data.nodes.map(n => ({
+                id: n.id,
+                label: (n.label || '').substring(0, 30),
+                title: n.label,
+                color: {
+                    background: TYPE_COLORS[n.type] || '#6b7494',
+                    border: '#252840',
+                    highlight: { background: '#ffffff', border: '#7c8cff' },
+                },
+                font: { color: '#0f1117', size: 11 },
+                size: 14 + Math.round((n.salience || 0) * 12),
+            })));
+
+            const edges = new vis.DataSet(data.edges.map(e => ({
+                id: e.id, from: e.from, to: e.to,
+                label: e.label || '',
+                title: e.title || '',
+                color: { color: '#3d4060', highlight: '#7c8cff' },
+                font: { color: '#6b7494', size: 9 },
+                arrows: 'to',
+            })));
+
+            const options = {
+                nodes: { shape: 'dot', borderWidth: 1.5 },
+                edges: { smooth: { type: 'curvedCW', roundness: 0.15 } },
+                physics: {
+                    barnesHut: { gravitationalConstant: -6000, springLength: 100 },
+                    stabilization: { iterations: 150 },
+                },
+                interaction: { hover: true, tooltipDelay: 200 },
+            };
+
+            _network = new vis.Network(container, { nodes, edges }, options);
+            _network.on('click', params => {
+                if (params.nodes.length > 0) openDetail(params.nodes[0]);
+            });
+
+            if (data.nodes.length === 0) {
+                container.innerHTML = '<div class="empty-state">No data points to show.</div>';
+            }
+        } catch(e) {
+            container.innerHTML = '<div class="empty-state">Failed to load graph.</div>';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Detail Modal
+    // -----------------------------------------------------------------------
+    let _currentDpId = null;
+    let _currentDp = null;
+    let _editMode = false;
+
+    async function openDetail(dpId) {
+        _currentDpId = dpId;
+        _editMode = false;
+        const overlay = document.getElementById('modal-overlay');
+        overlay.classList.add('open');
+        document.getElementById('modal-body').innerHTML = '<div class="loading">Loading...</div>';
+        document.getElementById('modal-actions').innerHTML = '';
+
+        try {
+            const dp = await fetch(`/api/data_point/${dpId}`).then(r => r.json());
+            if (dp.error) {
+                document.getElementById('modal-body').innerHTML = `<div class="empty-state">${escHtml(dp.error)}</div>`;
+                return;
+            }
+            renderDetail(dp);
+        } catch(e) {
+            document.getElementById('modal-body').innerHTML = '<div class="empty-state">Failed to load.</div>';
+        }
+    }
+
+    function renderDetail(dp) {
+        const titleEl = document.getElementById('modal-title');
+        titleEl.innerHTML = `${typeBadge(dp.type)} <span style="font-weight:400;color:#a0a8c0">${escHtml(dp.scope || '')}</span><button class="close-btn" onclick="closeModal()">&#x2715;</button>`;
+
+        const fields = [
+            ['ID', dp.id],
+            ['Name', dp.name],
+            ['Salience', dp.salience != null ? dp.salience.toFixed(3) : null],
+            ['Created', dp.created_at],
+            ['Entry Type', dp.entry_type],
+            ['Source Type', dp.source_type],
+            ['Evidence Count', dp.evidence_count],
+            ['Access Count', dp.access_count],
+            ['Last Accessed', dp.last_accessed],
+            ['Entities', dp.entities],
+            ['Properties', dp.properties],
+        ].filter(([, v]) => v != null && v !== '');
+
+        const contentHtml = `<div class="detail-field">
+            <div class="field-label">Content</div>
+            <div class="field-value" style="white-space:pre-wrap">${escHtml(dp.content || '')}</div>
+        </div>`;
+
+        const metaHtml = fields.map(([label, val]) => `
+            <div class="detail-field">
+                <div class="field-label">${label}</div>
+                <div class="field-value">${escHtml(String(val))}</div>
+            </div>
+        `).join('');
+
+        const edgesHtml = dp.edges && dp.edges.length ? `
+            <div class="edges-section">
+                <h3>Edges (${dp.edges.length})</h3>
+                ${dp.edges.map(e => `<div class="edge-item">
+                    <strong>${escHtml(e.type || '')}</strong>
+                    ${e.source === dp.id ? '&#x2192;' : '&#x2190;'}
+                    <code style="font-size:11px;color:#7c8cff">${escHtml(e.source === dp.id ? e.target : e.source)}</code>
+                    ${e.fact ? `<br><span style="color:#6b7494">${escHtml(e.fact)}</span>` : ''}
+                    ${e.valid_to ? `<span style="color:#f87171;font-size:10px;margin-left:6px">expired</span>` : ''}
+                </div>`).join('')}
+            </div>
+        ` : '';
+
+        _currentDp = dp;
+        document.getElementById('modal-body').innerHTML = contentHtml + metaHtml + edgesHtml;
+        const actionsEl = document.getElementById('modal-actions');
+        actionsEl.innerHTML = `
+            <button class="btn-edit" id="btn-edit-dp">Edit</button>
+            <button class="btn-delete" onclick="confirmDelete('${dp.id}')">Delete</button>
+        `;
+        document.getElementById('btn-edit-dp').addEventListener('click', function() {
+            startEdit(_currentDp);
+        });
+    }
+
+    function startEdit(dp) {
+        _editMode = true;
+        document.getElementById('modal-body').innerHTML = `
+            <div class="detail-field">
+                <div class="field-label">Content</div>
+                <textarea id="edit-content">${escHtml(dp.content || '')}</textarea>
+            </div>
+            <div class="detail-field">
+                <div class="field-label">Salience (0.0 – 1.0)</div>
+                <input type="number" id="edit-salience" min="0" max="1" step="0.01" value="${dp.salience != null ? dp.salience : 1}">
+            </div>
+        `;
+        document.getElementById('modal-actions').innerHTML = `
+            <button class="btn-save" onclick="saveEdit('${dp.id}')">Save</button>
+            <button class="btn-cancel" onclick="openDetail('${dp.id}')">Cancel</button>
+        `;
+    }
+
+    async function saveEdit(dpId) {
+        const content = document.getElementById('edit-content').value;
+        const salience = parseFloat(document.getElementById('edit-salience').value);
+        try {
+            const res = await fetch(`/api/data_point/${dpId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
+                body: JSON.stringify({ content, salience }),
+            });
+            const data = await res.json();
+            if (data.status === 'updated') {
+                toast('Saved successfully');
+                openDetail(dpId);
+            } else {
+                toast(data.error || 'Update failed', true);
+            }
+        } catch(e) {
+            toast('Request failed', true);
+        }
+    }
+
+    async function confirmDelete(dpId) {
+        if (!confirm('Delete this memory? This cannot be undone.')) return;
+        try {
+            const res = await fetch(`/api/data_point/${dpId}?reason=user_delete`, {
+                method: 'DELETE',
+                headers: { 'X-CSRF-Token': CSRF_TOKEN },
+            });
+            const data = await res.json();
+            if (data.status === 'deleted') {
+                toast('Deleted');
+                closeModal();
+                _refreshCurrentView();
+            } else {
+                toast(data.error || 'Delete failed', true);
+            }
+        } catch(e) {
+            toast('Request failed', true);
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('modal-overlay').classList.remove('open');
+        _currentDpId = null;
+    }
+
+    // Close modal on overlay click
+    document.getElementById('modal-overlay').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+
+    // -----------------------------------------------------------------------
+    // Init
+    // -----------------------------------------------------------------------
+    loadDashboard();
+</script>
+</body>
+</html>

@@ -133,3 +133,43 @@ class TestAreNearDuplicates:
         a = 0
         b = (1 << DEFAULT_HAMMING_THRESHOLD) - 1
         assert are_near_duplicates(a, b) is True
+
+
+class TestHammingDistanceSignedGuard:
+    """Tests for hamming_distance rejection of signed (negative) integers."""
+
+    def test_negative_a_raises_value_error(self):
+        import pytest
+        with pytest.raises(ValueError, match="non-negative"):
+            hamming_distance(-1, 42)
+
+    def test_negative_b_raises_value_error(self):
+        import pytest
+        with pytest.raises(ValueError, match="non-negative"):
+            hamming_distance(42, -1)
+
+    def test_both_negative_raises_value_error(self):
+        import pytest
+        with pytest.raises(ValueError, match="non-negative"):
+            hamming_distance(-100, -200)
+
+    def test_error_message_includes_cast_hint(self):
+        import pytest
+        with pytest.raises(ValueError, match="0xFFFFFFFFFFFFFFFF"):
+            hamming_distance(-1, 0)
+
+    def test_zero_values_still_work(self):
+        assert hamming_distance(0, 0) == 0
+
+    def test_large_unsigned_values_still_work(self):
+        a = (1 << 63) + 42
+        b = (1 << 63) + 43
+        result = hamming_distance(a, b)
+        assert isinstance(result, int)
+        assert result >= 0
+
+    def test_are_near_duplicates_also_guarded(self):
+        """are_near_duplicates delegates to hamming_distance, so it inherits the guard."""
+        import pytest
+        with pytest.raises(ValueError, match="non-negative"):
+            are_near_duplicates(-1, 42)

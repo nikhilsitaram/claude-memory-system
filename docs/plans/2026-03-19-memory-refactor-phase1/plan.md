@@ -1,5 +1,5 @@
 ---
-status: In Development
+status: Not Yet Started
 ---
 
 # CPU-only embedding + vector search module for semantic memory retrieval Implementation Plan
@@ -15,7 +15,7 @@ status: In Development
 ## Phase A — Embeddings and Vector Search
 **Status:** Not Started | **Rationale:** Single phase because all functions depend on the same two externals (fastembed + sqlite-vec) with no internal dependency layers. The design doc explicitly states no benefit to splitting.
 
-- [x] A1: Integration test skeleton for embeddings module — *Test file exists with test classes TestEmbedText, TestIndexChunks, TestSearchSimilar, TestScoring, TestGracefulDegradation, TestReindex. All tests fail with ImportError since embeddings.py does not exist yet.*
+- [ ] A1: Integration test skeleton for embeddings module — *Test file exists with test classes TestEmbedText, TestIndexChunks, TestSearchSimilar, TestScoring, TestGracefulDegradation, TestReindex. All tests fail with ImportError since embeddings.py does not exist yet.*
 - [ ] A2: Core module with constants, dataclass, embed functions, and vec table setup — *Module imports cleanly. Constants EMBEDDING_MODEL, EMBEDDING_DIM, VEC_SIM_WEIGHT, RECENCY_WEIGHT, SALIENCE_WEIGHT, RECENCY_DECAY, VEC_BOOST_RATE, DEFAULT_TOP_K are defined. ScoredChunk dataclass exists. HAS_FASTEMBED and HAS_SQLITE_VEC flags detect availability. ensure_vec_table(conn) creates vec_chunks virtual table or returns False. embed_text() and embed_batch() return vectors or empty lists on graceful degradation. TestEmbedText and TestGracefulDegradation tests pass.*
 - [ ] A3: Index and delete operations for vec_chunks — *index_chunks(conn, chunk_ids) queries chunks table, embeds content, inserts into vec_chunks with content_hash skip logic. index_chunks_by_source(conn, source_files) wraps index_chunks for source-file-based workflows. delete_vec_chunks(conn, chunk_ids) removes vectors. All TestIndexChunks tests pass.*
 - [ ] A4: Scoring function and search_similar — *score_memory(vec_distance, chunk) implements the saturating exponential formula with Phase 1 fallbacks (last_accessed defaults to created_at, salience defaults to 1.0). search_similar(conn, query, top_k, scope) embeds query, fetches top_k*3 candidates from vec_chunks, JOINs to chunks for metadata, applies scope filter, scores and ranks, returns top_k ScoredChunk list. All TestScoring and TestSearchSimilar tests pass.*

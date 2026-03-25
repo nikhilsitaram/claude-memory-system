@@ -17,7 +17,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -55,28 +55,64 @@ class HealthReport:
     ltm_chunks: int = 0
     daily_chunks: int = 0
     schema_version: int = 0
+    memories_by_scope: dict = field(default_factory=dict)
+    memories_by_type: dict = field(default_factory=dict)
+    consolidated_count: int = 0
+    last_consolidation: str | None = None
+    last_synthesis: str | None = None
+    synthesis_errors_7d: int = 0
+    never_accessed_pct: float = 0.0
+    oldest_memory_days: int = 0
+    edges_per_entity: float = 0.0
+    newest_edge_days: int = 0
 
 
 def health_report(conn: sqlite3.Connection) -> HealthReport:
     """Query the database for health metrics.
 
     Returns a HealthReport dataclass. All queries are read-only.
+    Schema-aware: queries chunks/nodes for v2, data_points for v3+.
     """
     report = HealthReport()
     report.schema_version = _get_schema_version(conn)
 
-    # Chunk statistics
-    row = conn.execute("""
-        SELECT
-            COUNT(*) as total,
-            COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
-            SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
-            SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
-            SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
-            SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
-            SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
-        FROM chunks
-    """).fetchone()
+    # Check which tables exist
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    # Chunk/memory statistics
+    if 'chunks' in tables:
+        # v2 schema: query chunks table
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
+                SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
+                SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
+                SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
+                SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
+                SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
+            FROM chunks
+        """).fetchone()
+    elif 'data_points' in tables:
+        # v3+ schema: query data_points table with type filter
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
+                SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
+                SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
+                SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
+                SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
+                SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
+            FROM data_points WHERE type = 'memory'
+        """).fetchone()
+    else:
+        # Empty or unrecognized schema
+        row = (0, 0, 0, 0, 0, 0, 0)
 
     report.total_chunks = row[0] or 0
     report.avg_salience = row[1] or 0.0
@@ -87,24 +123,128 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     report.daily_chunks = row[6] or 0
 
     # Graph statistics
-    report.graph_nodes = (
-        conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
-    )
-    report.active_edges = (
-        conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE valid_to IS NULL"
-        ).fetchone()[0] or 0
-    )
-    report.invalidated_edges = (
-        conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE valid_to IS NOT NULL"
-        ).fetchone()[0] or 0
-    )
+    if 'nodes' in tables:
+        report.graph_nodes = (
+            conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
+        )
+    elif 'data_points' in tables:
+        # v3+: nodes are data_points with type='entity'
+        report.graph_nodes = (
+            conn.execute(
+                "SELECT COUNT(*) FROM data_points WHERE type = 'entity'"
+            ).fetchone()[0] or 0
+        )
+
+    if 'edges' in tables:
+        report.active_edges = (
+            conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE valid_to IS NULL"
+            ).fetchone()[0] or 0
+        )
+        report.invalidated_edges = (
+            conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE valid_to IS NOT NULL"
+            ).fetchone()[0] or 0
+        )
 
     # DB file size
     db_path = get_db_path()
     if db_path.exists():
         report.db_size_bytes = db_path.stat().st_size
+
+    # Extended v4 metrics
+    if 'data_points' in tables:
+        scope_rows = conn.execute(
+            "SELECT scope, COUNT(*) FROM data_points WHERE type='memory' AND salience > 0 GROUP BY scope"
+        ).fetchall()
+        report.memories_by_scope = {r[0] or "none": r[1] for r in scope_rows}
+
+        type_rows = conn.execute(
+            "SELECT type, COUNT(*) FROM data_points WHERE salience > 0 GROUP BY type"
+        ).fetchall()
+        report.memories_by_type = {r[0]: r[1] for r in type_rows}
+
+        report.consolidated_count = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE source_type = 'consolidation' AND salience > 0"
+        ).fetchone()[0] or 0
+
+        total_memories = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='memory' AND salience > 0"
+        ).fetchone()[0] or 0
+        if total_memories > 0:
+            never_accessed = conn.execute(
+                "SELECT COUNT(*) FROM data_points WHERE type='memory' AND salience > 0 AND access_count = 0"
+            ).fetchone()[0] or 0
+            report.never_accessed_pct = never_accessed / total_memories
+
+        oldest_row = conn.execute(
+            "SELECT MIN(created_at) FROM data_points WHERE type='memory' AND salience > 0"
+        ).fetchone()
+        if oldest_row and oldest_row[0]:
+            try:
+                from datetime import datetime, timezone
+                oldest_dt = datetime.fromisoformat(oldest_row[0].replace("Z", "+00:00"))
+                report.oldest_memory_days = (datetime.now(timezone.utc) - oldest_dt).days
+            except (ValueError, AttributeError):
+                pass
+
+        if report.graph_nodes > 0 and 'edges' in tables:
+            entity_edge_count = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE valid_to IS NULL"
+            ).fetchone()[0] or 0
+            report.edges_per_entity = entity_edge_count / report.graph_nodes
+
+    # Newest edge age (for edge-staleness alert)
+    if report.active_edges > 0 and 'edges' in tables:
+        try:
+            from datetime import datetime, timezone
+            newest_row = conn.execute(
+                "SELECT MAX(created_at) FROM edges WHERE valid_to IS NULL"
+            ).fetchone()
+            if newest_row and newest_row[0]:
+                edge_dt = datetime.fromisoformat(newest_row[0].replace("Z", "+00:00"))
+                report.newest_edge_days = (datetime.now(timezone.utc) - edge_dt).days
+        except (ValueError, AttributeError):
+            pass
+
+    # Last consolidation timestamp from metadata table
+    if 'metadata' in tables:
+        try:
+            meta_row = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'last_consolidation'"
+            ).fetchone()
+            if meta_row:
+                report.last_consolidation = meta_row[0]
+        except Exception:
+            pass
+
+    try:
+        from memory_utils import get_memory_dir
+        last_synth_file = get_memory_dir() / ".last-synthesis"
+        if last_synth_file.exists():
+            report.last_synthesis = last_synth_file.read_text().strip()
+    except Exception:
+        pass
+
+    try:
+        from memory_utils import get_synthesis_error_log
+        error_log = get_synthesis_error_log()
+        if error_log.exists():
+            from datetime import datetime, timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            count = 0
+            for line in error_log.read_text().splitlines():
+                if line.startswith("["):
+                    try:
+                        ts_str = line[1:line.index("]")]
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if ts >= cutoff:
+                            count += 1
+                    except (ValueError, AttributeError):
+                        pass
+            report.synthesis_errors_7d = count
+    except Exception:
+        pass
 
     return report
 
@@ -128,6 +268,26 @@ def health_alerts(report: HealthReport) -> list[str]:
         alerts.append(
             f"{pct}% of memories are cold (salience < 0.1) -- "
             "consider running /synthesize or consolidation."
+        )
+
+    if report.last_synthesis:
+        try:
+            from datetime import datetime, timezone
+            synth_dt = datetime.fromisoformat(report.last_synthesis.replace("Z", "+00:00"))
+            days_ago = (datetime.now(timezone.utc) - synth_dt).days
+            if days_ago > 7:
+                alerts.append(f"No synthesis in {days_ago} days -- check synthesis_cron")
+        except (ValueError, AttributeError):
+            pass
+
+    if report.synthesis_errors_7d > 3:
+        alerts.append(f"{report.synthesis_errors_7d} synthesis errors in the last 7 days")
+
+    # Edge staleness: no new edges in 7+ days suggests entity extraction stalled
+    if report.active_edges > 0 and report.newest_edge_days > 7:
+        alerts.append(
+            f"No new edges in {report.newest_edge_days} days -- "
+            "entity extraction may be stalled"
         )
 
     return alerts

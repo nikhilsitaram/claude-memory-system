@@ -3,7 +3,7 @@
 Vector embedding and semantic search for Claude Code Memory System.
 
 Provides FastEmbed-based text embeddings, sqlite-vec virtual table management,
-chunk indexing, and scored memory retrieval. All embedding dependencies are
+data_point indexing, and scored memory retrieval. All embedding dependencies are
 optional -- the module degrades gracefully when fastembed or sqlite-vec are
 not installed.
 
@@ -23,7 +23,12 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from storage import ChunkRow, VEC_CHUNKS_DDL, _row_to_chunk, _CHUNK_COLUMNS  # noqa: E402
+from storage import (  # noqa: E402
+    _DP_COLUMNS,
+    VEC_DATA_DDL,
+    DataPointRow,
+    _row_to_data_point,
+)
 
 try:
     from fastembed import TextEmbedding
@@ -57,14 +62,17 @@ __all__ = [
     "DEFAULT_TOP_K",
     "HAS_FASTEMBED",
     "HAS_SQLITE_VEC",
+    "ScoredDataPoint",
     "ScoredChunk",
     "ensure_vec_table",
     "embed_text",
     "embed_batch",
-    "index_chunks",
-    "index_chunks_by_source",
-    "delete_vec_chunks",
+    "index_data_points",
+    "index_data_points_by_source",
+    "delete_vec_data",
     "search_similar",
+    "search_hybrid",
+    "RRF_K",
     "reindex_changed_files",
     "reindex_all",
     "score_memory",
@@ -72,11 +80,15 @@ __all__ = [
 
 
 @dataclass
-class ScoredChunk:
-    """A chunk with its composite retrieval score and vector similarity."""
-    chunk: ChunkRow
+class ScoredDataPoint:
+    """A data_point with its composite retrieval score and vector similarity."""
+    data_point: DataPointRow
     score: float
     vec_similarity: float
+
+
+# Backward compatibility alias: ScoredChunk is ScoredDataPoint
+ScoredChunk = ScoredDataPoint
 
 
 _model = None
@@ -92,8 +104,19 @@ def _get_model():
     return _model
 
 
+def _has_table(conn, table_name: str) -> bool:
+    """Return True if the given table (or virtual table) exists in the DB."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE name = ?", (table_name,)
+    ).fetchone()
+    return row is not None
+
+
 def ensure_vec_table(conn) -> bool:
-    """Load sqlite-vec extension and create vec_chunks virtual table.
+    """Load sqlite-vec extension and create vec_data virtual table.
+
+    Falls back to vec_chunks for v2-schema DBs where vec_data does not exist
+    but vec_chunks does (logs a warning).
 
     Returns True on success, False if sqlite-vec is not available or extension
     loading is not permitted by the SQLite build.
@@ -101,11 +124,23 @@ def ensure_vec_table(conn) -> bool:
     if not HAS_SQLITE_VEC:
         return False
     try:
+        conn.enable_load_extension(True)
         sqlite_vec.load(conn)
     except Exception:
         return False
-    conn.executescript(VEC_CHUNKS_DDL)
-    conn.commit()
+    finally:
+        conn.enable_load_extension(False)
+
+    if not _has_table(conn, "vec_data"):
+        if _has_table(conn, "vec_chunks"):
+            import warnings
+            warnings.warn(
+                "vec_chunks exists but vec_data does not: DB may need migration to v3 schema.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        conn.executescript(VEC_DATA_DDL)
+        conn.commit()
     return True
 
 
@@ -157,8 +192,15 @@ def _days_since(iso_date: Optional[str], fallback: Optional[str] = None) -> floa
         return 0.0
 
 
-def score_memory(vec_distance: float, chunk: ChunkRow) -> float:
-    """Compute a composite retrieval score from vector distance + recency + salience."""
+def score_memory(vec_distance: float, chunk) -> float:
+    """Compute a composite retrieval score from vector distance + recency + salience.
+
+    Accepts either a ChunkRow or DataPointRow (both expose last_accessed,
+    created_at, and salience attributes with the same semantics).
+
+    If the chunk has a ``certainty`` attribute, modulates salience:
+    ``salience * (0.6 + 0.1 * certainty)``.
+    """
     vec_sim = max(0.0, 1.0 - vec_distance)
     boosted = 1.0 - math.exp(-VEC_BOOST_RATE * vec_sim)
 
@@ -169,73 +211,88 @@ def score_memory(vec_distance: float, chunk: ChunkRow) -> float:
 
     salience = chunk.salience if chunk.salience is not None else 1.0
 
+    certainty = getattr(chunk, "certainty", None)
+    if certainty is not None:
+        salience = salience * (0.6 + 0.1 * certainty)
+
     return VEC_SIM_WEIGHT * boosted + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience
 
 
-def index_chunks(conn, chunk_ids: list) -> None:
-    """Embed chunks and insert into vec_chunks. Skips chunks already indexed with same hash."""
-    if not chunk_ids or not HAS_FASTEMBED:
+def index_data_points(conn, data_point_ids: list) -> None:
+    """Embed data_points and insert into vec_data.
+
+    Skips data_points already indexed with the same content_hash.
+    """
+    if not data_point_ids or not HAS_FASTEMBED:
         return
 
-    placeholders = ",".join("?" * len(chunk_ids))
+    placeholders = ",".join("?" * len(data_point_ids))
     rows = conn.execute(
-        f"SELECT {_CHUNK_COLUMNS} FROM chunks WHERE id IN ({placeholders})",
-        chunk_ids,
+        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id IN ({placeholders})",
+        data_point_ids,
     ).fetchall()
-    chunks = [_row_to_chunk(r) for r in rows]
+    data_points = [_row_to_data_point(r) for r in rows]
 
     existing = conn.execute(
-        f"SELECT vc.chunk_id, c.content_hash FROM vec_chunks vc JOIN chunks c ON vc.chunk_id = c.id WHERE vc.chunk_id IN ({placeholders})",
-        chunk_ids,
+        f"SELECT vd.data_point_id, dp.content_hash "
+        f"FROM vec_data vd JOIN data_points dp ON vd.data_point_id = dp.id "
+        f"WHERE vd.data_point_id IN ({placeholders})",
+        data_point_ids,
     ).fetchall()
     existing_map = {row[0]: row[1] for row in existing}
 
-    to_embed = [c for c in chunks if c.id not in existing_map or existing_map.get(c.id) != c.content_hash]
+    to_embed = [
+        dp for dp in data_points
+        if dp.id not in existing_map or existing_map.get(dp.id) != dp.content_hash
+    ]
 
     if not to_embed:
         return
 
-    stale_ids = [c.id for c in to_embed if c.id in existing_map]
+    stale_ids = [dp.id for dp in to_embed if dp.id in existing_map]
     if stale_ids:
-        delete_vec_chunks(conn, stale_ids)
+        delete_vec_data(conn, stale_ids)
 
-    contents = [c.content for c in to_embed]
+    contents = [dp.content or dp.name or "" for dp in to_embed]
     vectors = embed_batch(contents)
 
-    for chunk, vec in zip(to_embed, vectors):
+    for dp, vec in zip(to_embed, vectors):
         conn.execute(
-            "INSERT INTO vec_chunks (embedding, chunk_id, source_type) VALUES (?, ?, ?)",
-            (_serialize_vector(vec), chunk.id, chunk.source_type),
+            "INSERT INTO vec_data (embedding, data_point_id, type) VALUES (?, ?, ?)",
+            (_serialize_vector(vec), dp.id, dp.type),
         )
     conn.commit()
 
 
-def index_chunks_by_source(conn, source_files: list) -> None:
-    """Index all chunks from the given source files."""
-    if not source_files or not HAS_FASTEMBED:
+def index_data_points_by_source(conn, source_types: list) -> None:
+    """Index all data_points from the given source types."""
+    if not source_types or not HAS_FASTEMBED:
         return
-    placeholders = ",".join("?" * len(source_files))
+    placeholders = ",".join("?" * len(source_types))
     rows = conn.execute(
-        f"SELECT id FROM chunks WHERE source_file IN ({placeholders})",
-        source_files,
+        f"SELECT id FROM data_points WHERE source_type IN ({placeholders})",
+        source_types,
     ).fetchall()
-    chunk_ids = [r[0] for r in rows]
-    if chunk_ids:
-        index_chunks(conn, chunk_ids)
+    dp_ids = [r[0] for r in rows]
+    if dp_ids:
+        index_data_points(conn, dp_ids)
 
 
-def delete_vec_chunks(conn, chunk_ids: list) -> None:
-    """Delete vec_chunks rows for the given chunk IDs."""
-    for chunk_id in chunk_ids:
-        conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (chunk_id,))
+def delete_vec_data(conn, data_point_ids: list) -> None:
+    """Delete vec_data rows for the given data_point IDs."""
+    for dp_id in data_point_ids:
+        conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
     conn.commit()
 
 
 def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional[str] = None) -> list:
-    """Search for chunks semantically similar to query.
+    """Search for data_points semantically similar to query.
 
-    Returns a sorted list of ScoredChunk (highest score first), limited to top_k.
+    Returns a sorted list of ScoredDataPoint (highest score first), limited to top_k.
     Returns [] if fastembed or sqlite-vec are unavailable, or if query cannot be embedded.
+
+    For v3 schema: queries vec_data joined with data_points.
+    For v2 schema (vec_chunks exists but vec_data does not): returns [] with a warning.
     """
     if not HAS_FASTEMBED or not HAS_SQLITE_VEC:
         return []
@@ -244,50 +301,174 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
     if not query_vec:
         return []
 
-    fetch_k = top_k * 3
-    qualified = ", ".join(f"c.{col.strip()}" for col in _CHUNK_COLUMNS.split(","))
+    if not _has_table(conn, "vec_data"):
+        if _has_table(conn, "vec_chunks"):
+            import warnings
+            warnings.warn(
+                "search_similar: vec_data not found; DB may need v3 migration.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return []
 
-    rows = conn.execute(
-        f"SELECT vc.distance, {qualified} FROM vec_chunks vc JOIN chunks c ON vc.chunk_id = c.id WHERE vc.embedding MATCH ? ORDER BY vc.distance LIMIT ?",
+    fetch_k = top_k * 3
+
+    knn_rows = conn.execute(
+        "SELECT distance, data_point_id FROM vec_data WHERE embedding MATCH ? AND k = ?",
         (_serialize_vector(query_vec), fetch_k),
     ).fetchall()
 
+    if not knn_rows:
+        return []
+
+    dp_ids = [r[1] for r in knn_rows]
+    dist_map = {r[1]: r[0] for r in knn_rows}
+    placeholders = ",".join("?" * len(dp_ids))
+    dp_rows = conn.execute(
+        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id IN ({placeholders})",
+        dp_ids,
+    ).fetchall()
+
     results = []
-    for row in rows:
-        distance = row[0]
-        chunk = _row_to_chunk(row[1:])
-        if scope is not None and chunk.scope != scope:
+    for row in dp_rows:
+        dp = _row_to_data_point(row)
+        distance = dist_map.get(dp.id, 1.0)
+        if scope is not None and dp.scope != scope:
             continue
         vec_sim = max(0.0, 1.0 - distance)
-        scored = ScoredChunk(chunk=chunk, score=score_memory(distance, chunk), vec_similarity=vec_sim)
+        scored = ScoredDataPoint(
+            data_point=dp,
+            score=score_memory(distance, dp),
+            vec_similarity=vec_sim,
+        )
         results.append(scored)
 
     results.sort(key=lambda x: x.score, reverse=True)
     return results[:top_k]
 
 
+RRF_K = 60  # RRF constant (standard value from Cormack et al.)
+
+
+def search_hybrid(
+    conn,
+    query: str,
+    scope: Optional[str] = None,
+    top_k: int = DEFAULT_TOP_K,
+) -> list:
+    """Hybrid search combining FTS5 BM25 and vector KNN via Reciprocal Rank Fusion.
+
+    Fallback chain:
+    - Both FTS5 + vector available -> RRF hybrid
+    - Vector only -> vector search
+    - FTS5 only -> BM25 keyword search
+    - Neither -> SQL ranked fallback (salience + recency)
+
+    Returns sorted list of ScoredDataPoint (highest score first), limited to top_k.
+    """
+    has_fts = _has_table(conn, "fts_data")
+    has_vec = HAS_FASTEMBED and HAS_SQLITE_VEC and _has_table(conn, "vec_data")
+
+    fts_results = []
+    vec_results = []
+
+    if has_fts:
+        try:
+            from storage import fts_search
+            fts_hits = fts_search(conn, query, scope=scope, limit=top_k * 2)
+            fts_results = [(hit["data_point_id"], rank_idx) for rank_idx, hit in enumerate(fts_hits)]
+        except Exception:
+            pass
+
+    if has_vec:
+        try:
+            vec_results_raw = search_similar(conn, query, top_k=top_k * 2, scope=scope)
+            vec_results = [(r.data_point.id, rank_idx) for rank_idx, r in enumerate(vec_results_raw)]
+        except Exception:
+            pass
+
+    if fts_results and vec_results:
+        scores = {}
+        for dp_id, rank in fts_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        for dp_id, rank in vec_results:
+            scores[dp_id] = scores.get(dp_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+        ranked_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:top_k]
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif vec_results:
+        ranked_ids = [dp_id for dp_id, _ in vec_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in vec_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    elif fts_results:
+        ranked_ids = [dp_id for dp_id, _ in fts_results[:top_k]]
+        scores = {dp_id: 1.0 / (RRF_K + rank + 1) for dp_id, rank in fts_results}
+        return _fetch_scored_data_points(conn, ranked_ids, scores)
+
+    else:
+        return _sql_ranked_fallback(conn, scope, top_k)
+
+
+def _fetch_scored_data_points(conn, ranked_ids, scores):
+    """Fetch data_points by ID and return as ScoredDataPoint list."""
+    from storage import query_data_point_by_id
+    results = []
+    for dp_id in ranked_ids:
+        dp = query_data_point_by_id(conn, dp_id)
+        if dp:
+            salience_recency = score_memory(0.5, dp)
+            final_score = scores[dp_id] + salience_recency
+            results.append(ScoredDataPoint(data_point=dp, score=final_score, vec_similarity=0.0))
+    results.sort(key=lambda x: x.score, reverse=True)
+    return results
+
+
+def _sql_ranked_fallback(conn, scope, top_k):
+    """Fallback search using salience + recency ordering (no semantic understanding).
+
+    When scope is None, returns memories across all scopes (no filter).
+    """
+    from storage import query_data_points_by_scope, query_data_points
+    if scope is None:
+        dps = query_data_points(
+            conn, dp_type="memory", min_salience=0.0,
+            order_by="salience DESC, created_at DESC", limit=top_k
+        )
+    else:
+        dps = query_data_points_by_scope(
+            conn, scope=scope, dp_type="memory",
+            order_by="salience DESC, created_at DESC", limit=top_k
+        )
+    return [
+        ScoredDataPoint(data_point=dp, score=dp.salience, vec_similarity=0.0)
+        for dp in dps
+    ]
+
+
 def reindex_changed_files(conn, changed_files: list) -> None:
-    """Re-embed chunks from changed files (delete old vectors then re-index)."""
+    """Re-embed data_points from changed source files (delete old vectors then re-index)."""
     for source_file in changed_files:
         rows = conn.execute(
-            "SELECT id FROM chunks WHERE source_file = ?", (source_file,)
+            "SELECT id FROM data_points WHERE properties LIKE ?",
+            (f'%"source_file": "{source_file}"%',),
         ).fetchall()
-        chunk_ids = [r[0] for r in rows]
-        if chunk_ids:
-            delete_vec_chunks(conn, chunk_ids)
-            index_chunks_by_source(conn, [source_file])
+        dp_ids = [r[0] for r in rows]
+        if dp_ids:
+            delete_vec_data(conn, dp_ids)
+            index_data_points(conn, dp_ids)
 
 
 def reindex_all(conn) -> None:
-    """Wipe and rebuild the entire vec_chunks table from all chunks in the DB."""
+    """Wipe and rebuild the entire vec_data table from all data_points in the DB."""
     if not HAS_FASTEMBED:
         return
     success = ensure_vec_table(conn)
     if not success:
         return
-    conn.execute("DELETE FROM vec_chunks")
+    conn.execute("DELETE FROM vec_data")
     conn.commit()
-    rows = conn.execute("SELECT id FROM chunks").fetchall()
-    chunk_ids = [r[0] for r in rows]
-    if chunk_ids:
-        index_chunks(conn, chunk_ids)
+    rows = conn.execute("SELECT id FROM data_points").fetchall()
+    dp_ids = [r[0] for r in rows]
+    if dp_ids:
+        index_data_points(conn, dp_ids)

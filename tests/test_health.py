@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 """Tests for scripts/health.py."""
 
-import json
+import sqlite3
 from unittest import mock
 
 import pytest
-
 from health import (
-    COLD_RATIO_THRESHOLD,
     HealthReport,
     format_report,
     health_alerts,
     health_report,
 )
 from storage import (
-    SCHEMA_VERSION,
+    SCHEMA_DDL,
     ChunkRow,
     NodeRow,
     close_db,
-    ensure_db,
     insert_chunk,
     insert_node,
 )
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing health operations."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 
 @pytest.fixture
@@ -34,7 +42,8 @@ def db_dir(tmp_path):
 
 @pytest.fixture
 def db(db_dir):
-    conn = ensure_db()
+    db_path = db_dir / "memory.db"
+    conn = _make_v2_db(db_path)
     yield conn
     close_db(conn)
 
@@ -48,7 +57,8 @@ class TestHealthReport:
 
     def test_schema_version(self, db):
         report = health_report(db)
-        assert report.schema_version == SCHEMA_VERSION
+        # v2 DB for testing chunks/nodes tables
+        assert report.schema_version == 2
 
     def test_chunk_counts(self, db):
         for i in range(5):
@@ -157,3 +167,134 @@ class TestFormatReport:
         text = format_report(report, ["Test alert message"])
         assert "Test alert message" in text
         assert "Alerts:" in text
+
+
+# =============================================================================
+# A10: Extended Health Metrics Tests
+# =============================================================================
+
+
+class TestExtendedHealthReport:
+    """Tests for new health metrics fields."""
+
+    def _make_v3_db(self, tmp_path):
+        from unittest.mock import patch
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path), \
+             patch("storage.get_memory_dir", return_value=tmp_path), \
+             patch("health.get_db_path", return_value=db_path):
+            conn = ensure_db()
+        return conn
+
+    def test_memories_by_scope(self, tmp_path):
+        from storage import insert_data_point, DataPointRow
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="g1", scope="global", salience=0.5))
+        insert_data_point(conn, DataPointRow(type="memory", content="p1", scope="my-project", salience=0.5))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.memories_by_scope.get("global", 0) >= 1
+        assert report.memories_by_scope.get("my-project", 0) >= 1
+        conn.close()
+
+    def test_memories_by_type(self, tmp_path):
+        from storage import insert_data_point, DataPointRow
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        insert_data_point(conn, DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.5))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.memories_by_type.get("memory", 0) >= 1
+        assert report.memories_by_type.get("entity", 0) >= 1
+        conn.close()
+
+    def test_never_accessed_pct(self, tmp_path):
+        from storage import insert_data_point, DataPointRow
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="never", scope="global", salience=0.5, access_count=0))
+        insert_data_point(conn, DataPointRow(type="memory", content="once", scope="global", salience=0.5, access_count=1))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert 0.4 <= report.never_accessed_pct <= 0.6
+        conn.close()
+
+    def test_edges_per_entity(self, tmp_path):
+        from datetime import datetime, timezone
+        from storage import insert_data_point, insert_edge, DataPointRow, EdgeRow
+        conn = self._make_v3_db(tmp_path)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
+        m_id = insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        insert_edge(conn, EdgeRow(source=m_id, target=e_id, type="mentions", created_at=now))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.edges_per_entity >= 1.0
+        conn.close()
+
+    def test_cold_ratio_alert(self):
+        report = HealthReport(total_chunks=10, cold_chunks=9, hot_chunks=0, warm_chunks=1)
+        alerts = health_alerts(report)
+        assert any("cold" in a.lower() for a in alerts)
+
+    def test_empty_db_alert(self):
+        report = HealthReport(total_chunks=0)
+        alerts = health_alerts(report)
+        assert any("empty" in a.lower() for a in alerts)
+
+    def test_synthesis_error_alert(self):
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, synthesis_errors_7d=5)
+        alerts = health_alerts(report)
+        assert any("synthesis errors" in a.lower() for a in alerts)
+
+    def test_last_consolidation_populated(self, tmp_path):
+        """last_consolidation is read from metadata table."""
+        from storage import insert_data_point, DataPointRow
+        conn = self._make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', '2026-03-20T10:00:00Z')")
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.last_consolidation == "2026-03-20T10:00:00Z"
+        conn.close()
+
+    def test_newest_edge_days_populated(self, tmp_path):
+        """newest_edge_days is calculated from the most recent active edge."""
+        from datetime import datetime, timedelta, timezone
+        from storage import insert_data_point, insert_edge, DataPointRow, EdgeRow
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
+        m_id = insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
+        insert_edge(conn, EdgeRow(source=m_id, target=e_id, type="mentions", created_at=old_ts))
+        conn.commit()
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+        assert report.newest_edge_days >= 9
+        conn.close()
+
+    def test_edge_staleness_alert(self):
+        """Edge staleness alert fires when newest_edge_days > 7."""
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, active_edges=5, newest_edge_days=14)
+        alerts = health_alerts(report)
+        assert any("no new edges" in a.lower() for a in alerts)
+
+    def test_no_edge_staleness_alert_when_recent(self):
+        """No alert when edges are recent."""
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, active_edges=5, newest_edge_days=3)
+        alerts = health_alerts(report)
+        assert not any("no new edges" in a.lower() for a in alerts)
+
+    def test_synthesis_staleness_alert(self):
+        """Synthesis staleness alert fires when last_synthesis > 7 days old."""
+        from datetime import datetime, timedelta, timezone
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, last_synthesis=old_ts)
+        alerts = health_alerts(report)
+        assert any("no synthesis" in a.lower() for a in alerts)

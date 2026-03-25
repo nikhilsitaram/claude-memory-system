@@ -34,8 +34,8 @@ from memory_utils import (
     parse_markdown_sections,
     project_name_to_filename,
     prune_stale_state_entries,
-    resolve_project_path_to_name,
     resolve_git_subdir_to_root,
+    resolve_project_path_to_name,
     resolve_session_path,
     resolve_worktree_to_main_repo,
     save_json_file,
@@ -1384,6 +1384,126 @@ class TestGetDbPath:
     def test_in_all_exports(self):
         from memory_utils import __all__
         assert "get_db_path" in __all__
+
+
+# =============================================================================
+# A8: Secret Sanitization Tests
+# =============================================================================
+
+
+class TestSanitizeSecrets:
+    """Tests for secret detection and redaction."""
+
+    def test_aws_key_redacted(self):
+        from memory_utils import sanitize_secrets
+        text = "Use key AKIAIOSFODNN7EXAMPLE for access"
+        result = sanitize_secrets(text)
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "[REDACTED:aws_key]" in result
+
+    def test_api_key_sk_redacted(self):
+        from memory_utils import sanitize_secrets
+        text = "Set API_KEY=sk-proj-abc123def456ghi789jkl012"
+        result = sanitize_secrets(text)
+        assert "sk-proj-abc123def456ghi789jkl012" not in result
+        assert "[REDACTED:api_key]" in result
+
+    def test_connection_string_redacted(self):
+        from memory_utils import sanitize_secrets
+        text = "DB url is postgres://user:pass@host:5432/db"
+        result = sanitize_secrets(text)
+        assert "postgres://user:pass@host:5432/db" not in result
+        assert "[REDACTED:connection_string]" in result
+
+    def test_jwt_redacted(self):
+        from memory_utils import sanitize_secrets
+        token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        text = f"Bearer {token}"
+        result = sanitize_secrets(text)
+        assert "eyJhbGciOiJIUzI1NiI" not in result
+        assert "[REDACTED:jwt]" in result
+
+    def test_private_key_header_redacted(self):
+        from memory_utils import sanitize_secrets
+        text = "Found -----BEGIN RSA PRIVATE KEY----- in config"
+        result = sanitize_secrets(text)
+        assert "BEGIN RSA PRIVATE KEY" not in result
+        assert "[REDACTED:private_key]" in result
+
+    def test_generic_secret_assignment_redacted(self):
+        from memory_utils import sanitize_secrets
+        text = 'Set token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"'
+        result = sanitize_secrets(text)
+        assert "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" not in result
+        assert "[REDACTED:secret_assignment]" in result
+
+    def test_normal_text_unchanged(self):
+        from memory_utils import sanitize_secrets
+        text = "Use Redis for caching with explicit TTL settings"
+        assert sanitize_secrets(text) == text
+
+    def test_stripe_key_redacted(self):
+        from memory_utils import sanitize_secrets
+        prefix = "sk" + "_" + "live" + "_"
+        text = f"Stripe key: {prefix}{'x' * 24}"
+        result = sanitize_secrets(text)
+        assert prefix not in result
+        assert "[REDACTED:api_key]" in result
+
+    def test_mongodb_connection_string(self):
+        from memory_utils import sanitize_secrets
+        text = "mongodb://admin:secret@cluster0.abc.mongodb.net/mydb"
+        result = sanitize_secrets(text)
+        assert "mongodb://admin" not in result
+        assert "[REDACTED:connection_string]" in result
+
+    def test_multiple_secrets_in_one_text(self):
+        from memory_utils import sanitize_secrets
+        text = "Key AKIAIOSFODNN7EXAMPLE and token=sk-abc123def456ghi789jkl012mno345"
+        result = sanitize_secrets(text)
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "sk-abc123def456ghi789jkl012mno345" not in result
+
+    def test_empty_text(self):
+        from memory_utils import sanitize_secrets
+        assert sanitize_secrets("") == ""
+        assert sanitize_secrets(None) is None
+
+
+# =============================================================================
+# Consolidation and recall settings
+# =============================================================================
+
+
+class TestConsolidationSettings:
+    def test_default_settings_has_consolidation(self):
+        from memory_utils import DEFAULT_SETTINGS
+        assert "consolidation" in DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["consolidation"]["intervalHours"] == 24
+        assert DEFAULT_SETTINGS["consolidation"]["minMemories"] == 5
+        assert DEFAULT_SETTINGS["consolidation"]["similarityThreshold"] == 0.80
+        assert DEFAULT_SETTINGS["consolidation"]["maxClusters"] == 15
+        assert DEFAULT_SETTINGS["consolidation"]["backfillMaxClusters"] == 30
+        assert DEFAULT_SETTINGS["consolidation"]["model"] == "sonnet"
+
+    def test_default_settings_has_recall(self):
+        from memory_utils import DEFAULT_SETTINGS
+        assert "recall" in DEFAULT_SETTINGS
+        assert DEFAULT_SETTINGS["recall"]["maxPromptLength"] == 500
+        assert DEFAULT_SETTINGS["recall"]["minPromptLength"] == 15
+        assert DEFAULT_SETTINGS["recall"]["maxInjectionsPerPrompt"] == 3
+        assert DEFAULT_SETTINGS["recall"]["maxTokenBudget"] == 500
+
+    def test_load_settings_includes_consolidation_defaults(self, tmp_path):
+        """load_settings() returns consolidation defaults even if settings.json lacks them."""
+        from unittest.mock import patch
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{"version": 3}')
+        with patch("memory_utils.get_settings_file", return_value=settings_file):
+            from memory_utils import load_settings
+            settings = load_settings()
+        assert "consolidation" in settings
+        assert settings["consolidation"]["intervalHours"] == DEFAULT_SETTINGS["consolidation"]["intervalHours"]
 
 
 if __name__ == "__main__":

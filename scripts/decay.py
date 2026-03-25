@@ -17,6 +17,7 @@ import argparse
 import re
 import sys
 from datetime import date, datetime, timedelta
+from math import exp
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -37,6 +38,16 @@ from memory_utils import (
     project_name_to_filename,
     rebuild_projects_index_quiet,
 )
+
+# Tiered salience decay constants
+HOT_LAMBDA = 0.005
+WARM_LAMBDA = 0.02
+COLD_LAMBDA = 0.05
+HOT_DAYS_THRESHOLD = 6
+HOT_ACCESS_THRESHOLD = 5
+HOT_SALIENCE_THRESHOLD = 0.7
+WARM_SALIENCE_THRESHOLD = 0.4
+ARCHIVE_SALIENCE_THRESHOLD = 0.05
 
 # Default decay thresholds (used as fallbacks when settings.json missing)
 DEFAULT_AGE_DAYS = 30
@@ -65,6 +76,124 @@ DECAY_ELIGIBLE_SECTIONS = {
     "## Key Learnings",
     "## Key Lessons",
 }
+
+
+def days_since(last_accessed_iso: str | None, today: date | None = None) -> float:
+    """Calculate days since last_accessed timestamp.
+
+    Args:
+        last_accessed_iso: ISO timestamp string (e.g. '2026-03-16T12:00:00Z') or None.
+        today: Reference date for calculation. Defaults to local today.
+
+    Returns:
+        Float days elapsed. Returns 999.0 if last_accessed_iso is None or unparseable.
+    """
+    if not last_accessed_iso:
+        return 999.0
+    if today is None:
+        today = local_today()
+    try:
+        dt = datetime.fromisoformat(last_accessed_iso.replace("Z", "+00:00"))
+        delta = today - dt.date()
+        return max(0.0, float(delta.days))
+    except (ValueError, AttributeError):
+        return 999.0
+
+
+def pick_tier(
+    dt_days: float, access_count: int, salience: float
+) -> tuple[str, float]:
+    """Classify a chunk into hot/warm/cold tier based on recency and salience.
+
+    Args:
+        dt_days: Days since last access.
+        access_count: Number of times accessed.
+        salience: Current salience score.
+
+    Returns:
+        (tier_name, lambda_rate) tuple.
+    """
+    if dt_days < HOT_DAYS_THRESHOLD and (
+        access_count > HOT_ACCESS_THRESHOLD or salience > HOT_SALIENCE_THRESHOLD
+    ):
+        return "hot", HOT_LAMBDA
+    if dt_days < HOT_DAYS_THRESHOLD or salience > WARM_SALIENCE_THRESHOLD:
+        return "warm", WARM_LAMBDA
+    return "cold", COLD_LAMBDA
+
+
+def decay_salience(
+    current_salience: float, dt_days: float, lam: float
+) -> float:
+    """Apply exponential decay with salience-dependent rate (death spiral formula).
+
+    Formula: new = current * exp(-lambda * (dt / (current + 0.1)))
+    The (current + 0.1) divisor creates intentional death spiral:
+    low-salience chunks decay faster, accelerating archival.
+
+    Args:
+        current_salience: Current salience in [0.0, 1.0].
+        dt_days: Days elapsed since last access.
+        lam: Lambda rate for this tier.
+
+    Returns:
+        New salience value clamped to [0.0, 1.0].
+    """
+    if current_salience <= 0:
+        return 0.0
+    factor = exp(-lam * (dt_days / (current_salience + 0.1)))
+    return max(0.0, min(1.0, current_salience * factor))
+
+
+def decay_data_points(conn, dry_run: bool = False) -> int:
+    """Apply tiered exponential decay to data_points salience.
+
+    Queries all active memories (type='memory', salience > threshold,
+    not consolidated, not user scope), classifies into hot/warm/cold
+    tiers, and applies decay formula.
+
+    Protected from decay:
+    - type != 'memory' (profile, entity, session_context)
+    - consolidated = 1 (pinned)
+    - scope = 'user' (permanent user preferences)
+
+    Args:
+        conn: SQLite connection with v3 schema.
+        dry_run: If True, count but do not write changes.
+
+    Returns:
+        Count of data_points whose salience was reduced.
+    """
+    rows = conn.execute(
+        "SELECT id, salience, access_count, COALESCE(last_accessed, created_at), certainty "
+        "FROM data_points WHERE type = 'memory' AND salience > ? "
+        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        (ARCHIVE_SALIENCE_THRESHOLD,)
+    ).fetchall()
+
+    decayed = 0
+    for dp_id, salience, access_count, last_accessed, certainty in rows:
+        if certainty is not None and certainty >= 4:
+            continue
+
+        dt = days_since(last_accessed)
+        _tier, lam = pick_tier(dt, access_count or 0, salience or 0)
+
+        if certainty is not None and certainty <= 2:
+            lam = lam * 2.0
+
+        new_sal = decay_salience(salience, dt, lam)
+        if new_sal != salience:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE data_points SET salience = ? WHERE id = ?",
+                    (max(0.0, min(1.0, new_sal)), dp_id)
+                )
+            decayed += 1
+
+    if not dry_run:
+        conn.commit()
+    return decayed
 
 
 def parse_learning_date(line: str) -> date | None:
@@ -161,14 +290,13 @@ def decay_file(
     project_work_days: list[str] | None = None,
     project_decay_threshold: int | None = None,
 ) -> tuple[int, list[str]]:
-    """
-    Process a memory file, archiving old learnings.
+    """Process a memory file, archiving old learnings.
 
-    For project files, pass project_work_days and project_decay_threshold
-    to use working-day-based decay instead of calendar-day decay.
-
-    Returns (archived_count, archived_learnings).
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
     """
+    import warnings as _w
+    _w.warn("decay_file() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not filepath.exists():
         return 0, []
 
@@ -235,7 +363,13 @@ def decay_file(
 
 
 def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
-    """Append archived learnings to decay archive."""
+    """Append archived learnings to decay archive.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("append_to_archive() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     if not learnings:
         return
 
@@ -281,7 +415,13 @@ def append_to_archive(learnings: list[str], dry_run: bool = False) -> None:
 
 
 def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
-    """Remove archive sections older than retention_days."""
+    """Remove archive sections older than retention_days.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("purge_old_archives() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     archive_file = get_memory_dir() / ".decay-archive.md"
 
     if not archive_file.exists():
@@ -321,7 +461,13 @@ def purge_old_archives(retention_days: int, dry_run: bool = False) -> int:
 
 
 def run(dry_run: bool = False) -> int:
-    """Run decay on all memory files. Returns 0 on success."""
+    """Run decay on all memory files. Returns 0 on success.
+
+    .. deprecated:: Phase 4
+        Use ``decay_data_points()`` for v3 data_points decay.
+    """
+    import warnings as _w
+    _w.warn("run() is deprecated for markdown decay; use decay_data_points() for v3", DeprecationWarning, stacklevel=2)
     settings = load_settings()
     age_days = settings.get("decay", {}).get("ageDays", DEFAULT_AGE_DAYS)
     project_working_days = settings.get("decay", {}).get("projectWorkingDays", DEFAULT_PROJECT_WORKING_DAYS)

@@ -1,0 +1,44 @@
+---
+status: In Progress
+---
+
+# Make the memory write path intelligent: salience-based decay replaces binary age thresholds, LLM-driven CRUD decisions replace keyword dedup, and entity metadata enables filtered retrieval. Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use orchestrate
+
+**Goal:** Make the memory write path intelligent: salience-based decay replaces binary age thresholds, LLM-driven CRUD decisions replace keyword dedup, and entity metadata enables filtered retrieval.
+**Architecture:** Two parallel worktrees (salience-decay and intelligent-synthesis) develop independently against the shared Phase 1 infrastructure (SQLite DB, chunks, vectors). Salience-decay modifies load_memory.py for access tracking and decay.py for tiered exponential decay. Intelligent-synthesis modifies synthesis.py/synthesis_cron.py/load_memory.py to add vector pre-retrieval, CRUD output parsing, bi-temporal edge invalidation, and entity extraction. A one-time backfill.py script re-extracts entities for existing chunks after both worktrees merge.
+**Tech Stack:** Python 3.9+, SQLite WAL mode, sqlite-vec (vector search), pytest, dataclasses, math (exp), json
+
+---
+
+## Phase A — Branch Reconciliation
+**Status:** Complete | **Rationale:** Vector search (scripts/embeddings.py) on main must be on this branch before intelligent-synthesis can use it for pre-retrieval. This is a blocking prerequisite for Phase C.
+
+- [x] A1: Cherry-pick vector search onto memory-system-refactor — *Already on branch via PR #72 (783f437)*
+- [x] A2: Verify test baseline on reconciled branch — *833 passed, 12 skipped*
+
+## Phase B — Salience Decay
+**Status:** Not Started | **Rationale:** Access tracking and tiered decay are self-contained changes to load_memory.py, decay.py, and storage.py. No dependency on the synthesis pipeline changes in Phase C. Delivers issue #50.
+
+- [ ] B1: Add storage helpers for access tracking and salience updates — *storage.py exports batch_update_access(conn, chunk_ids), update_chunk_salience(conn, chunk_id, new_salience), update_node_salience(conn, node_id, new_salience), query_chunks_with_salience(conn) helpers. Tests cover happy path and edge cases (missing ID, empty batch, salience clamping).*
+- [ ] B2: Implement access tracking in load_memory.py — *When chunks/nodes are served at SessionStart, their access_count is incremented, last_accessed is updated to UTC now, and salience is reinforced using min(1.0, salience + 0.18 * (1.0 - salience)). Uses BEGIN IMMEDIATE with retry on SQLITE_BUSY. Tests verify: access_count increments, last_accessed updates, salience reinforcement with diminishing returns, concurrency retry behavior.*
+- [ ] B3: Implement associative reinforcement for graph neighbors — *When a node is accessed, its graph neighbors receive a salience boost of 0.18 * edge_weight * accessed_node.salience. storage.py has query_neighbor_nodes(conn, node_id) helper to fetch neighbors via edges table. Tests verify: neighbor boost calculation, boost proportional to edge weight, no boost when no neighbors.*
+- [ ] B4: Implement tiered salience decay replacing binary age threshold — *decay.py implements pick_tier(chunk) returning (tier_name, lambda) based on last_accessed recency + access_count/salience, and decay_salience(chunk) applying factor = exp(-lambda * (dt / (salience + 0.1))). Archive threshold is salience < 0.05 (replaces 30-day/20-working-day cutoff). Auto-pinned sections remain protected. Decay reads from DB metadata and syncs changes back to markdown. Tests cover: tier classification (hot/warm/cold), decay math correctness, archive threshold, protected sections unchanged, death spiral for neglected memories.*
+- [ ] B5: Migration for existing data and integration test — *Existing chunks get salience=1.0 (schema default), access_count=0, last_accessed=created_at via a one-time migration step in ensure_db(). Integration test verifies: load memory -> access tracking fires -> decay runs -> salience-based archival works end-to-end. All existing tests still pass.*
+
+## Phase C — Intelligent Synthesis
+**Status:** Not Started | **Rationale:** LLM-driven CRUD decisions, bi-temporal edges, and entity extraction form the intelligent write path. Depends on vector search (Phase A) for pre-retrieval but is independent of salience decay (Phase B). Delivers issues #52, #54, #48.
+
+- [ ] C1: Add storage helpers for CRUD operations and bi-temporal edges — *storage.py exports: invalidate_edge(conn, edge_id, valid_to, expired_at) sets valid_to and expired_at on an edge; update_chunk_content(conn, chunk_id, new_content, new_entities) updates content/content_hash/entities on a chunk; update_chunk_salience(conn, chunk_id, new_salience) clamps and sets salience; query_chunks_for_retrieval(conn, scope) returns active chunks with their IDs for vector search context; query_chunk_by_id(conn, chunk_id) for individual lookup. Tests cover: edge invalidation with timestamps, chunk content update, salience clamping, retrieval query filtering.*
+- [ ] C2: Implement vector pre-retrieval for synthesis context — *Before synthesis LLM call, a new helper extracts key topics from transcripts (algorithmic, not LLM), vector-searches vec_chunks for top-K similar existing memories per topic, and formats them with chunk IDs. This replaces _build_embedded_files() approach of embedding full LTM content. The _build_preextracted_prompt() gains a new '## Existing Memories' section with vector-retrieved candidates instead of full LTM dumps. Tests verify: topic extraction from transcript text, vector search integration (mocked), prompt formatting includes chunk IDs.*
+- [ ] C3: Parse ===MEMORY_OPS=== block in synthesis output — *parse_synthesis_output() recognizes ===MEMORY_OPS=== as a new top-level delimiter alongside ===PROJECT:=== and ===END===. Parses the JSON ops array into SynthesisResult.memory_ops (new field: list[dict]). Each op has action (ADD/UPDATE/DELETE/NOOP), optional id, fact, scope, section, entities, reason. Tests cover: valid JSON parsing, mixed PROJECT+MEMORY_OPS output, malformed JSON warning, missing MEMORY_OPS (backward compat returns empty list).*
+- [ ] C4: Implement CRUD apply logic for ADD/UPDATE/DELETE/NOOP — *apply_results() processes memory_ops: ADD inserts new chunk+node in DB and appends entry to LTM markdown; UPDATE modifies chunk content/metadata in DB and updates corresponding markdown line (matched by content_hash, fallback to substring); DELETE sets valid_to on edges (bi-temporal invalidation), reduces salience to 0, archives entry in markdown; NOOP optionally increments evidence_count. Tests cover each action type, chunk-to-markdown resolution by content_hash, substring fallback, DB-only fallback when markdown match fails.*
+- [ ] C5: Add bi-temporal edge handling for contradiction detection — *When LLM issues DELETE (contradiction): old edge gets valid_to=session_date, expired_at=now(); new fact creates fresh edge with valid_from=session_date. Both remain in DB. query_current_edges(conn) filters by valid_to IS NULL. query_edges_at_date(conn, date) uses valid_from <= date AND (valid_to IS NULL OR valid_to > date). Tests verify: old edge invalidation, new edge creation, temporal query correctness.*
+- [ ] C6: Add entity extraction to synthesis prompt and apply pipeline — *Synthesis prompt instructions include entity extraction requirements (project names, libraries, tools, people, URLs, dates, concepts). Each CRUD op's entities array is stored in the chunk's entities JSON column. ADD creates chunk with entities populated. UPDATE updates entities alongside content. Tests verify: entities stored on ADD, entities updated on UPDATE, synthesis instructions include entity extraction guidance.*
+- [ ] C7: Update synthesis prompt to request CRUD decisions — *_build_synthesis_instructions() and _build_preextracted_prompt() updated to request ===MEMORY_OPS=== JSON block with CRUD decisions and entity extraction. Prompt includes vector-retrieved existing memories with chunk IDs as context. Instructions describe ADD/UPDATE/DELETE/NOOP actions with examples. Test verifies prompt contains MEMORY_OPS format specification and Existing Memories section.*
+
+## Phase D — Backfill Script
+**Status:** Not Started | **Rationale:** Entity backfill runs once after both worktrees merge, before Phase 3 starts. Must have CRUD infrastructure (Phase C) and salience tracking (Phase B) in place.
+
+- [ ] D1: Create scripts/backfill.py for entity re-extraction — *backfill.py scans all chunks where entities IS NULL, batches them, sends to Sonnet via 'claude -p' for entity extraction, populates entities JSON column. Idempotent (skips chunks where entities IS NOT NULL). Progress reporting (prints chunks processed / total). install.py updated to include backfill.py in link_scripts(). Tests verify: idempotent skip, progress reporting, Sonnet model selection (mocked), batch processing.*

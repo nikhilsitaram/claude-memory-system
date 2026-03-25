@@ -6,6 +6,7 @@ Run with: python -m pytest tests/test_load_memory.py -v
 """
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -15,18 +16,42 @@ from load_memory import (
     _build_embedded_files,
     _build_preextracted_prompt,
     _build_synthesis_instructions,
+    _build_synthesis_instructions_v3,
     _build_synthesis_prompt,
     _find_projects_in_extracts,
     _get_project_names_str,
+    _load_from_db,
     _strip_profile_sections,
-    load_daily_summaries,
-    load_global_memory,
-    load_project_history,
-    load_project_memory,
     pre_extract_transcripts_incremental,
     should_synthesize,
     write_synthesis_prompt,
 )
+from storage import (
+    SCHEMA_DDL,
+    ChunkRow,
+    DataPointRow,
+    EdgeRow,
+    NodeRow,
+    close_db,
+    ensure_db,
+    insert_chunk,
+    insert_data_point,
+    insert_edge,
+    insert_node,
+    invalidate_edge,
+    query_chunks_with_salience,
+)
+
+
+def _make_v2_db(db_path):
+    """Create a v2 DB for testing access tracking operations."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.executescript(SCHEMA_DDL)
+    conn.execute("PRAGMA user_version=2")
+    conn.commit()
+    return conn
 
 # =============================================================================
 # _strip_profile_sections Tests
@@ -218,205 +243,6 @@ class TestShouldSynthesize:
 # =============================================================================
 # load_global_memory Tests
 # =============================================================================
-
-
-class TestLoadGlobalMemory:
-    def test_returns_content_when_exists(self, tmp_path):
-        mem_file = tmp_path / "global-long-term-memory.md"
-        mem_file.write_text("# Global Memory\nSome content here")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = mem_file
-            content, size = load_global_memory()
-            assert "Global Memory" in content
-            assert size > 0
-
-    def test_returns_empty_when_no_file(self):
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = Path("/nonexistent/memory.md")
-            content, size = load_global_memory()
-            assert content == ""
-            assert size == 0
-
-    def test_returns_empty_on_io_error(self, tmp_path):
-        mem_file = tmp_path / "memory.md"
-        mem_file.write_text("content")
-        # Make unreadable
-        mem_file.chmod(0o000)
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_f:
-            mock_f.return_value = mem_file
-            content, size = load_global_memory()
-            assert content == ""
-            assert size == 0
-
-        # Restore permissions for cleanup
-        mem_file.chmod(0o644)
-
-
-# =============================================================================
-# load_project_memory Tests
-# =============================================================================
-
-
-class TestLoadProjectMemory:
-    def test_returns_content(self, tmp_path):
-        mem_file = tmp_path / "myproject-long-term-memory.md"
-        mem_file.write_text("# myproject\nProject learnings")
-
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("myproject")
-            assert "Project learnings" in content
-            assert size > 0
-
-    def test_returns_empty_when_missing(self, tmp_path):
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("nonexistent")
-            assert content == ""
-            assert size == 0
-
-    def test_handles_special_chars_in_name(self, tmp_path):
-        """Project names with special chars map to correct filenames."""
-        # "My Project!" -> "my-project-long-term-memory.md"
-        mem_file = tmp_path / "my-project-long-term-memory.md"
-        mem_file.write_text("# My Project\nContent")
-
-        with mock.patch("load_memory.get_project_memory_dir") as mock_d:
-            mock_d.return_value = tmp_path
-            content, size = load_project_memory("My Project!")
-            assert "Content" in content
-
-
-# =============================================================================
-# load_daily_summaries Tests
-# =============================================================================
-
-
-SAMPLE_DAILY_GLOBAL = """# 2026-02-05
-## Actions
-- [global/implement] Set up new hooks
-- [myproject/implement] Added feature X
-
-## Learnings
-- [global/pattern] Important global pattern
-- [myproject/gotcha] Project-specific gotcha
-"""
-
-SAMPLE_DAILY_PROJECT = """# 2026-02-04
-## Actions
-- [global/document] Wrote docs
-- [myproject/implement] Built the widget
-
-## Learnings
-- [myproject/pattern] Widget must be initialized first
-"""
-
-
-def _setup_daily_dir(tmp_path, include_global_only_day=False):
-    daily_dir = tmp_path / "daily"
-    daily_dir.mkdir()
-    (daily_dir / "2026-02-05.md").write_text(SAMPLE_DAILY_GLOBAL)
-    (daily_dir / "2026-02-04.md").write_text(SAMPLE_DAILY_PROJECT)
-    if include_global_only_day:
-        (daily_dir / "2026-02-03.md").write_text(
-            "# 2026-02-03\n## Actions\n- [global/implement] Only global\n"
-        )
-    return daily_dir
-
-
-class TestLoadDailySummaries:
-    def test_global_scope_filtering(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
-
-            summaries, total_bytes = load_daily_summaries(2, scope="global")
-            all_content = " ".join(content for _, content in summaries)
-            assert "[global/" in all_content
-            assert "[myproject/" not in all_content
-
-    def test_project_scope_filtering(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05", "2026-02-04"]
-
-            summaries, total_bytes = load_daily_summaries(2, scope="myproject")
-            all_content = " ".join(content for _, content in summaries)
-            assert "[myproject/" in all_content
-            assert "[global/" not in all_content
-
-    def test_respects_days_limit(self, tmp_path):
-        """get_working_days already limits, so only those dates are loaded."""
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05"]  # Only 1 day
-
-            summaries, _ = load_daily_summaries(1, scope="global")
-            dates = [d for d, _ in summaries]
-            assert "2026-02-04" not in dates
-
-    def test_empty_when_no_matching_content(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory.get_working_days") as mock_wd:
-            mock_dd.return_value = daily_dir
-            mock_wd.return_value = ["2026-02-05"]
-
-            summaries, total_bytes = load_daily_summaries(1, scope="other-project")
-            assert summaries == []
-            assert total_bytes == 0
-
-
-# =============================================================================
-# load_project_history Tests
-# =============================================================================
-
-
-class TestLoadProjectHistory:
-    def test_loads_project_entries(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, total_bytes = load_project_history(project, days_limit=10)
-
-            assert len(summaries) == 2  # Feb 4 and Feb 5 have myproject entries
-            all_content = " ".join(content for _, content in summaries)
-            assert "[myproject/" in all_content
-            assert "[global/" not in all_content
-            assert total_bytes > 0
-
-    def test_oldest_first_ordering(self, tmp_path):
-        """Output should be chronological (oldest first)."""
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, _ = load_project_history(project, days_limit=10)
-            dates = [d for d, _ in summaries]
-            assert dates == sorted(dates)
-
-    def test_respects_day_limit(self, tmp_path):
-        daily_dir = _setup_daily_dir(tmp_path, include_global_only_day=True)
-        with mock.patch("load_memory.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            project = {"name": "myproject"}
-            summaries, _ = load_project_history(project, days_limit=1)
-            assert len(summaries) == 1
-
-    def test_empty_project_name(self):
-        project = {"name": ""}
-        summaries, total_bytes = load_project_history(project, days_limit=10)
-        assert summaries == []
-        assert total_bytes == 0
 
 
 # =============================================================================
@@ -1470,11 +1296,10 @@ class TestSynthesisDeferredSetting:
         monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
 
         # Mock memory loading functions (not under test here)
-        monkeypatch.setattr("load_memory.load_global_memory", lambda: ("", 0))
         monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
         monkeypatch.setattr("load_memory.load_json_file", lambda p, d: {})
         monkeypatch.setattr("load_memory.find_current_project", lambda *a: None)
-        monkeypatch.setattr("load_memory.load_daily_summaries", lambda *a, **kw: ([], 0))
+        monkeypatch.setattr("load_memory._load_from_db", lambda *a: "")
 
         main()
         return capsys.readouterr().out
@@ -1485,11 +1310,16 @@ class TestSynthesisDeferredSetting:
         output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
         assert "AUTO-SYNTHESIZE" not in output
 
-    def test_deferred_false_preserves_auto_synthesis(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=False, existing behavior is preserved."""
+    def test_deferred_false_forced_to_deferred_on_v3(self, tmp_path, capsys, monkeypatch):
+        """When synthesis.deferred=False on v3 schema, forced to deferred mode (no in-session synthesis)."""
         settings = self._make_settings(deferred=False)
+        # Mock storage.get_db and _get_schema_version to simulate v3 schema
+        import storage as _storage_mod
+        monkeypatch.setattr(_storage_mod, "_get_schema_version", lambda c: 3)
+        monkeypatch.setattr(_storage_mod, "get_db", lambda: type("FakeConn", (), {"execute": lambda *a: None})())
+        monkeypatch.setattr(_storage_mod, "close_db", lambda c: None)
         output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" in output
+        assert "AUTO-SYNTHESIZE" not in output
 
 
 class TestCheckSynthesisErrors:
@@ -1541,6 +1371,619 @@ class TestCheckSynthesisErrors:
         assert "error 5" in result
         assert "error 9" in result
         assert "error 0" not in result
+
+
+# ============================================================================
+# C7: CRUD-aware synthesis prompt
+# ============================================================================
+
+
+class TestSynthesisPromptCrud:
+    """Tests for CRUD-aware synthesis prompt generation."""
+
+    def test_prompt_contains_memory_ops_format_spec(self):
+        """Prompt includes ===MEMORY_OPS=== output format with examples."""
+        instructions = _build_synthesis_instructions("test-project")
+        assert "===MEMORY_OPS===" in instructions
+        assert "ADD" in instructions
+        assert "UPDATE" in instructions
+        assert "DELETE" in instructions
+        assert "NOOP" in instructions
+
+    def test_prompt_includes_crud_action_descriptions(self):
+        """Prompt describes what each CRUD action means and chunk ID referencing."""
+        instructions = _build_synthesis_instructions("test-project")
+        assert "chunk_id" in instructions or "chunk" in instructions.lower()
+        assert "id" in instructions.lower()
+
+    def test_prompt_includes_existing_memories_with_ids(self, tmp_path):
+        """When vector memories available, prompt has Existing Memories with chunk IDs."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "abc123", "content": "project uses REST API"},
+            {"chunk_id": "def456", "content": "prefers Python for scripting"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "abc123" in prompt
+        assert "def456" in prompt
+        assert "Existing Memories" in prompt
+
+    def test_prompt_falls_back_to_ltm_without_vector(self, tmp_path):
+        """Without vector memories, prompt uses full LTM embedding."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
+            },
+        )
+        assert "Key Actions" in prompt
+
+
+# ============================================================================
+# C2: Pre-retrieval context in synthesis prompts
+# ============================================================================
+
+
+class TestPreRetrievalPrompt:
+    """Tests for vector-retrieved memory context in _build_preextracted_prompt."""
+
+    def test_prompt_includes_existing_memories_section(self, tmp_path):
+        """Synthesis prompt has '## Existing Memories' with chunk IDs."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "abc123", "content": "project uses REST API"},
+            {"chunk_id": "def456", "content": "prefers Python for scripting"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "Existing Memories" in prompt
+        assert "abc123" in prompt
+        assert "def456" in prompt
+
+    def test_fallback_to_full_ltm_when_vec_unavailable(self, tmp_path):
+        """When vector_memories is None/empty, falls back to full LTM embedding."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="test instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
+            },
+        )
+        assert "Key Actions" in prompt
+
+    def test_vector_results_formatted_with_chunk_ids(self, tmp_path):
+        """Each retrieved memory includes its chunk ID for CRUD reference."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        vector_memories = [
+            {"chunk_id": "chunk_abc123", "content": "content text here"},
+        ]
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="instructions",
+            embedded_files={"transcripts": {"2026-03-21": "test transcript"}},
+            vector_memories=vector_memories,
+        )
+        assert "[chunk_abc123] content text here" in prompt
+
+    def test_empty_vector_memories_falls_back_to_ltm(self, tmp_path):
+        """Empty vector_memories list uses full LTM fallback."""
+        extract_file = tmp_path / "extract.txt"
+        extract_file.write_text("test transcript")
+        prompt = _build_preextracted_prompt(
+            pending_dates=["2026-03-21"],
+            extracted_files={"2026-03-21": str(extract_file)},
+            synthesis_instructions="instructions",
+            embedded_files={
+                "transcripts": {"2026-03-21": "test transcript"},
+                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] some fact",
+            },
+            vector_memories=[],
+        )
+        assert "Key Actions" in prompt
+
+
+# =============================================================================
+# _build_synthesis_instructions_v3 Tests
+# =============================================================================
+
+
+class TestSynthesisPromptV3:
+    def test_prompt_requests_memory_ops_only(self):
+        """V3 prompt should request MEMORY_OPS format, not PROJECT blocks."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "MEMORY_OPS" in instructions
+        assert "===PROJECT:" not in instructions
+
+    def test_prompt_includes_salience_guidance(self):
+        """Prompt explains salience spectrum (0.3-0.5 transient, 0.7-0.9 important)."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "salience" in instructions.lower()
+        assert "0.3" in instructions or "transient" in instructions
+
+    def test_prompt_documents_three_scopes(self):
+        """Prompt explains user, global, and project scopes."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "user" in instructions
+        assert "global" in instructions
+
+    def test_prompt_includes_provenance_fields(self):
+        """Prompt explains supersedes, contradicts, etc. relationship types."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "supersedes" in instructions
+
+    def test_prompt_includes_entity_extraction(self):
+        """Prompt requests entities array in each operation."""
+        instructions = _build_synthesis_instructions_v3()
+        assert "entities" in instructions
+
+
+# =============================================================================
+# _load_from_db Tests (E1 + E2)
+# =============================================================================
+
+
+def _make_v3_db(tmp_path):
+    """Create a minimal v3 DB for testing smart loading.
+
+    Uses ensure_db() via patched get_db_path so vec0 errors are handled
+    gracefully (same as production code).
+    """
+    from storage import ensure_db
+
+    db_path = tmp_path / "test.db"
+    with mock.patch("storage.get_db_path", return_value=db_path):
+        conn = ensure_db()
+    return conn
+
+
+class TestSmartLoading:
+    def test_returns_none_for_v2_db(self, tmp_path):
+        """Returns None (signal legacy) when DB is v2."""
+        from storage import SCHEMA_DDL
+
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        conn.executescript(SCHEMA_DDL)
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+        assert result is None
+
+    def test_returns_empty_string_when_no_db(self, tmp_path):
+        """Returns empty string (not None) when DB file doesn't exist."""
+        with mock.patch("storage.get_db", side_effect=FileNotFoundError):
+            result = _load_from_db("myproject")
+        assert result == ""
+
+    def test_graceful_fallback_no_db(self, tmp_path):
+        """If DB doesn't exist, loading returns empty context gracefully."""
+        with mock.patch("storage.get_db", side_effect=FileNotFoundError):
+            result = _load_from_db("")
+        assert result == ""
+
+    def test_loads_user_profile(self, tmp_path):
+        """User profile data_points (scope='user') are loaded."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn, DataPointRow(type="profile", content="Senior Python dev", scope="user", salience=1.0)
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Senior Python dev" in result
+
+    def test_loads_project_memories(self, tmp_path):
+        """Project memories with salience > 0.4 are loaded; below threshold excluded from Tier 3."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="Uses gRPC", scope="myproject", salience=0.8),
+        )
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="memory",
+                content="Low salience old",
+                scope="myproject",
+                salience=0.2,
+                created_at=old_date,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Uses gRPC" in result
+        assert "Low salience old" not in result
+
+    def test_loads_global_knowledge(self, tmp_path):
+        """Global memories with salience > 0.6 are loaded."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="SQLite WAL mode", scope="global", salience=0.9),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("")
+            mock_conn.close()
+
+        assert result is not None
+        assert "SQLite WAL mode" in result
+
+    def test_dedup_across_tiers(self, tmp_path):
+        """Same data_point doesn't appear twice across query tiers."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                id="dp_cross",
+                type="memory",
+                content="Cross-tier fact",
+                scope="global",
+                salience=0.9,
+                created_at=now_iso,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("")
+            mock_conn.close()
+
+        assert result is not None
+        assert result.count("Cross-tier fact") == 1
+
+    def test_access_tracking_fires(self, tmp_path):
+        """All served data_point IDs have access_count incremented."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        dp_id = insert_data_point(
+            conn,
+            DataPointRow(type="memory", content="tracked", scope="global", salience=0.9),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            _load_from_db("")
+            mock_conn.close()
+
+        verify_conn = sqlite3.connect(str(tmp_path / "test.db"))
+        row = verify_conn.execute(
+            "SELECT access_count FROM data_points WHERE id=?", (dp_id,)
+        ).fetchone()
+        verify_conn.close()
+        assert row is not None
+        assert row[0] > 0
+
+
+class TestSessionContinuity:
+    def test_shows_last_session_work(self, tmp_path):
+        """Output includes 'Last Session' section when context exists."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Working on auth",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" in result
+        assert "Working on auth" in result
+
+    def test_no_section_when_no_context(self, tmp_path):
+        """No 'Last Session' section when no session_context exists for project."""
+        conn = _make_v3_db(tmp_path)
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" not in result
+
+    def test_status_from_properties(self, tmp_path):
+        """Status field from properties JSON is displayed in output."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Auth work",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+                properties=json.dumps({"status": "in_progress"}),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "in_progress" in result
+
+    def test_stale_context_not_shown(self, tmp_path):
+        """Session context older than 7 days is not shown."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        stale = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
+        insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Old work",
+                scope="myproject",
+                salience=0.8,
+                created_at=stale,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "Last Session" not in result
+
+    def test_entities_from_context_for_edges(self, tmp_path):
+        """Entities connected via context_for edges are listed in output."""
+        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
+
+        conn = _make_v3_db(tmp_path)
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        ctx_id = insert_data_point(
+            conn,
+            DataPointRow(
+                type="session_context",
+                content="Auth work",
+                scope="myproject",
+                salience=0.8,
+                created_at=recent,
+            ),
+        )
+        entity_id = insert_data_point(
+            conn,
+            DataPointRow(type="entity", name="JWT", scope="myproject", salience=0.7),
+        )
+        insert_edge(
+            conn,
+            EdgeRow(
+                source=ctx_id,
+                target=entity_id,
+                type="context_for",
+                created_at=recent,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch(
+            "storage.close_db"
+        ):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        assert result is not None
+        assert "JWT" in result
+
+
+# =============================================================================
+# Salience Reinforcement Tests (A1)
+# =============================================================================
+
+
+class TestSalienceReinforcement:
+    """Tests for salience reinforcement in _batch_update_data_point_access."""
+
+    def _make_v3_db(self, tmp_path):
+        """Create a v3 DB for testing data_point access tracking."""
+        from unittest.mock import patch
+        with patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
+             patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_salience_increases_on_access(self, tmp_path):
+        """Accessing a data_point increases its salience via diminishing returns."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.5)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access, REINFORCEMENT_ETA
+        _batch_update_data_point_access(conn, [dp_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        expected = min(1.0, 0.5 + REINFORCEMENT_ETA * (1.0 - 0.5))
+        assert abs(row[0] - expected) < 0.001
+        conn.close()
+
+    def test_salience_capped_at_one(self, tmp_path):
+        """Salience cannot exceed 1.0 even after repeated reinforcement."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.95)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        for _ in range(10):
+            _batch_update_data_point_access(conn, [dp_id])
+            conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] <= 1.0
+        conn.close()
+
+    def test_associative_boost_propagates_to_entities(self, tmp_path):
+        """Accessing a memory boosts salience of connected entity data_points."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="Use Redis for caching", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(conn, EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now))
+        conn.commit()
+
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] > 0.4, "Entity salience should increase via associative boost"
+        conn.close()
+
+    def test_no_boost_to_invalidated_edges(self, tmp_path):
+        """Entities connected via invalidated edges (valid_to IS NOT NULL) are not boosted."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(type="memory", content="test", scope="global", salience=0.6)
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(type="entity", name="test", content="test", scope="global", salience=0.4)
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        edge_row = EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now)
+        insert_edge(conn, edge_row)
+        edge_id = conn.execute("SELECT id FROM edges ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        invalidate_edge(conn, edge_id, valid_to=now, expired_at=now)
+        conn.commit()
+
+        original_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        from load_memory import _batch_update_data_point_access
+        _batch_update_data_point_access(conn, [memory_id])
+        conn.commit()
+
+        new_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
+        assert new_salience == original_salience, "Invalidated edge should not cause boost"
+        conn.close()
 
 
 if __name__ == "__main__":
