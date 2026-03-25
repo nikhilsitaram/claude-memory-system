@@ -622,11 +622,227 @@ def run_synthesis(force: bool = False) -> int:
     return 0
 
 
+def _group_sessions_by_project(sessions):
+    """Group sessions by resolved project name."""
+    from memory_utils import resolve_project_path_to_name
+
+    groups = {}
+    for session in sessions:
+        project_name = "global"
+        if session.project_path:
+            resolved = resolve_project_path_to_name(session.project_path)
+            if resolved:
+                project_name = resolved
+        elif session.project_hash:
+            resolved = resolve_project_path_to_name(None, project_hash=session.project_hash)
+            if resolved:
+                project_name = resolved
+        groups.setdefault(project_name, []).append(session)
+    return groups
+
+
+def _run_claude_backfill(prompt: str, model: str) -> str | None:
+    """Run headless claude -p for backfill synthesis."""
+    import tempfile
+
+    cmd = build_claude_command(model)
+    env = os.environ.copy()
+    env["CLAUDECODE"] = ""
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(prompt)
+        tmp_path = tmp.name
+
+    try:
+        with open(tmp_path, encoding="utf-8") as f:
+            result = subprocess.run(
+                cmd, stdin=f, env=env, capture_output=True, text=True, timeout=300,
+            )
+        if result.returncode == 0:
+            return result.stdout
+        print(f"  claude -p exited {result.returncode}: {result.stderr[:200]}", file=sys.stderr)
+        return None
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        print(f"  Synthesis error: {exc}", file=sys.stderr)
+        return None
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def run_backfill(days=None, import_from=None) -> int:
+    """Run backfill synthesis on historical sessions."""
+    from indexing import get_session_date, list_recent_sessions
+    from load_memory import _build_synthesis_instructions_v3
+    from memory_utils import (
+        get_project_working_days,
+        load_settings,
+        load_synthesis_state,
+        update_synthesis_state,
+    )
+    from storage import ensure_db
+    from synthesis import apply_memory_ops_v3, parse_synthesis_output
+    from transcript_ops import parse_jsonl_file_from_line
+
+    settings = load_settings()
+
+    # Step 1: Optional session import
+    if import_from:
+        from session_import import import_sessions
+
+        result = import_sessions(import_from)
+        print(f"Imported {result.copied} sessions from {result.projects} projects "
+              f"({result.skipped} skipped as duplicates)")
+        for m in result.mismatches:
+            print(f"  Mismatch: {m}")
+
+        # Rebuild index so imported sessions are discoverable
+        from memory_utils import rebuild_projects_index_quiet
+
+        rebuild_projects_index_quiet()
+
+    # Step 2: Discover sessions
+    max_age = days if days is not None else None
+    all_sessions = list_recent_sessions(max_age_days=max_age)
+    if not all_sessions:
+        print("No sessions found for backfill.")
+        return 0
+
+    # Step 3: Group by project
+    project_sessions = _group_sessions_by_project(all_sessions)
+
+    # Step 4: Compute model assignments per project
+    backfill_wd = (
+        settings.get("synthesis", {}).get("backfill", {}).get("recentWorkingDays", 7)
+    )
+    default_model = settings.get("synthesis", {}).get("model", "sonnet")
+
+    project_batches = {}
+    for project_name, sessions in project_sessions.items():
+        working_days = get_project_working_days(project_name, backfill_wd)
+        wd_set = set(working_days)
+        sonnet, haiku = [], []
+        for s in sessions:
+            (sonnet if get_session_date(s) in wd_set else haiku).append(s)
+        project_batches[project_name] = {
+            "sonnet": sonnet, "haiku": haiku, "total": len(sessions),
+        }
+
+    # Step 5: Print scope report
+    total = sum(b["total"] for b in project_batches.values())
+    total_sonnet = sum(len(b["sonnet"]) for b in project_batches.values())
+    total_haiku = sum(len(b["haiku"]) for b in project_batches.values())
+
+    print(f"\nBackfill scope: {len(project_batches)} projects, {total} sessions")
+    for pname, batch in sorted(project_batches.items(), key=lambda x: -x[1]["total"]):
+        print(f"  {pname:40s} {batch['total']:4d} sessions "
+              f"({len(batch['sonnet'])} {default_model}, {len(batch['haiku'])} haiku)")
+    print(f"\nModel split: {total_sonnet} {default_model}, {total_haiku} haiku")
+
+    # Step 6: Confirmation
+    try:
+        answer = input("Proceed? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Aborted.")
+            return 0
+    except EOFError:
+        print("Non-interactive mode — proceeding automatically.")
+
+    # Step 7: Process each project
+    conn = ensure_db()
+    state = load_synthesis_state()
+    sessions_state = state.get("sessions", {})
+    session_updates = {}
+    v3_instructions = _build_synthesis_instructions_v3()
+
+    try:
+        for project_name, batch in project_batches.items():
+            print(f"\n  {project_name} ({batch['total']} sessions)...")
+
+            for model_tier, model_name in [("sonnet", default_model), ("haiku", "haiku")]:
+                tier_sessions = batch[model_tier]
+                if not tier_sessions:
+                    continue
+
+                # Group by date for batching
+                by_date = {}
+                for s in tier_sessions:
+                    by_date.setdefault(get_session_date(s), []).append(s)
+
+                for day, day_sessions in sorted(by_date.items()):
+                    transcripts = []
+                    for s in day_sessions:
+                        sid = s.session_id
+                        prev = sessions_state.get(sid)
+                        if prev and s.file_size == prev.get("offset", 0):
+                            continue
+
+                        start_line = prev.get("lines", 0) if prev else 0
+                        messages, total_lines = parse_jsonl_file_from_line(
+                            s.transcript_path, start_line=start_line
+                        )
+                        if messages:
+                            transcripts.append({"session_id": sid, "messages": messages})
+                            session_updates[sid] = {
+                                "offset": s.file_size, "lines": total_lines,
+                            }
+
+                    if not transcripts:
+                        continue
+
+                    # Build prompt
+                    parts = [f"You are synthesizing transcripts for project "
+                             f'"{project_name}" from {day}.\n\n{v3_instructions}\n\n## Transcripts\n']
+                    for t in transcripts:
+                        parts.append(f"### Session: {t['session_id']}")
+                        for msg in t["messages"]:
+                            role = msg.get("role", "unknown")
+                            content = msg.get("content", "")
+                            if isinstance(content, list):
+                                content = " ".join(
+                                    b.get("text", "") for b in content if isinstance(b, dict)
+                                )
+                            parts.append(f"**{role}:** {content[:2000]}")
+
+                    output = _run_claude_backfill("\n".join(parts), model_name)
+                    if output:
+                        sr = parse_synthesis_output(output)
+                        if sr and sr.memory_ops:
+                            apply_memory_ops_v3(conn, sr.memory_ops)
+
+                print(f"    {model_name}: {len(tier_sessions)} sessions processed")
+
+        if session_updates:
+            update_synthesis_state(session_updates)
+
+        _run_decay_v3(conn)
+        print("\nBackfill complete.")
+        return 0
+
+    except Exception as e:
+        print(f"Backfill error: {e}", file=sys.stderr)
+        if session_updates:
+            update_synthesis_state(session_updates)
+        return 1
+    finally:
+        conn.close()
+
+
 def main() -> int:
     """CLI entry point for deferred synthesis."""
     parser = argparse.ArgumentParser(description="Deferred synthesis runner")
     parser.add_argument("--force", action="store_true", help="Skip schedule check")
+    parser.add_argument("--backfill", action="store_true",
+                        help="Backfill: synthesize all historical sessions")
+    parser.add_argument("--days", type=int, default=None,
+                        help="With --backfill: limit to last N calendar days")
+    parser.add_argument("--import-from", type=str, default=None, dest="import_from",
+                        help="With --backfill: import sessions from external path first")
     args = parser.parse_args()
+
+    if args.backfill:
+        return run_backfill(days=args.days, import_from=args.import_from)
     return run_synthesis(force=args.force)
 
 

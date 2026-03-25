@@ -22,6 +22,9 @@ py-modules = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "working_day: tests for working-day functions (get_global_working_days, get_project_working_days)",
+]
 
 [tool.ruff]
 line-length = 120

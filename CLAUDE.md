@@ -20,7 +20,8 @@ claude-memory-system/
 │   ├── synthesis_cron.py       # Deferred synthesis runner (launchd/systemd)
 │   ├── storage.py              # SQLite storage layer (data_points, edges, migration)
 │   ├── embeddings.py           # Vector embedding and semantic search
-│   └── health.py               # Memory health diagnostics
+│   ├── health.py               # Memory health diagnostics
+│   └── session_import.py       # Cross-machine session import utility
 ├── skills/                     # /synthesize, /settings, /projects (recall/remember deprecated)
 ├── templates/web/              # Web frontend HTML
 ├── tests/                      # Unit tests
@@ -136,6 +137,8 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `synthesis.background` | true |
 | `synthesis.deferred` | true |
 | `synthesis.minSessionMessages` | 10 |
+| `synthesis.recentWorkingDays` | 7 |
+| `synthesis.backfill.recentWorkingDays` | 7 |
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |
 | `decay.archiveRetentionDays` | 365 |

@@ -373,14 +373,23 @@ def format_transcripts_incremental(
     return "\n".join(output)
 
 
-def get_recent_days(exclude_session_id: str | None = None) -> list[str]:
+def get_recent_days(
+    exclude_session_id: str | None = None,
+    max_age_days: int | None = None,
+) -> list[str]:
     """List all days that have recent transcripts.
 
     Args:
         exclude_session_id: Optional session ID to exclude
+        max_age_days: None uses working-day default. int for calendar-day cutoff.
     """
+    from indexing import _USE_WORKING_DAYS
+
+    effective_age = _USE_WORKING_DAYS if max_age_days is None else max_age_days
     recent = list_recent_sessions(
-        exclude_session_id=exclude_session_id, verify_content=True
+        max_age_days=effective_age,
+        exclude_session_id=exclude_session_id,
+        verify_content=True,
     )
     days = set()
     for session in recent:

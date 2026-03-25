@@ -149,12 +149,12 @@ def decay_data_points(conn, dry_run: bool = False) -> int:
     """Apply tiered exponential decay to data_points salience.
 
     Queries all active memories (type='memory', salience > threshold,
-    not consolidated, not user scope), classifies into hot/warm/cold
-    tiers, and applies decay formula.
+    not user scope), classifies into hot/warm/cold tiers, and applies
+    decay formula. Consolidated memories participate in normal decay;
+    recently accessed ones survive via salience reinforcement.
 
     Protected from decay:
     - type != 'memory' (profile, entity, session_context)
-    - consolidated = 1 (pinned)
     - scope = 'user' (permanent user preferences)
 
     Args:
@@ -167,7 +167,7 @@ def decay_data_points(conn, dry_run: bool = False) -> int:
     rows = conn.execute(
         "SELECT id, salience, access_count, COALESCE(last_accessed, created_at), certainty "
         "FROM data_points WHERE type = 'memory' AND salience > ? "
-        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        "AND (scope IS NULL OR scope != 'user')",
         (ARCHIVE_SALIENCE_THRESHOLD,)
     ).fetchall()
 
@@ -205,7 +205,6 @@ def cleanup_near_zero_salience(conn, threshold: float = ARCHIVE_SALIENCE_THRESHO
 
     Protected from cleanup:
     - type != 'memory' (profile, entity, session_context)
-    - consolidated = 1 (pinned)
     - scope = 'user' (permanent user preferences)
 
     Args:
@@ -221,7 +220,7 @@ def cleanup_near_zero_salience(conn, threshold: float = ARCHIVE_SALIENCE_THRESHO
     rows = conn.execute(
         "SELECT id FROM data_points WHERE type = 'memory' "
         "AND salience > 0 AND salience <= ? "
-        "AND consolidated != 1 AND (scope IS NULL OR scope != 'user')",
+        "AND (scope IS NULL OR scope != 'user')",
         (threshold,)
     ).fetchall()
 

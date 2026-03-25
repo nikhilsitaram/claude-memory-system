@@ -1021,5 +1021,53 @@ class TestListAllSessions:
         assert len(sessions) == 1
 
 
+# =============================================================================
+# Working-Day Session Filtering Tests (B1)
+# =============================================================================
+
+
+class TestListRecentSessionsWorkingDays:
+    """Test working-day mode in list_recent_sessions."""
+
+    def test_working_day_filtering(self):
+        """Sessions on 7 active dates across 20 calendar days all included."""
+        from indexing import list_recent_sessions
+        from memory_utils import DEFAULT_SETTINGS
+
+        n_days = DEFAULT_SETTINGS["synthesis"]["recentWorkingDays"]
+        dates = ["2026-03-25", "2026-03-23", "2026-03-20", "2026-03-18",
+                 "2026-03-15", "2026-03-10", "2026-03-05"]
+        sessions = [make_session_info(f"s{i}") for i in range(len(dates))]
+
+        with mock.patch("indexing.list_all_sessions", return_value=sessions), \
+             mock.patch("indexing.get_global_working_days", return_value=dates[:n_days]) as mock_gwd, \
+             mock.patch("indexing.load_settings", return_value=DEFAULT_SETTINGS), \
+             mock.patch("indexing.get_session_date", side_effect=dates):
+            result = list_recent_sessions()
+
+        mock_gwd.assert_called_once_with(n_days)
+        assert len(result) == n_days
+
+    def test_max_age_days_none_returns_all(self):
+        """max_age_days=None returns all sessions (backfill mode)."""
+        from indexing import list_recent_sessions
+
+        sessions = [make_session_info(f"s{i}") for i in range(10)]
+        with mock.patch("indexing.list_all_sessions", return_value=sessions):
+            result = list_recent_sessions(max_age_days=None)
+        assert len(result) == 10
+
+    def test_max_age_days_int_uses_calendar(self):
+        """Explicit int uses calendar-day cutoff, not working days."""
+        from indexing import list_recent_sessions
+
+        sessions = [make_session_info("s1")]
+        with mock.patch("indexing.list_all_sessions", return_value=sessions), \
+             mock.patch("indexing.get_global_working_days") as mock_gwd:
+            list_recent_sessions(max_age_days=10)
+
+        mock_gwd.assert_not_called()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

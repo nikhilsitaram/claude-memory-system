@@ -1980,5 +1980,87 @@ class TestSalienceReinforcement:
         conn.close()
 
 
+# =============================================================================
+# Working-Day Loading Tests (B2)
+# =============================================================================
+
+
+class TestWorkingDayLoading:
+    """Test Tier 2 and Tier 5 working-day integration."""
+
+    def test_tier2_uses_project_working_days(self, tmp_path):
+        """Tier 2 uses get_project_working_days for cutoff."""
+        conn = _make_v3_db(tmp_path)
+        conn.execute(
+            "INSERT INTO data_points (id, type, scope, content, created_at, salience) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("sc1", "session_context", "myproject", "Working on tests", "2026-03-13T10:00:00Z", 1.0),
+        )
+        conn.commit()
+
+        # Mock at memory_utils level since load_memory imports lazily
+        with mock.patch("memory_utils.get_project_working_days",
+                        return_value=["2026-03-25", "2026-03-20", "2026-03-13"]):
+            from memory_utils import get_project_working_days
+
+            working_days = get_project_working_days("myproject", 5)
+            cutoff = working_days[-1] + "T00:00:00Z"
+
+            row = conn.execute(
+                "SELECT id, content, properties FROM data_points "
+                "WHERE type='session_context' AND scope=? AND created_at > ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                ("myproject", cutoff),
+            ).fetchone()
+
+        assert row is not None, "Session context from Mar 13 should be found with working-day cutoff"
+        assert row[1] == "Working on tests"
+        conn.close()
+
+    def test_tier2_falls_back_to_calendar(self):
+        """Tier 2 falls back to 7 calendar days when no working days."""
+        with mock.patch("memory_utils.get_project_working_days", return_value=[]):
+            from memory_utils import get_project_working_days
+
+            working_days = get_project_working_days("myproject", 5)
+            assert working_days == []
+
+    def test_tier5_uses_global_working_days(self, tmp_path):
+        """Tier 5 uses get_global_working_days for cutoff."""
+        conn = _make_v3_db(tmp_path)
+        conn.execute(
+            "INSERT INTO data_points (id, type, scope, content, created_at, salience) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("m1", "memory", "global", "Important fact", "2026-03-15T10:00:00Z", 0.8),
+        )
+        conn.commit()
+
+        with mock.patch("memory_utils.get_global_working_days",
+                        return_value=["2026-03-25", "2026-03-20", "2026-03-15"]):
+            from memory_utils import get_global_working_days
+
+            global_working = get_global_working_days(3)
+            cutoff = global_working[-1] + "T00:00:00Z"
+
+            rows = conn.execute(
+                "SELECT id, content FROM data_points "
+                "WHERE scope IN ('global', ?) AND type='memory' "
+                "AND created_at > ? "
+                "ORDER BY created_at DESC LIMIT 15",
+                ("global", cutoff),
+            ).fetchall()
+
+        assert len(rows) == 1
+        assert rows[0][1] == "Important fact"
+        conn.close()
+
+    def test_tier5_falls_back_to_calendar(self):
+        """Tier 5 falls back to 3 calendar days when no working days."""
+        with mock.patch("memory_utils.get_global_working_days", return_value=[]):
+            from memory_utils import get_global_working_days
+
+            assert get_global_working_days(3) == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

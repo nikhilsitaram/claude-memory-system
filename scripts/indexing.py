@@ -35,11 +35,13 @@ if str(script_dir) not in sys.path:
 from memory_utils import (
     check_python_version,
     from_iso_z,
+    get_global_working_days,
     get_memory_dir,
     get_projects_dir,
     get_projects_index_file,
     get_sessions_original_path,
     load_sessions_index,
+    load_settings,
     resolve_session_path,
     to_iso_z,
     utc_to_local_datestr,
@@ -48,8 +50,11 @@ from memory_utils import (
 # Sessions smaller than this are likely empty/metadata-only (2-3 messages ~ 1000 bytes)
 MIN_SESSION_SIZE_BYTES = 1000
 
-# Default window for recent session filtering (days)
+# Default window for recent session filtering (days) — kept for backward compat
 DEFAULT_RECENCY_WINDOW_DAYS = 7
+
+# Private sentinel: default param uses working-day mode, distinct from any int
+_USE_WORKING_DAYS = object()
 
 __all__ = [
     # Constants
@@ -227,7 +232,7 @@ def has_assistant_message(filepath: Path) -> bool:
 
 
 def list_recent_sessions(
-    max_age_days: int = DEFAULT_RECENCY_WINDOW_DAYS,
+    max_age_days: int | None | object = _USE_WORKING_DAYS,
     min_file_size: int = MIN_SESSION_SIZE_BYTES,
     exclude_session_id: str | None = None,
     verify_content: bool = False,
@@ -235,28 +240,42 @@ def list_recent_sessions(
     """
     List recent sessions eligible for synthesis.
 
-    Filters by file modification time instead of a captured set.
-
     Args:
-        max_age_days: Only include sessions modified within this many days
+        max_age_days: _USE_WORKING_DAYS (default) uses working-day mode.
+                      None = no age filter (backfill mode).
+                      int = calendar-day cutoff.
         min_file_size: Minimum file size in bytes (default MIN_SESSION_SIZE_BYTES)
         exclude_session_id: Optional session ID to exclude (e.g., the active session)
         verify_content: If True, parse JSONL to verify at least one assistant message exists
-
-    Returns list of SessionInfo for sessions that:
-    - Have mtime within max_age_days
-    - Meet minimum file size threshold
-    - Are not the excluded session
-    - (If verify_content) contain at least one assistant message
     """
     all_sessions = list_all_sessions()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+    if max_age_days is None:
+        # Backfill mode: no age filter
+        filtered = all_sessions
+    elif max_age_days is _USE_WORKING_DAYS:
+        # Default mode: use working days from settings
+        settings = load_settings()
+        n_days = settings.get("synthesis", {}).get("recentWorkingDays", 7)
+        active_dates = get_global_working_days(n_days)
+        if active_dates:
+            active_set = set(active_dates)
+            filtered = [
+                s for s in all_sessions
+                if get_session_date(s) in active_set
+            ]
+        else:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_RECENCY_WINDOW_DAYS)
+            filtered = [s for s in all_sessions if s.file_mtime >= cutoff]
+    else:
+        # Explicit calendar-day cutoff
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        filtered = [s for s in all_sessions if s.file_mtime >= cutoff]
 
     return [
         s
-        for s in all_sessions
-        if s.file_mtime >= cutoff
-        and s.file_size >= min_file_size
+        for s in filtered
+        if s.file_size >= min_file_size
         and s.session_id != exclude_session_id
         and (not verify_content or has_assistant_message(s.transcript_path))
     ]

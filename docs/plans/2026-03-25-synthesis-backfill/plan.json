@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "status": "Complete",
+  "workflow": "pr-create",
+  "execution_mode": "subagents",
+  "goal": "Enable synthesis of full session history via --backfill, switch all time windows to working days, remove consolidated decay immunity, and add cross-machine session import.",
+  "architecture": "Three phases: (A) Foundation -- working-day functions in memory_utils.py with session-scoped caching, remove consolidated decay immunity. (B) Pipeline integration -- switch list_recent_sessions/get_recent_days to working days, switch load_memory.py Tier 2/5 to working days, create session import utility. (C) Backfill feature -- project-grouped batching with per-project model selection in synthesis_cron.py, /synthesize skill integration.",
+  "tech_stack": "Python 3.9+, SQLite WAL mode, pathlib for cross-platform paths, headless claude -p for synthesis, pytest with tmp_path isolation",
+  "phases": [
+    {
+      "letter": "A",
+      "name": "Working-Day Infrastructure + Decay Fix",
+      "status": "Complete (2026-03-25)",
+      "depends_on": [],
+      "rationale": "Foundation layer: working-day functions are imported by Phases B and C. Decay fix is independent but groups naturally here as a standalone change with no downstream consumers.",
+      "tasks": [
+        {
+          "id": "A1",
+          "name": "Add working-day functions and synthesis settings to memory_utils.py",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/memory_utils.py"
+            ],
+            "test": [
+              "tests/test_memory_utils.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_memory_utils.py -v -k 'working_day'",
+          "done_when": "get_global_working_days(n) and get_project_working_days(project_scope, n) exist, return date strings sorted newest-first derived from .jsonl file mtimes in ~/.claude/projects/. Both use module-level _working_days_cache dict (keyed by function+args, cleared between sessions). DEFAULT_SETTINGS gains synthesis.recentWorkingDays=7 and synthesis.backfill (nested dict with recentWorkingDays=7). Tests verify: correct date extraction from .jsonl mtimes, per-project vs global scoping, caching behavior, empty directory handling, working days across weekends/gaps. 5/5 tests pass."
+        },
+        {
+          "id": "A2",
+          "name": "Remove consolidated immunity from decay",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/decay.py"
+            ],
+            "test": [
+              "tests/test_decay.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_decay.py -v -k 'consolidated'",
+          "done_when": "decay_data_points() and cleanup_near_zero_salience() no longer have 'AND consolidated != 1' in their WHERE clauses. Docstrings updated to reflect consolidated memories participate in normal decay (only scope='user' is exempt). Existing tests updated, new tests verify: consolidated memory with old last_accessed gets decayed, consolidated memory with recent access survives via salience reinforcement, cleanup removes near-zero consolidated entries. 3/3 new tests pass."
+        }
+      ]
+    },
+    {
+      "letter": "B",
+      "name": "Pipeline Integration + Session Import",
+      "status": "Complete (2026-03-25)",
+      "depends_on": [
+        "A"
+      ],
+      "rationale": "All three tasks consume Phase A's working-day functions. They touch disjoint file sets (indexing+transcript_ops, load_memory, session_import+install) so they run in parallel. Session import must land before Phase C wires it into the backfill flow.",
+      "tasks": [
+        {
+          "id": "B1",
+          "name": "Switch list_recent_sessions and get_recent_days to working days",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/indexing.py",
+              "scripts/transcript_ops.py"
+            ],
+            "test": [
+              "tests/test_indexing.py",
+              "tests/test_transcript_ops.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_indexing.py tests/test_transcript_ops.py -v -k 'working_day or max_age'",
+          "done_when": "list_recent_sessions() default mode uses get_global_working_days(settings.synthesis.recentWorkingDays) instead of timedelta(days=7). Accepts max_age_days=None for unlimited (backfill mode). DEFAULT_RECENCY_WINDOW_DAYS constant removed or deprecated. get_recent_days() accepts and forwards max_age_days parameter. Tests verify: sessions spanning 14 calendar days but only 5 active dates all included, max_age_days=None returns everything, get_recent_days forwards parameter correctly. 4/4 tests pass."
+        },
+        {
+          "id": "B2",
+          "name": "Switch session continuity and recent activity loading to working days",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/load_memory.py"
+            ],
+            "test": [
+              "tests/test_load_memory.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_load_memory.py -v -k 'working_day or tier2 or tier5'",
+          "done_when": "Tier 2 (session continuity, ~line 769): replaces timedelta(days=7) with get_project_working_days(project_scope, 5) -- queries session_context created on any of the last 5 project working days. Falls back to timedelta(days=7) if no working days found. Tier 5 (recent activity, ~line 836): replaces timedelta(days=3) with get_global_working_days(3) -- queries memories created on any of the last 3 globally active dates. Falls back to timedelta(days=3) if no working days found. Tests verify: Tier 2 loads session_context from non-contiguous project working days, Tier 5 loads memories from non-contiguous global working days, fallback when no working days found. 4/4 tests pass."
+        },
+        {
+          "id": "B3",
+          "name": "Create session import utility",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [
+              "scripts/session_import.py",
+              "tests/test_session_import.py"
+            ],
+            "modify": [
+              "scripts/install.py"
+            ],
+            "test": [
+              "tests/test_session_import.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_session_import.py -v",
+          "done_when": "New scripts/session_import.py with import_sessions(source_path, target_projects_dir=None) function. Detects home directory prefix from source folder names (e.g. -home-nsitaram-), remaps to current machine prefix via Path.home(). Copies .jsonl files preserving mtimes, deduplicates by session UUID filename. Returns ImportResult(copied=int, skipped=int, projects=int, mismatches=list[str]). Handles: same-prefix (no remap), mixed prefixes, no .jsonl files (skip), directory structure mismatch (fuzzy match by last path segment, log mismatches). install.py link_scripts() includes session_import.py. Tests verify: prefix detection, remapping, dedup, mtime preservation, fuzzy matching, edge cases. 6/6 tests pass."
+        }
+      ]
+    },
+    {
+      "letter": "C",
+      "name": "Backfill Feature",
+      "status": "Complete (2026-03-25)",
+      "depends_on": [
+        "A",
+        "B"
+      ],
+      "rationale": "Consumes Phase A working-day functions (per-project model selection), Phase B list_recent_sessions max_age_days=None (session discovery), and Phase B session import (--import-from flag). Two tasks: C1 builds the core backfill logic, C2 wires it into the /synthesize skill.",
+      "tasks": [
+        {
+          "id": "C1",
+          "name": "Add backfill command to synthesis_cron.py",
+          "status": "complete",
+          "depends_on": [],
+          "files": {
+            "create": [],
+            "modify": [
+              "scripts/synthesis_cron.py"
+            ],
+            "test": [
+              "tests/test_synthesis_cron.py"
+            ]
+          },
+          "verification": "python3 -m pytest tests/test_synthesis_cron.py -v -k 'backfill'",
+          "done_when": "CLI gains --backfill flag (with --all default, --days N option, --import-from <path> option). New run_backfill() function: (1) if --import-from, calls import_sessions() first, (2) discovers sessions via list_recent_sessions(max_age_days=None or N), (3) groups by project via resolve_project_path_to_name, (4) computes per-project working days via get_project_working_days(scope, settings.synthesis.backfill.recentWorkingDays), (5) prints scope report and asks for confirmation, (6) for each project-date batch selects model (sonnet if within project's recent working days, haiku otherwise), (7) builds synthesis prompt and runs claude -p, (8) applies ops via apply_memory_ops_v3, (9) updates synthesis state. Progress reporting shows per-project batch counts with model breakdown. Tests verify: project grouping, model selection logic (sonnet vs haiku), --days filtering, --import-from integration (mocked), synthesis state updates, confirmation prompt. 5/5 tests pass."
+        },
+        {
+          "id": "C2",
+          "name": "Update /synthesize skill for backfill and import flags",
+          "status": "complete",
+          "depends_on": [
+            "C1"
+          ],
+          "files": {
+            "create": [],
+            "modify": [
+              "skills/synthesize/SKILL.md"
+            ],
+            "test": []
+          },
+          "verification": "cat skills/synthesize/SKILL.md | grep -q 'backfill'",
+          "done_when": "SKILL.md documents --backfill flag usage: /synthesize --backfill (all sessions), /synthesize --backfill --days 30 (last 30 calendar days), /synthesize --backfill --import-from /path/to/backup (import + backfill). Instructions tell the subagent to run synthesis_cron.py with appropriate flags and relay the confirmation prompt and progress output to the user."
+        }
+      ]
+    }
+  ]
+}

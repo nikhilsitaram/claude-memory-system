@@ -16,12 +16,15 @@ from memory_utils import (
     FileLock,
     _calculate_token_limits,
     _clear_projects_index_cache,
+    _clear_working_days_cache,
     _deep_merge,
     estimate_tokens,
     extract_entry_keywords,
     filter_daily_content,
     find_current_project,
     from_iso_z,
+    get_global_working_days,
+    get_project_working_days,
     get_sessions_original_path,
     get_synthesis_state_file,
     get_working_days,
@@ -1504,6 +1507,219 @@ class TestConsolidationSettings:
             settings = load_settings()
         assert "consolidation" in settings
         assert settings["consolidation"]["intervalHours"] == DEFAULT_SETTINGS["consolidation"]["intervalHours"]
+
+
+# =============================================================================
+# Working Days Tests (get_global_working_days / get_project_working_days)
+# =============================================================================
+
+
+def _create_jsonl_with_mtime(path: Path, dt: datetime) -> None:
+    """Create an empty .jsonl file and set its mtime to the given datetime."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    ts = dt.timestamp()
+    os.utime(path, (ts, ts))
+
+
+@pytest.mark.working_day
+class TestGetGlobalWorkingDays:
+    """Tests for get_global_working_days(n)."""
+
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        """Clear working days cache before and after each test."""
+        _clear_working_days_cache()
+        yield
+        _clear_working_days_cache()
+
+    def test_returns_correct_n_most_recent_dates(self, tmp_path):
+        """Returns correct N most recent dates across all projects."""
+        proj_a = tmp_path / "-Users-nsitaram-personal-projectA"
+        proj_b = tmp_path / "-Users-nsitaram-work-projectB"
+        _create_jsonl_with_mtime(proj_a / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_a / "s2.jsonl", datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_b / "s3.jsonl", datetime(2026, 3, 24, 14, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_b / "s4.jsonl", datetime(2026, 3, 20, 9, 0, tzinfo=timezone.utc))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result = get_global_working_days(3)
+        assert result == ["2026-03-25", "2026-03-24", "2026-03-23"]
+
+    def test_returns_fewer_than_n_if_fewer_active_dates(self, tmp_path):
+        """Returns fewer than N if fewer active dates exist."""
+        proj = tmp_path / "-Users-nsitaram-personal-projectA"
+        _create_jsonl_with_mtime(proj / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result = get_global_working_days(5)
+        assert result == ["2026-03-25"]
+
+    def test_returns_empty_when_projects_dir_empty(self, tmp_path):
+        """Returns empty list when projects dir is empty."""
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result = get_global_working_days(3)
+        assert result == []
+
+    def test_returns_empty_when_projects_dir_missing(self, tmp_path):
+        """Returns empty list when projects dir doesn't exist."""
+        missing = tmp_path / "nonexistent"
+        with patch("memory_utils.get_projects_dir", return_value=missing):
+            result = get_global_working_days(3)
+        assert result == []
+
+    def test_deduplicates_dates_from_same_day(self, tmp_path):
+        """Deduplicates dates from multiple sessions on same day."""
+        proj_a = tmp_path / "-Users-nsitaram-personal-projectA"
+        proj_b = tmp_path / "-Users-nsitaram-work-projectB"
+        _create_jsonl_with_mtime(proj_a / "s1.jsonl", datetime(2026, 3, 25, 8, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_a / "s2.jsonl", datetime(2026, 3, 25, 14, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_b / "s3.jsonl", datetime(2026, 3, 25, 20, 0, tzinfo=timezone.utc))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result = get_global_working_days(5)
+        assert result == ["2026-03-25"]
+
+
+@pytest.mark.working_day
+class TestGetProjectWorkingDays:
+    """Tests for get_project_working_days(project_scope, n)."""
+
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        """Clear working days cache before and after each test."""
+        _clear_working_days_cache()
+        _clear_projects_index_cache()
+        yield
+        _clear_working_days_cache()
+        _clear_projects_index_cache()
+
+    def test_returns_dates_only_from_matching_project(self, tmp_path):
+        """Returns dates only from matching project folders."""
+        proj_a = tmp_path / "-Users-nsitaram-personal-projectA"
+        proj_b = tmp_path / "-Users-nsitaram-work-projectB"
+        _create_jsonl_with_mtime(proj_a / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_b / "s2.jsonl", datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc))
+        index_file = tmp_path / "projects-index.json"
+        index_file.write_text(json.dumps({
+            "projects": {
+                "/Users/nsitaram/personal/projectA": {
+                    "name": "projectA",
+                    "encodedPaths": ["-Users-nsitaram-personal-projectA"],
+                },
+                "/Users/nsitaram/work/projectB": {
+                    "name": "projectB",
+                    "encodedPaths": ["-Users-nsitaram-work-projectB"],
+                },
+            }
+        }))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path), \
+             patch("memory_utils.get_projects_index_file", return_value=index_file):
+            result = get_project_working_days("projectA", 5)
+        assert result == ["2026-03-25"]
+
+    def test_includes_worktree_variants(self, tmp_path):
+        """Includes worktree variants (multiple folders mapping to same project)."""
+        proj_main = tmp_path / "-Users-nsitaram-personal-projectA"
+        proj_wt = tmp_path / "-Users-nsitaram-personal-projectA--worktrees-feature"
+        _create_jsonl_with_mtime(proj_main / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj_wt / "s2.jsonl", datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc))
+        index_file = tmp_path / "projects-index.json"
+        index_file.write_text(json.dumps({
+            "projects": {
+                "/Users/nsitaram/personal/projectA": {
+                    "name": "projectA",
+                    "encodedPaths": [
+                        "-Users-nsitaram-personal-projectA",
+                        "-Users-nsitaram-personal-projectA--worktrees-feature",
+                    ],
+                },
+            }
+        }))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path), \
+             patch("memory_utils.get_projects_index_file", return_value=index_file):
+            result = get_project_working_days("projectA", 5)
+        assert result == ["2026-03-25", "2026-03-23"]
+
+    def test_returns_empty_when_project_has_no_sessions(self, tmp_path):
+        """Returns empty list when project has no sessions."""
+        proj = tmp_path / "-Users-nsitaram-personal-projectA"
+        proj.mkdir(parents=True)
+        index_file = tmp_path / "projects-index.json"
+        index_file.write_text(json.dumps({
+            "projects": {
+                "/Users/nsitaram/personal/projectA": {
+                    "name": "projectA",
+                    "encodedPaths": ["-Users-nsitaram-personal-projectA"],
+                },
+            }
+        }))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path), \
+             patch("memory_utils.get_projects_index_file", return_value=index_file):
+            result = get_project_working_days("projectA", 5)
+        assert result == []
+
+    def test_returns_correct_count_when_n_exceeds_available(self, tmp_path):
+        """Returns correct count when n > available dates."""
+        proj = tmp_path / "-Users-nsitaram-personal-projectA"
+        _create_jsonl_with_mtime(proj / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        _create_jsonl_with_mtime(proj / "s2.jsonl", datetime(2026, 3, 23, 10, 0, tzinfo=timezone.utc))
+        index_file = tmp_path / "projects-index.json"
+        index_file.write_text(json.dumps({
+            "projects": {
+                "/Users/nsitaram/personal/projectA": {
+                    "name": "projectA",
+                    "encodedPaths": ["-Users-nsitaram-personal-projectA"],
+                },
+            }
+        }))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path), \
+             patch("memory_utils.get_projects_index_file", return_value=index_file):
+            result = get_project_working_days("projectA", 10)
+        assert len(result) == 2
+        assert result == ["2026-03-25", "2026-03-23"]
+
+
+@pytest.mark.working_day
+class TestWorkingDaysCache:
+    """Tests for working days caching behavior."""
+
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        """Clear working days cache before and after each test."""
+        _clear_working_days_cache()
+        yield
+        _clear_working_days_cache()
+
+    def test_second_call_uses_cache(self, tmp_path):
+        """Second call returns same result without re-scanning filesystem."""
+        proj = tmp_path / "-Users-nsitaram-personal-projectA"
+        _create_jsonl_with_mtime(proj / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        call_count = 0
+        real_projects_dir = tmp_path
+
+        def mock_get_projects_dir():
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise RuntimeError("Should not be called again — cache should be used")
+            return real_projects_dir
+
+        with patch("memory_utils.get_projects_dir", side_effect=mock_get_projects_dir):
+            result1 = get_global_working_days(5)
+            result2 = get_global_working_days(5)
+        assert result1 == result2
+        assert result1 == ["2026-03-25"]
+
+    def test_clear_cache_forces_rescan(self, tmp_path):
+        """_clear_working_days_cache() forces re-scan."""
+        proj = tmp_path / "-Users-nsitaram-personal-projectA"
+        _create_jsonl_with_mtime(proj / "s1.jsonl", datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc))
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result1 = get_global_working_days(5)
+        assert result1 == ["2026-03-25"]
+        _create_jsonl_with_mtime(proj / "s2.jsonl", datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc))
+        _clear_working_days_cache()
+        with patch("memory_utils.get_projects_dir", return_value=tmp_path):
+            result2 = get_global_working_days(5)
+        assert result2 == ["2026-03-25", "2026-03-20"]
 
 
 if __name__ == "__main__":
