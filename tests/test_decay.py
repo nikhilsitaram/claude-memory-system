@@ -736,8 +736,8 @@ class TestDecayDataPoints:
         assert row[0] == 1.0, "Profile should not be decayed"
         conn.close()
 
-    def test_skips_consolidated_data_points(self, tmp_path):
-        """Consolidated (pinned) data_points are not decayed."""
+    def test_decays_consolidated_data_points(self, tmp_path):
+        """Consolidated data_points participate in normal decay (no immunity)."""
         from decay import decay_data_points
         from storage import DataPointRow, insert_data_point
 
@@ -749,7 +749,7 @@ class TestDecayDataPoints:
 
         decay_data_points(conn)
         row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
-        assert row[0] == 0.8, "Consolidated should not be decayed"
+        assert row[0] < 0.8, "Consolidated should be decayed like any other memory"
         conn.close()
 
     def test_skips_user_scope_data_points(self, tmp_path):
@@ -940,18 +940,20 @@ class TestCleanupNearZeroSalience:
         assert cleaned == 0
         conn.close()
 
-    def test_skips_consolidated_memories(self, tmp_path):
-        """Pinned (consolidated=1) memories are not cleaned up."""
+    def test_cleans_up_consolidated_memories(self, tmp_path):
+        """Consolidated memories with near-zero salience are cleaned up (no immunity)."""
         from decay import ARCHIVE_SALIENCE_THRESHOLD, cleanup_near_zero_salience
         from storage import DataPointRow, insert_data_point
 
         conn = self._make_v3_db(tmp_path)
         dp = DataPointRow(type="memory", content="pinned", scope="global", salience=ARCHIVE_SALIENCE_THRESHOLD, consolidated=1)
-        insert_data_point(conn, dp)
+        dp_id = insert_data_point(conn, dp)
         conn.commit()
 
         cleaned = cleanup_near_zero_salience(conn)
-        assert cleaned == 0
+        assert cleaned == 1
+        sal = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()[0]
+        assert sal == 0.0, "Consolidated near-zero memory should be soft-deleted"
         conn.close()
 
     def test_skips_user_scope(self, tmp_path):
@@ -1012,6 +1014,78 @@ class TestCleanupNearZeroSalience:
 
         cleaned = cleanup_near_zero_salience(conn)
         assert cleaned == 0
+        conn.close()
+
+
+class TestConsolidatedDecay:
+    """Tests that consolidated memories participate in normal decay (A2)."""
+
+    def _make_v3_db(self, tmp_path):
+        from unittest.mock import patch as _patch
+
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with _patch("storage.get_db_path", return_value=db_path), \
+             _patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_consolidated_memory_decays(self, tmp_path):
+        """Consolidated memory with old last_accessed gets decayed."""
+        from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
+
+        conn = self._make_v3_db(tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(
+            type="memory", content="consolidated old fact", scope="global",
+            salience=0.5, consolidated=1, last_accessed=old_ts,
+        )
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        count = decay_data_points(conn)
+        assert count >= 1
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] < 0.5, "Consolidated memory should be decayed"
+        conn.close()
+
+    def test_consolidated_memory_with_recent_access_survives(self, tmp_path):
+        """Consolidated memory with recent access retains high salience."""
+        from decay import decay_data_points
+        from storage import DataPointRow, insert_data_point
+
+        conn = self._make_v3_db(tmp_path)
+        recent_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        dp = DataPointRow(
+            type="memory", content="consolidated recent fact", scope="global",
+            salience=0.9, consolidated=1, last_accessed=recent_ts, access_count=10,
+        )
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        decay_data_points(conn)
+        row = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()
+        assert row[0] > 0.85, "Recently accessed consolidated memory should retain high salience"
+        conn.close()
+
+    def test_consolidated_near_zero_cleaned_up(self, tmp_path):
+        """Consolidated memory with near-zero salience gets cleaned up."""
+        from decay import ARCHIVE_SALIENCE_THRESHOLD, cleanup_near_zero_salience
+        from storage import DataPointRow, insert_data_point
+
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(
+            type="memory", content="consolidated near zero", scope="global",
+            salience=ARCHIVE_SALIENCE_THRESHOLD, consolidated=1,
+        )
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        cleaned = cleanup_near_zero_salience(conn)
+        assert cleaned == 1
+        sal = conn.execute("SELECT salience FROM data_points WHERE id = ?", (dp_id,)).fetchone()[0]
+        assert sal == 0.0, "Near-zero consolidated memory should be soft-deleted"
         conn.close()
 
 
