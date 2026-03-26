@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Remove all v1/v2 legacy code so the codebase contains only v3 SQL-first architecture code. Implementation Plan
@@ -26,7 +26,6 @@ status: Not Yet Started
 **Status:** Not Started | **Rationale:** Peripheral scripts (install.py, devtools.py, project_manager.py) import from storage.py and memory_utils.py. They must be cleaned after Phase A removes those symbols. Template deletion and the test_migration/test_token_usage removal are independent but grouped here to keep Phase A focused on core logic.
 
 - [ ] B1: Clean install.py: remove markdown template copying and migration calls — *install.py copy_templates() no longer copies daily-template.md, global-long-term-memory.md, or project-long-term-memory.md. create_database() uses ensure_db() instead of v2 DDL + migrate_markdown_to_db + _migrate_v2_to_v3. No imports of migrate_markdown_to_db or _migrate_v2_to_v3. All tests pass.*
-- [ ] B2: Remove LTM-operating commands from devtools.py — *devtools.py has no cmd_mark_routed, cmd_validate_ltm functions. The main() parser no longer registers mark-routed or validate-ltm subcommands. No imports of collect_ltm_files. All tests pass.*
-- [ ] B3: Remove LTM references from project_manager.py list/plan operations — *project_manager.py list_projects() and plan_move() do not reference *-long-term-memory.md. plan_merge_orphan() does not reference *-long-term-memory.md. restore_from_backup() and get_memory_files_for_merge() keep their LTM handling for legacy file recovery. All tests pass.*
-- [ ] B4: Delete token_usage.py, markdown templates, test_migration.py, and test_token_usage.py — *scripts/token_usage.py, templates/daily-template.md, templates/global-long-term-memory.md, templates/project-long-term-memory.md, tests/test_migration.py, and tests/test_token_usage.py are all deleted. Full test suite passes.*
-- [ ] B5: Remove ChunkRow imports from test_health.py and update CLAUDE.md — *test_health.py no longer imports ChunkRow from storage; uses insert_data_point/DataPointRow instead. CLAUDE.md settings table no longer lists globalShortTerm, projectShortTerm, or decay.archiveRetentionDays. Short-term token limits note is removed. All tests pass.*
+- [ ] B2: Remove LTM-operating commands from devtools.py and orphaned LTM helpers from memory_utils.py — *devtools.py has no cmd_mark_routed, cmd_validate_ltm functions. The main() parser no longer registers mark-routed or validate-ltm subcommands. No imports of collect_ltm_files. memory_utils.py has no collect_ltm_files, LTM_ENTRY_PATTERN, or is_routed_match. All tests pass.*
+- [ ] B3: Delete token_usage.py, markdown templates, test_migration.py, and test_token_usage.py — *scripts/token_usage.py, templates/daily-template.md, templates/global-long-term-memory.md, templates/project-long-term-memory.md, tests/test_migration.py, and tests/test_token_usage.py are all deleted. Full test suite passes.*
+- [ ] B4: Remove ChunkRow imports from test_health.py and update CLAUDE.md — *test_health.py no longer imports ChunkRow from storage; uses insert_data_point/DataPointRow instead. CLAUDE.md settings table no longer lists globalShortTerm, projectShortTerm, or decay.archiveRetentionDays. Short-term token limits note is removed. All tests pass.*

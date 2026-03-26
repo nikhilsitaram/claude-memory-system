@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "status": "Not Yet Started",
-  "workflow": "pr-create",
+  "status": "In Development",
+  "workflow": "pr-merge",
   "execution_mode": "subagents",
   "goal": "Remove all v1/v2 legacy code so the codebase contains only v3 SQL-first architecture code.",
   "architecture": "Phase A strips v2 schema, CRUD, migration, and markdown logic from core scripts (storage.py, decay.py, memory_utils.py, synthesis_cron.py, embeddings.py, load_memory.py). Phase B cleans peripheral scripts (install.py, devtools.py, project_manager.py), deletes token_usage.py and markdown templates, and removes all v2 test code.",
@@ -21,8 +21,12 @@
           "depends_on": [],
           "files": {
             "create": [],
-            "modify": ["scripts/storage.py"],
-            "test": ["tests/test_storage.py"]
+            "modify": [
+              "scripts/storage.py"
+            ],
+            "test": [
+              "tests/test_storage.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_storage.py -q",
           "done_when": "storage.py has no ChunkRow, NodeRow, SCHEMA_DDL (v2), VEC_CHUNKS_DDL, insert_chunk, insert_node, query_chunks_*, query_nodes_*, _migrate_*, migrate_markdown_to_db, _archive_markdown_files, PROFILE_SECTIONS, MigrationStats. SCHEMA_V3_DDL is renamed to SCHEMA_DDL. ensure_db() only executes v3 DDL. __all__ has no v2 symbols. All tests pass."
@@ -31,11 +35,17 @@
           "id": "A2",
           "name": "Remove markdown decay functions from decay.py",
           "status": "pending",
-          "depends_on": ["A1"],
+          "depends_on": [
+            "A1"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/decay.py"],
-            "test": ["tests/test_decay.py"]
+            "modify": [
+              "scripts/decay.py"
+            ],
+            "test": [
+              "tests/test_decay.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_decay.py -q",
           "done_when": "decay.py has no AUTO_PINNED_SECTIONS, DECAY_ELIGIBLE_SECTIONS, is_protected_section, is_decay_eligible, parse_sections, parse_learnings, should_decay_entry, build_project_work_days_map, parse_learning_date, decay_file, append_to_archive, purge_old_archives, or run(). main() calls decay_data_points and cleanup_near_zero_salience directly. All tests pass."
@@ -44,11 +54,17 @@
           "id": "A3",
           "name": "Remove short-term settings and markdown helpers from memory_utils.py",
           "status": "pending",
-          "depends_on": ["A1"],
+          "depends_on": [
+            "A1"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/memory_utils.py"],
-            "test": ["tests/test_memory_utils.py"]
+            "modify": [
+              "scripts/memory_utils.py"
+            ],
+            "test": [
+              "tests/test_memory_utils.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_memory_utils.py -q",
           "done_when": "memory_utils.py has no SHORT_TERM_TOKENS_PER_DAY, globalShortTerm, projectShortTerm, or archiveRetentionDays in DEFAULT_SETTINGS. _calculate_token_limits() is removed. get_working_days() is removed. totalTokenBudget is calculated as globalLongTerm.tokenLimit + projectLongTerm.tokenLimit. __all__ has no removed symbols. All tests pass."
@@ -57,11 +73,17 @@
           "id": "A4",
           "name": "Remove v2 synthesis dispatch from synthesis_cron.py",
           "status": "pending",
-          "depends_on": ["A1"],
+          "depends_on": [
+            "A1"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/synthesis_cron.py"],
-            "test": ["tests/test_synthesis_cron.py"]
+            "modify": [
+              "scripts/synthesis_cron.py"
+            ],
+            "test": [
+              "tests/test_synthesis_cron.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_synthesis_cron.py -q",
           "done_when": "synthesis_cron.py has no _run_synthesis_v2 function, no _get_schema_version helper, no version check in run_synthesis(). The v3 path (_run_synthesis_v3) is the only synthesis path. All tests pass."
@@ -70,11 +92,17 @@
           "id": "A5",
           "name": "Remove backward-compat alias and vec_chunks warnings from embeddings.py",
           "status": "pending",
-          "depends_on": ["A1"],
+          "depends_on": [
+            "A1"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/embeddings.py"],
-            "test": ["tests/test_embeddings.py"]
+            "modify": [
+              "scripts/embeddings.py"
+            ],
+            "test": [
+              "tests/test_embeddings.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_embeddings.py -q",
           "done_when": "embeddings.py has no ScoredChunk alias, no vec_chunks fallback warnings in ensure_vec_table() or search_similar(). __all__ has no ScoredChunk. All tests pass."
@@ -83,11 +111,17 @@
           "id": "A6",
           "name": "Refactor load_memory.py synthesis prompt builder and remove inline synthesis",
           "status": "pending",
-          "depends_on": ["A1"],
+          "depends_on": [
+            "A1"
+          ],
           "files": {
             "create": [],
-            "modify": ["scripts/load_memory.py"],
-            "test": ["tests/test_load_memory.py"]
+            "modify": [
+              "scripts/load_memory.py"
+            ],
+            "test": [
+              "tests/test_load_memory.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_load_memory.py -q",
           "done_when": "load_memory.py has no _build_synthesis_instructions (v2), _get_project_names_str, _strip_profile_sections. _build_embedded_files reads only transcripts (no global_ltm, project_ltms, existing_dailies). _build_preextracted_prompt has no LTM markdown fallback or existing_dailies merge. _build_synthesis_prompt calls _build_synthesis_instructions_v3(). Inline synthesis block in main() (lines 955-1027) is removed. All tests pass."
@@ -98,7 +132,9 @@
       "letter": "B",
       "name": "Peripheral cleanup, template deletion, and test sweep",
       "status": "Not Started",
-      "depends_on": ["A"],
+      "depends_on": [
+        "A"
+      ],
       "rationale": "Peripheral scripts (install.py, devtools.py, project_manager.py) import from storage.py and memory_utils.py. They must be cleaned after Phase A removes those symbols. Template deletion and the test_migration/test_token_usage removal are independent but grouped here to keep Phase A focused on core logic.",
       "tasks": [
         {
@@ -108,8 +144,12 @@
           "depends_on": [],
           "files": {
             "create": [],
-            "modify": ["scripts/install.py"],
-            "test": ["tests/test_install.py"]
+            "modify": [
+              "scripts/install.py"
+            ],
+            "test": [
+              "tests/test_install.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_install.py -q",
           "done_when": "install.py copy_templates() no longer copies daily-template.md, global-long-term-memory.md, or project-long-term-memory.md. create_database() uses ensure_db() instead of v2 DDL + migrate_markdown_to_db + _migrate_v2_to_v3. No imports of migrate_markdown_to_db or _migrate_v2_to_v3. All tests pass."
@@ -121,8 +161,14 @@
           "depends_on": [],
           "files": {
             "create": [],
-            "modify": ["scripts/devtools.py", "scripts/memory_utils.py"],
-            "test": ["tests/test_devtools.py", "tests/test_memory_utils.py"]
+            "modify": [
+              "scripts/devtools.py",
+              "scripts/memory_utils.py"
+            ],
+            "test": [
+              "tests/test_devtools.py",
+              "tests/test_memory_utils.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_devtools.py tests/test_memory_utils.py -q",
           "done_when": "devtools.py has no cmd_mark_routed, cmd_validate_ltm functions. The main() parser no longer registers mark-routed or validate-ltm subcommands. No imports of collect_ltm_files. memory_utils.py has no collect_ltm_files, LTM_ENTRY_PATTERN, or is_routed_match. All tests pass."
@@ -154,8 +200,13 @@
           "depends_on": [],
           "files": {
             "create": [],
-            "modify": ["tests/test_health.py", "CLAUDE.md"],
-            "test": ["tests/test_health.py"]
+            "modify": [
+              "tests/test_health.py",
+              "CLAUDE.md"
+            ],
+            "test": [
+              "tests/test_health.py"
+            ]
           },
           "verification": "python3 -m pytest tests/test_health.py -q",
           "done_when": "test_health.py no longer imports ChunkRow from storage; uses insert_data_point/DataPointRow instead. CLAUDE.md settings table no longer lists globalShortTerm, projectShortTerm, or decay.archiveRetentionDays. Short-term token limits note is removed. All tests pass."
