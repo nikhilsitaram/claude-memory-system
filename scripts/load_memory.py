@@ -7,10 +7,10 @@ This script runs on: startup, resume, clear, compact
 It performs:
 1. SQL-ranked loading from data_points (user profile, session continuity,
    project memories, global knowledge, recent activity)
-2. Falls back to markdown LTM files if the database is unavailable
-3. Checks for pending transcripts and prompts for synthesis
+2. Surfaces synthesis errors from deferred runs
 
 Output is printed to stdout and injected into Claude Code's context.
+Synthesis is handled exclusively by deferred mode (synthesis_cron.py).
 
 Requirements: Python 3.9+
 """
@@ -31,10 +31,7 @@ from memory_utils import (
     DEFAULT_SETTINGS,
     check_python_version,
     find_current_project,
-    get_daily_dir,
-    get_global_memory_file,
     get_memory_dir,
-    get_project_memory_dir,
     get_projects_index_file,
     get_synthesis_error_log,
     load_json_file,
@@ -146,125 +143,6 @@ def should_synthesize(settings: dict) -> bool:
 
 
 
-def _get_project_names_str() -> str:
-    """Load registered project names from index, formatted for prompt insertion."""
-    projects_index = load_json_file(get_projects_index_file(), {})
-    project_names = sorted({
-        data.get("name", "")
-        for data in projects_index.get("projects", {}).values()
-        if data.get("name")
-    })
-    return ", ".join(f"`{n}`" for n in project_names) if project_names else "(none registered)"
-
-
-import re
-
-# Profile sections in global LTM that are never dedup targets
-_PROFILE_HEADERS_RE = re.compile(
-    r"^## (?:About Me|Current Projects|Technical Environment|Patterns & Preferences)\s*$"
-)
-
-
-def _strip_profile_sections(content: str) -> str:
-    """Strip auto-pinned profile sections from global LTM for synthesis prompts.
-
-    Removes About Me, Current Projects, Technical Environment, and
-    Patterns & Preferences sections (including their content) since these
-    are never dedup targets and add ~4KB of bloat.
-
-    Keeps: title line, ## Pinned, ## Key * sections, and all other headers.
-    """
-    if not content:
-        return content
-
-    lines = content.split("\n")
-    result: list[str] = []
-    skipping = False
-
-    for line in lines:
-        if _PROFILE_HEADERS_RE.match(line):
-            skipping = True
-            continue
-        if skipping and line.startswith("## "):
-            skipping = False
-        if not skipping:
-            result.append(line)
-
-    return "\n".join(result)
-
-
-def _build_synthesis_instructions(project_names_str: str) -> str:
-    """Build the shared synthesis instructions block."""
-    return f'''**Output format:**
-
-Group entries by project. The system handles section placement and scope injection automatically.
-
-```
-===PROJECT:projectname===
-- [type] Description of what happened or was learned
-- [LTM][type] Important entry to route to long-term memory
-- [GLOBAL][type] Cross-project entry (useful across all projects)
-- [LTM][GLOBAL][type] Cross-project entry that also routes to LTM
-===PROJECT:global===
-- [type] Entries not tied to any specific project
-===END===
-```
-
-**Entry types:** implement, improve, document, analyze, design, tradeoff, scope, gotcha, pitfall, pattern, insight, tip, workaround.
-
-**Project names:** Use the project names from the session headers: {project_names_str}. Use `global` for entries not tied to a specific project.
-
-**[LTM] flag (be HIGHLY selective):** Prefix entries worth preserving long-term. Route to LTM:
-- Multi-day implementations, novel integrations, reusable setups
-- Architecture choices, design tradeoffs, scope decisions with lasting impact
-- Non-obvious gotchas, proven patterns, hard-won lessons
-- Mental models, useful commands, workarounds
-Do NOT route:
-- Common dev knowledge (git basics, standard SQL, well-known language features)
-- Generic software patterns (DRY, separation of concerns, use env vars)
-- One-time fixes unlikely to recur
-- Version-specific notes, easily re-discoverable things
-Maximum 5 [LTM] entries per project per synthesis run.
-
-**[GLOBAL] flag:** Only for genuinely cross-project learnings (OS behavior, tool tips, general dev practices). Most entries should stay project-scoped.
-
-**Compactness:** Final solutions only, one entry per concept, omit routine details.
-
-**Global LTM auto-pinned maintenance:** The global LTM has auto-pinned sections (About Me, Current Projects, Technical Environment, Patterns & Preferences). When transcripts show clear evidence of change — a project completed, a new tool adopted — update the relevant entry. Be conservative.
-
-**Entity extraction:** Every CRUD operation in the MEMORY_OPS block should include an `entities` array listing structured data extracted from the fact:
-- Project names (e.g., "myproject", "claude-memory-system")
-- Library/tool names (e.g., "pytest", "sqlite-vec", "gRPC")
-- Concepts (e.g., "bi-temporal tracking", "WAL mode")
-- People (e.g., "John", "@username")
-- URLs (e.g., "https://github.com/...")
-- Dates (e.g., "2026-03-21")
-
-Be comprehensive but precise. Only include entities actually present in the fact.
-
-**Memory CRUD operations (Phase 2):** After the PROJECT blocks, output a MEMORY_OPS block with explicit decisions about existing memories:
-
-```
-===MEMORY_OPS===
-{{"ops": [
-  {{"action": "ADD", "fact": "description of new fact", "scope": "project-name", "section": "Key Decisions", "type": "design", "entities": ["entity1", "entity2"]}},
-  {{"action": "UPDATE", "id": "chunk_id_from_existing", "fact": "updated description", "entities": ["entity1"]}},
-  {{"action": "DELETE", "id": "chunk_id_from_existing", "reason": "Contradicted: explanation of why this is no longer true"}},
-  {{"action": "NOOP", "id": "chunk_id_from_existing", "reason": "Already accurately captured"}}
-]}}
-```
-
-**Actions:**
-- **ADD**: New fact not present in existing memories. Include scope, section, type, entities.
-- **UPDATE**: Existing memory needs modification (enrichment, correction). Reference by `id` from Existing Memories. Include updated fact and entities.
-- **DELETE**: Existing memory is contradicted by new evidence. Reference by `id`. Include reason explaining the contradiction.
-- **NOOP**: Existing memory is confirmed correct by new evidence. Reference by `id`. Optional.
-
-**Rules:**
-- Reference existing memories by their `[chunk_id]` prefix from the Existing Memories section.
-- Every ADD must include `entities` array with extracted structured data.
-- Prefer UPDATE over ADD+DELETE when a fact is being enriched (not contradicted).
-- MEMORY_OPS block is optional — omit it if no memory changes are needed.'''
 
 
 def _build_synthesis_instructions_v3() -> str:
@@ -326,19 +204,14 @@ def _build_preextracted_prompt(
         synthesis_instructions: Shared instructions block
         embedded_files: Pre-read content to embed inline:
             - "transcripts": dict[date, content] - transcript text per date
-            - "global_ltm": str - global LTM file content
-            - "project_ltms": dict[project, content] - project LTM content
         vector_memories: Optional list of dicts with 'chunk_id' and 'content' from
-            vector search. When provided, replaces full LTM embedding with targeted
-            Existing Memories section using chunk IDs for CRUD reference.
+            vector search. Used to build Existing Memories section for CRUD reference.
     """
     if embedded_files is None:
         embedded_files = {}
 
     dates_str = ", ".join(pending_dates)
     transcripts = embedded_files.get("transcripts", {})
-    global_ltm = embedded_files.get("global_ltm", "")
-    project_ltms = embedded_files.get("project_ltms", {})
 
     # Build embedded transcript sections
     transcript_sections = []
@@ -355,40 +228,12 @@ def _build_preextracted_prompt(
         transcript_sections.append(f"### Transcript: {date}\n{content}")
     transcript_block = "\n\n".join(transcript_sections)
 
-    # Build LTM sections for dedup context
-    # When vector_memories is provided, use targeted retrieval instead of full LTM
+    # Build existing memories section from vector retrieval
     if vector_memories:
         memory_lines = [f"[{m['chunk_id']}] {m['content']}" for m in vector_memories]
         ltm_block = "## Existing Memories (reference by [chunk_id] in MEMORY_OPS)\n\n" + "\n".join(memory_lines)
     else:
-        ltm_sections = []
-        if global_ltm:
-            ltm_sections.append(f"### Global Long-Term Memory\n{global_ltm}")
-        for project, content in sorted(project_ltms.items()):
-            if content:
-                ltm_sections.append(f"### Project Long-Term Memory: {project}\n{content}")
-        ltm_block = "\n\n".join(ltm_sections) if ltm_sections else "(no existing LTM content)"
-
-    # Build existing daily merge context (for incremental synthesis)
-    existing_dailies = embedded_files.get("existing_dailies", {})
-    merge_sections = []
-    for date in sorted(pending_dates):
-        existing = existing_dailies.get(date, "")
-        if existing:
-            merge_sections.append(f"### Existing daily summary for {date}\n{existing}")
-
-    merge_instructions = ""
-    if merge_sections:
-        merge_block = "\n\n".join(merge_sections)
-        merge_instructions = f"""
-## Existing Daily Summaries (READ-ONLY context — do NOT repeat these entries)
-
-These daily files already exist. The system will merge your output automatically.
-Output ONLY entries from new/continued sessions — do not re-state anything below.
-
-{merge_block}
-
-"""
+        ltm_block = "(no existing memories)"
 
     # Build extract paths for synthesis.py apply command
     extract_paths = []
@@ -433,7 +278,7 @@ Only use the Write and Bash tools — no other tools.
 ## Existing Long-Term Memory (for dedup)
 
 {ltm_block}
-{merge_instructions}
+
 ## Session Transcripts
 
 **Pending dates:** {dates_str}
@@ -460,12 +305,11 @@ def _build_synthesis_prompt(
     Args:
         pending_dates: List of pending date strings (YYYY-MM-DD)
         extracted_files: Dict mapping date -> file path (pre-extracted)
-        embedded_files: Pre-read content to embed inline (transcripts, LTM content)
+        embedded_files: Pre-read content to embed inline (transcripts)
         vector_memories: Optional list of dicts with 'chunk_id' and 'content'
             from vector search for targeted dedup context.
     """
-    project_names_str = _get_project_names_str()
-    synthesis_instructions = _build_synthesis_instructions(project_names_str)
+    synthesis_instructions = _build_synthesis_instructions_v3()
 
     return _build_preextracted_prompt(
         pending_dates, extracted_files, synthesis_instructions, embedded_files,
@@ -495,60 +339,21 @@ def _find_projects_in_extracts(daily_data: dict[str, list[dict]]) -> set[str]:
     return result
 
 
-def _build_embedded_files(
-    extracted_files: dict[str, str],
-    include_dailies: bool = False,
-    daily_data: dict[str, list[dict]] | None = None,
-) -> dict:
-    """Pre-read all files for embedding in synthesis prompt.
-
-    Reads transcript extracts, global LTM, and project LTMs into memory
-    so the synthesis prompt can embed them inline (zero tool calls).
+def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
+    """Pre-read transcript extract files for embedding in synthesis prompt.
 
     Args:
         extracted_files: Dict mapping date -> extract file path
-        include_dailies: If True, read existing daily summary files as merge context
-        daily_data: Dict mapping date -> list of session dicts (for project detection)
 
     Returns:
-        Dict with keys: transcripts, global_ltm, project_ltms, (existing_dailies)
+        Dict with key: transcripts (dict[date, content])
     """
-    embedded: dict = {"transcripts": {}, "global_ltm": "", "project_ltms": {}}
+    embedded: dict = {"transcripts": {}}
     for date, path in extracted_files.items():
         try:
             embedded["transcripts"][date] = Path(path).read_text(encoding="utf-8")
         except IOError:
             pass
-    global_ltm_file = get_global_memory_file()
-    if global_ltm_file.exists():
-        try:
-            embedded["global_ltm"] = _strip_profile_sections(
-                global_ltm_file.read_text(encoding="utf-8")
-            )
-        except IOError:
-            pass
-    # Only include project LTMs for projects that had sessions extracted
-    relevant_projects = _find_projects_in_extracts(daily_data or {})
-    proj_dir = get_project_memory_dir()
-    if proj_dir.exists():
-        for f in proj_dir.glob("*-long-term-memory.md"):
-            name = f.stem.replace("-long-term-memory", "")
-            if name in relevant_projects:
-                try:
-                    embedded["project_ltms"][name] = f.read_text(encoding="utf-8")
-                except IOError:
-                    pass
-    # Read existing daily files as merge context (for incremental synthesis)
-    if include_dailies:
-        daily_dir = get_daily_dir()
-        embedded["existing_dailies"] = {}
-        for date in extracted_files:
-            daily_file = daily_dir / f"{date}.md"
-            if daily_file.exists():
-                try:
-                    embedded["existing_dailies"][date] = daily_file.read_text(encoding="utf-8")
-                except IOError:
-                    pass
     return embedded
 
 
@@ -654,13 +459,8 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
     # Build one prompt per date to ensure each date gets its own daily file
     for date in sorted(extracted_files.keys()):
         single_date_files = {date: extracted_files[date]}
-        single_date_data = {date: daily_data.get(date, [])} if daily_data else {}
 
-        include_dailies = bool(session_offsets)
-        embedded = _build_embedded_files(
-            single_date_files, include_dailies=include_dailies,
-            daily_data=single_date_data,
-        )
+        embedded = _build_embedded_files(single_date_files)
 
         vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
 
@@ -901,14 +701,12 @@ def main() -> None:
     if os.environ.get("CLAUDE_SKIP_MEMORY"):
         return
 
-    # Parse session_id from SessionStart hook stdin JSON
-    current_session_id = None
+    # Consume stdin JSON from SessionStart hook (prevents broken pipe)
     try:
         if not sys.stdin.isatty():
-            hook_input = json.load(sys.stdin)
-            current_session_id = hook_input.get("session_id")
+            json.load(sys.stdin)
     except (json.JSONDecodeError, IOError):
-        pass  # Not called from hook, or invalid input — safe to continue
+        pass
 
     # Clean up stale prompt-recall state files
     try:
@@ -916,9 +714,6 @@ def main() -> None:
         cleanup_stale_state_files(get_memory_dir())
     except Exception:
         pass
-
-    # Load settings
-    settings = load_settings()
 
     # Start output
     print("<memory>")
@@ -935,96 +730,6 @@ def main() -> None:
     if error_alert:
         print(error_alert)
         print()
-
-    # Check for pending transcripts (only if synthesis scheduling allows)
-    # Exclude current session — it's still active and shouldn't be synthesized
-    pending_dates = get_recent_days(exclude_session_id=current_session_id)
-    synthesis_deferred = settings.get("synthesis", {}).get("deferred", True)
-    # v3 schema requires deferred synthesis (synthesis_cron.py handles MEMORY_OPS pipeline).
-    # The in-session v2 prompt format (===PROJECT:=== blocks + synthesis.py apply) is incompatible
-    # with v3's DB-only writes. Force deferred mode when on v3.
-    if not synthesis_deferred:
-        try:
-            from storage import _get_schema_version, close_db, get_db
-            _check_conn = get_db()
-            if _get_schema_version(_check_conn) >= 3:
-                synthesis_deferred = True
-            close_db(_check_conn)
-        except Exception:
-            pass
-    if pending_dates and should_synthesize(settings) and not synthesis_deferred:
-        # Write timestamp eagerly to prevent duplicate synthesis when multiple
-        # sessions start simultaneously (all would see stale timestamp otherwise)
-        # Format: ISO format with UTC timezone (e.g., "2026-02-03T14:30:00+00:00")
-        get_last_synthesis_file().write_text(
-            datetime.now(timezone.utc).isoformat(), encoding="utf-8"
-        )
-
-        synthesis_model = settings.get("synthesis", {}).get("model", "sonnet")
-        synthesis_background = settings.get("synthesis", {}).get("background", True)
-
-        # Pre-extract all transcripts before launching subagent (faster, fewer tool calls)
-        extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
-            pending_dates, exclude_session_id=current_session_id
-        )
-
-        if extracted_files:
-            # Build one prompt per date to ensure separate daily files
-            prompt_paths = []
-            for date in sorted(extracted_files.keys()):
-                single_date_files = {date: extracted_files[date]}
-                single_date_data = {date: daily_data.get(date, [])} if daily_data else {}
-
-                include_dailies = bool(session_offsets)
-                embedded = _build_embedded_files(
-                    single_date_files, include_dailies=include_dailies,
-                    daily_data=single_date_data,
-                )
-
-                vector_memories = _retrieve_vector_memories(embedded.get("transcripts", {}).get(date, ""))
-
-                synth_prompt = _build_synthesis_prompt(
-                    [date], single_date_files, embedded, vector_memories=vector_memories
-                )
-
-                prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-prompt-{date}-{os.getpid()}.txt"
-                Path(prompt_path).write_text(synth_prompt, encoding="utf-8")
-                prompt_paths.append(prompt_path)
-
-            print("## AUTO-SYNTHESIZE REQUIRED")
-            print(f"There are {len(pending_dates)} pending date(s): {', '.join(pending_dates)}.")
-            print()
-            if len(prompt_paths) == 1:
-                prompt_path = prompt_paths[0]
-                if synthesis_background:
-                    print("**IMPORTANT**: Spawn a **background** subagent immediately, then respond to the user.")
-                else:
-                    print("**IMPORTANT**: Before responding to the user, spawn a subagent to process transcripts.")
-                print(f"Read the prompt file at `{prompt_path}` and use it as the subagent prompt:")
-                print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
-                      f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {prompt_path}>)')
-                print()
-            else:
-                # Multiple dates: run sequentially to avoid LTM write conflicts
-                if synthesis_background:
-                    print("**IMPORTANT**: Spawn a **single background** subagent that processes ALL prompt files **sequentially** (one at a time).")
-                else:
-                    print("**IMPORTANT**: Spawn a **single** subagent that processes ALL prompt files **sequentially**.")
-                print("Do NOT spawn parallel subagents — they write to shared LTM files.")
-                print()
-                for i, prompt_path in enumerate(prompt_paths, 1):
-                    print(f"  {i}. Read `{prompt_path}` and execute it")
-                print()
-                # Combine all prompts into a single wrapper prompt
-                combined_prompt_path = f"{SYNTHESIS_PROMPT_DIR}/synthesis-combined-{os.getpid()}.txt"
-                combined_parts = []
-                for prompt_path in prompt_paths:
-                    combined_parts.append(Path(prompt_path).read_text(encoding="utf-8"))
-                combined_prompt = "\n\n---\n\nAfter completing the above, proceed to the next synthesis task:\n\n".join(combined_parts)
-                Path(combined_prompt_path).write_text(combined_prompt, encoding="utf-8")
-                print(f'Task(subagent_type="general-purpose", model="{synthesis_model}"'
-                      f'{", run_in_background=true" if synthesis_background else ""}, prompt=<contents of {combined_prompt_path}>)')
-                print()
 
     # Detect current project (resolve worktree/subdir to repo root for matching)
     pwd = resolve_session_path(os.getcwd())

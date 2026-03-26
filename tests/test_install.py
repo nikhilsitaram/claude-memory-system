@@ -281,46 +281,44 @@ class TestRemoveObsoleteHooks:
 
 
 class TestCopyTemplates:
-    def test_copies_templates_and_defaults(self, tmp_path):
+    def test_copies_settings_and_web_templates(self, tmp_path):
         # Set up repo structure
         script_dir = tmp_path / "repo"
         templates_src = script_dir / "templates"
         templates_src.mkdir(parents=True)
-        (templates_src / "global-long-term-memory.md").write_text("# LTM")
-        (templates_src / "project-long-term-memory.md").write_text("# Project")
-        (templates_src / "daily-template.md").write_text("# Daily")
         (templates_src / "settings.json").write_text('{"version": 3}')
+        web_src = templates_src / "web"
+        web_src.mkdir()
+        (web_src / "index.html").write_text("<html>test</html>")
 
         with mock.patch("memory_utils.Path.home", return_value=tmp_path):
             install.create_directories()
             install.copy_templates(script_dir)
 
         memory_dir = tmp_path / ".claude" / "memory"
-        # Templates copied
-        assert (memory_dir / "templates" / "global-long-term-memory.md").exists()
-        assert (memory_dir / "templates" / "project-long-term-memory.md").exists()
-        # Defaults created
-        assert (memory_dir / "global-long-term-memory.md").read_text() == "# LTM"
+        # Settings created
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 3
+        # Web templates copied
+        assert (memory_dir / "templates" / "web" / "index.html").exists()
+        # Markdown templates NOT copied (removed)
+        assert not (memory_dir / "templates" / "global-long-term-memory.md").exists()
+        assert not (memory_dir / "global-long-term-memory.md").exists()
 
-    def test_does_not_overwrite_existing_files(self, tmp_path):
+    def test_does_not_overwrite_existing_settings(self, tmp_path):
         script_dir = tmp_path / "repo"
         templates_src = script_dir / "templates"
         templates_src.mkdir(parents=True)
-        (templates_src / "global-long-term-memory.md").write_text("# New")
         (templates_src / "settings.json").write_text('{"version": 99}')
 
         with mock.patch("memory_utils.Path.home", return_value=tmp_path):
             install.create_directories()
             memory_dir = tmp_path / ".claude" / "memory"
-            # Pre-create files with existing content
-            (memory_dir / "global-long-term-memory.md").write_text("# Existing")
+            # Pre-create settings with existing content
             (memory_dir / "settings.json").write_text('{"version": 1}')
 
             install.copy_templates(script_dir)
 
-        # Existing files preserved
-        assert (memory_dir / "global-long-term-memory.md").read_text() == "# Existing"
+        # Existing settings preserved
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 1
 
 
@@ -714,37 +712,17 @@ class TestCreateDatabase:
             install.link_scripts(repo_dir)
         assert (tmp_path / ".claude" / "scripts" / "embeddings.py").exists()
 
-    def test_create_database_creates_db_and_migrates(self, tmp_path):
-        """Verify create_database creates memory.db and runs migration."""
-        mem_dir = tmp_path / ".claude" / "memory"
-        mem_dir.mkdir(parents=True)
-        (mem_dir / "global-long-term-memory.md").write_text(
-            "## Key Learnings\n"
-            "- (2026-03-01) [pattern] Test entry for migration\n",
-            encoding="utf-8",
-        )
+    def test_create_database_calls_ensure_db(self, tmp_path):
+        """Verify create_database delegates to ensure_db()."""
         repo_dir = tmp_path / "repo"
         scripts_src = repo_dir / "scripts"
         scripts_src.mkdir(parents=True)
-        db_path = mem_dir / "memory.db"
-        with mock.patch("memory_utils.Path.home", return_value=tmp_path), \
-             mock.patch("storage.get_db_path", return_value=db_path):
+        mock_conn = mock.MagicMock()
+        with mock.patch("storage.ensure_db", return_value=mock_conn) as mock_ensure, \
+             mock.patch("storage.close_db") as mock_close:
             install.create_database(repo_dir)
-        assert db_path.exists()
-        import sqlite3
-        conn = sqlite3.connect(str(db_path))
-        # Schema-aware: query chunks for v2, data_points for v3+
-        tables = {
-            row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        if 'chunks' in tables:
-            count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        else:
-            count = conn.execute("SELECT COUNT(*) FROM data_points WHERE type = 'memory'").fetchone()[0]
-        conn.close()
-        assert count >= 1
+        mock_ensure.assert_called_once()
+        mock_close.assert_called_once_with(mock_conn)
 
     def test_create_database_handles_import_error(self, capsys):
         """Verify graceful degradation if storage module missing."""

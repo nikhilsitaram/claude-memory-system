@@ -63,7 +63,6 @@ __all__ = [
     "HAS_FASTEMBED",
     "HAS_SQLITE_VEC",
     "ScoredDataPoint",
-    "ScoredChunk",
     "ensure_vec_table",
     "embed_text",
     "embed_batch",
@@ -86,9 +85,6 @@ class ScoredDataPoint:
     score: float
     vec_similarity: float
 
-
-# Backward compatibility alias: ScoredChunk is ScoredDataPoint
-ScoredChunk = ScoredDataPoint
 
 
 _model = None
@@ -115,9 +111,6 @@ def _has_table(conn, table_name: str) -> bool:
 def ensure_vec_table(conn) -> bool:
     """Load sqlite-vec extension and create vec_data virtual table.
 
-    Falls back to vec_chunks for v2-schema DBs where vec_data does not exist
-    but vec_chunks does (logs a warning).
-
     Returns True on success, False if sqlite-vec is not available or extension
     loading is not permitted by the SQLite build.
     """
@@ -132,13 +125,6 @@ def ensure_vec_table(conn) -> bool:
         conn.enable_load_extension(False)
 
     if not _has_table(conn, "vec_data"):
-        if _has_table(conn, "vec_chunks"):
-            import warnings
-            warnings.warn(
-                "vec_chunks exists but vec_data does not: DB may need migration to v3 schema.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
         conn.executescript(VEC_DATA_DDL)
         conn.commit()
     return True
@@ -290,9 +276,6 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
 
     Returns a sorted list of ScoredDataPoint (highest score first), limited to top_k.
     Returns [] if fastembed or sqlite-vec are unavailable, or if query cannot be embedded.
-
-    For v3 schema: queries vec_data joined with data_points.
-    For v2 schema (vec_chunks exists but vec_data does not): returns [] with a warning.
     """
     if not HAS_FASTEMBED or not HAS_SQLITE_VEC:
         return []
@@ -302,13 +285,6 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
         return []
 
     if not _has_table(conn, "vec_data"):
-        if _has_table(conn, "vec_chunks"):
-            import warnings
-            warnings.warn(
-                "search_similar: vec_data not found; DB may need v3 migration.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
         return []
 
     fetch_k = top_k * 3

@@ -1,0 +1,47 @@
+[
+  {
+    "type": "design-review",
+    "scope": "design",
+    "iteration": 1,
+    "issues_found": 7,
+    "severity": { "critical": 1, "high": 2, "medium": 2, "low": 2 },
+    "actionable": 6,
+    "dismissed": 1,
+    "dismissals": [{"id": 3, "reason": "Implementation-specific criteria acceptable for dead-code-removal task"}],
+    "fixed": 6,
+    "remaining": 0,
+    "verdict": "fail",
+    "timestamp": "2026-03-26T17:45:00Z"
+  },
+  {
+    "type": "design-review",
+    "scope": "design",
+    "iteration": 2,
+    "issues_found": 7,
+    "severity": { "critical": 0, "high": 2, "medium": 3, "low": 1 },
+    "actionable": 6,
+    "dismissed": 1,
+    "dismissals": [{"id": 1, "reason": "Implementation-specific SC acceptable; SC7 provides outcome-level coverage"}],
+    "fixed": 6,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-26T17:55:00Z"
+  },
+  {
+    "type": "plan-review",
+    "scope": "plan",
+    "iteration": 1,
+    "issues_found": 6,
+    "severity": { "critical": 0, "high": 1, "medium": 3, "low": 2 },
+    "actionable": 4,
+    "dismissed": 2,
+    "dismissals": [
+      {"id": 5, "reason": "Fixed: updated reference from _build_status to if __name__ block"},
+      {"id": 6, "reason": "Informational: no files.delete field in schema, prose is clear"}
+    ],
+    "fixed": 4,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-26T18:15:00Z"
+  }
+]

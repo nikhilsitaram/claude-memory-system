@@ -859,6 +859,41 @@ class TestExtractFromJsonl:
         assert original_path == "/home/user/proj"
         assert len(work_days) == 0
 
+    def test_cwd_on_later_line(self, tmp_path):
+        """cwd on a non-first line is found (e.g., file-history-snapshot first)."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        lines = [
+            json.dumps({"type": "file-history-snapshot", "snapshot": {}}),
+            json.dumps({
+                "cwd": "/home/user/myproject",
+                "timestamp": "2026-02-12T17:35:00Z",
+                "type": "progress",
+            }),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == "/home/user/myproject"
+        assert "2026-02-12" in work_days
+
+    def test_timestamp_on_first_line_cwd_on_later(self, tmp_path):
+        """Extracts timestamp from line 1 and cwd from a later line."""
+        folder = tmp_path / "project"
+        folder.mkdir()
+        lines = [
+            json.dumps({"type": "snapshot", "timestamp": "2026-03-01T10:00:00Z"}),
+            json.dumps({"type": "other"}),
+            json.dumps({"cwd": "/home/user/proj", "type": "user"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+
+        assert original_path == "/home/user/proj"
+        assert "2026-03-01" in work_days
+
 
 # =============================================================================
 # list_all_sessions Tests

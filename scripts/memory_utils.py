@@ -23,8 +23,6 @@ from typing import Any
 __all__ = [
     # Constants
     "MIN_PYTHON",
-    "LTM_ENTRY_PATTERN",
-    "SHORT_TERM_TOKENS_PER_DAY",
     "DEFAULT_SETTINGS",
     # Version check
     "check_python_version",
@@ -44,7 +42,6 @@ __all__ = [
     "get_global_memory_file",
     "get_synthesis_error_log",
     "get_db_path",
-    "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     "resolve_git_subdir_to_root",
     "resolve_session_path",
@@ -60,7 +57,6 @@ __all__ = [
     # Content filtering
     "filter_daily_content",
     "find_current_project",
-    "get_working_days",
     "get_global_working_days",
     "get_project_working_days",
     "_clear_working_days_cache",
@@ -77,8 +73,6 @@ __all__ = [
     # Utilities
     "estimate_tokens",
     "project_name_to_filename",
-    "extract_entry_keywords",
-    "is_routed_match",
     "rebuild_projects_index_quiet",
     "FileLock",
     "sanitize_secrets",
@@ -111,7 +105,6 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Content:
 #   filter_daily_content(content, scope) -> str
 #   find_current_project(index, pwd) -> dict | None
-#   get_working_days(days_limit) -> list[str]
 # Utilities:
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
 #   load_json_file(path, default?) -> Any  save_json_file(path, data) -> bool
@@ -138,24 +131,6 @@ def to_iso_z(dt: datetime) -> str:
 def from_iso_z(date_str: str) -> datetime:
     """Parse ISO datetime string, handling both Z and +00:00 suffixes."""
     return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-
-
-# Pattern matching LTM dated entries: - (YYYY-MM-DD) [type] description
-# Note: decay.py has its own DATE_PATTERN that captures the date group for
-# computation. LTM_ENTRY_PATTERN is for detection/matching only.
-LTM_ENTRY_PATTERN = re.compile(r"^\s*-\s*\(\d{4}-\d{2}-\d{2}\)")
-
-
-def collect_ltm_files() -> list[Path]:
-    """Collect all LTM files (global + all project files)."""
-    files: list[Path] = []
-    global_f = get_global_memory_file()
-    if global_f.exists():
-        files.append(global_f)
-    proj_dir = get_project_memory_dir()
-    if proj_dir.exists():
-        files.extend(proj_dir.glob("*-long-term-memory.md"))
-    return files
 
 
 def check_python_version() -> None:
@@ -219,22 +194,10 @@ def get_db_path() -> Path:
     return get_memory_dir() / "memory.db"
 
 
-# Token limit formulas
-SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per day
-
-# Default settings (tokenLimit for short-term calculated dynamically)
 DEFAULT_SETTINGS = {
     "version": 3,
-    "globalShortTerm": {
-        "workingDays": 2,
-        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
-    },
     "globalLongTerm": {
         "tokenLimit": 3000,
-    },
-    "projectShortTerm": {
-        "workingDays": 5,
-        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "projectLongTerm": {
         "tokenLimit": 3000,
@@ -253,7 +216,6 @@ DEFAULT_SETTINGS = {
     "decay": {
         "ageDays": 30,
         "projectWorkingDays": 20,
-        "archiveRetentionDays": 365,
     },
     "consolidation": {
         "intervalHours": 24,
@@ -269,7 +231,7 @@ DEFAULT_SETTINGS = {
         "maxInjectionsPerPrompt": 3,
         "maxTokenBudget": 500,
     },
-    # totalTokenBudget calculated as sum of 4 components
+    # totalTokenBudget calculated as globalLongTerm + projectLongTerm
 }
 
 
@@ -278,8 +240,7 @@ def load_settings() -> dict[str, Any]:
     Load memory settings from settings.json with defaults.
 
     Returns settings dict with all expected keys populated.
-    Short-term tokenLimits and totalTokenBudget are calculated dynamically
-    from workingDays × SHORT_TERM_TOKENS_PER_DAY.
+    totalTokenBudget is calculated as globalLongTerm + projectLongTerm.
     """
     settings_file = get_settings_file()
     settings = DEFAULT_SETTINGS.copy()
@@ -293,35 +254,10 @@ def load_settings() -> dict[str, Any]:
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load settings from {settings_file}: {e}", file=sys.stderr)
 
-    # Calculate dynamic token limits from workingDays
-    settings = _calculate_token_limits(settings)
-
-    return settings
-
-
-def _calculate_token_limits(settings: dict[str, Any]) -> dict[str, Any]:
-    """
-    Calculate short-term tokenLimits and totalTokenBudget from workingDays.
-
-    Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (750)
-    """
-    global_days = settings.get("globalShortTerm", {}).get(
-        "workingDays", DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-    )
-    project_days = settings.get("projectShortTerm", {}).get(
-        "workingDays", DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
-    )
-
-    # Calculate short-term limits (setdefault ensures sub-dicts exist)
-    settings.setdefault("globalShortTerm", {})["tokenLimit"] = global_days * SHORT_TERM_TOKENS_PER_DAY
-    settings.setdefault("projectShortTerm", {})["tokenLimit"] = project_days * SHORT_TERM_TOKENS_PER_DAY
-
-    # Calculate total budget as sum of 4 components
+    # Calculate total budget from long-term components
     settings["totalTokenBudget"] = (
         settings.get("globalLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]) +
-        settings["globalShortTerm"]["tokenLimit"] +
-        settings.get("projectLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]) +
-        settings["projectShortTerm"]["tokenLimit"]
+        settings.get("projectLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"])
     )
 
     return settings
@@ -542,28 +478,6 @@ def project_name_to_filename(project_name: str) -> str:
     return f"{kebab}-long-term-memory.md"
 
 
-def get_working_days(days_limit: int) -> list[str]:
-    """
-    Get the most recent N working days (days with daily files).
-
-    This scans existing files rather than iterating calendar dates,
-    so days without activity don't count against the limit.
-    """
-    daily_dir = get_daily_dir()
-    if not daily_dir.exists():
-        return []
-
-    # Find all daily files and sort by date descending
-    daily_files = sorted(
-        daily_dir.glob("*.md"),
-        key=lambda p: p.stem,
-        reverse=True
-    )
-
-    # Return the most recent N dates
-    return [f.stem for f in daily_files[:days_limit]]
-
-
 # =============================================================================
 # Working Days from JSONL Session Files
 # =============================================================================
@@ -768,66 +682,6 @@ def filter_daily_content(content: str, scope: str) -> str:
     return ""
 
 
-# Stopwords for keyword extraction (common English words that don't help matching)
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "out", "off", "over",
-    "under", "again", "further", "then", "once", "that", "this", "these",
-    "those", "not", "no", "nor", "or", "and", "but", "if", "so", "than",
-    "too", "very", "just", "about", "up", "it", "its", "use", "when",
-})
-
-# Regex to strip tag prefixes: [routed], [scope/type], (YYYY-MM-DD)
-_ENTRY_PREFIX_PATTERN = re.compile(
-    r"^\s*-\s*(?:\[routed\])?\s*(?:\[[^\]]+\])?\s*(?:\(\d{4}-\d{2}-\d{2}\))?\s*(?:\[[^\]]+\])?\s*"
-)
-
-
-def extract_entry_keywords(entry: str) -> set[str]:
-    """
-    Extract meaningful keywords from a memory entry line.
-
-    Strips tag prefixes ([scope/type], [routed], (date)), stopwords,
-    and short tokens. Returns lowercase keyword set.
-    """
-    # Remove tag/date prefixes
-    text = _ENTRY_PREFIX_PATTERN.sub("", entry)
-    # Tokenize: split on non-alphanumeric, lowercase
-    tokens = re.findall(r"[a-z0-9_]+", text.lower())
-    # Filter stopwords and short tokens
-    return {t for t in tokens if t not in _STOPWORDS and len(t) > 2}
-
-
-def is_routed_match(stm_entry: str, ltm_entry: str, threshold: float = 0.5) -> bool:
-    """
-    Check if a short-term memory entry matches a long-term memory entry.
-
-    Uses keyword overlap: if >= threshold of the smaller set's keywords
-    appear in the larger set, it's a match.
-
-    Args:
-        stm_entry: Daily file entry line (e.g., "- [scope/type] Description")
-        ltm_entry: LTM entry line (e.g., "- (2026-02-12) [type] Description")
-        threshold: Minimum overlap ratio (0.0-1.0) to consider a match
-
-    Returns:
-        True if entries are conceptual duplicates
-    """
-    stm_kw = extract_entry_keywords(stm_entry)
-    ltm_kw = extract_entry_keywords(ltm_entry)
-
-    if not stm_kw or not ltm_kw:
-        return False
-
-    overlap = len(stm_kw & ltm_kw)
-    smaller = min(len(stm_kw), len(ltm_kw))
-
-    return overlap / smaller >= threshold
-
-
 def get_synthesis_state_file() -> Path:
     """Get the .synthesis-state.json file path."""
     return get_memory_dir() / ".synthesis-state.json"
@@ -915,15 +769,16 @@ def prune_stale_state_entries(max_age_days: int = 7) -> int:
 
 
 def _worktree_pattern_fallback(path: str) -> str:
-    """Resolve a worktree path using /.worktrees/ directory convention.
+    """Resolve a worktree path using directory convention.
 
     Fallback for when git is unavailable (directory deleted, git not installed).
-    If path contains /.worktrees/, returns everything before it.
+    Checks for both /.claude/worktrees/ (Claude Code convention) and
+    /.worktrees/ (legacy convention), returning everything before the marker.
     """
-    marker = "/.worktrees/"
-    idx = path.find(marker)
-    if idx != -1:
-        return path[:idx]
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        idx = path.find(marker)
+        if idx != -1:
+            return path[:idx]
     return path
 
 
@@ -1080,26 +935,37 @@ def resolve_project_path_to_name(
             _projects_index_cache = load_json_file(get_projects_index_file(), {})
         projects = _projects_index_cache.get("projects", {})
 
-        # Primary: direct path lookup
+        # Primary: direct path lookup (resolve worktree paths first)
         if project_path:
-            data = projects.get(project_path)
-            if data and data.get("name"):
-                return data["name"]
+            resolved = _worktree_pattern_fallback(project_path)
+            for try_path in dict.fromkeys([resolved, project_path]):
+                data = projects.get(try_path) or projects.get(try_path.lower())
+                if data and data.get("name"):
+                    return data["name"]
 
         # Fallback 1: match encoded folder name against encodedPaths
+        # For worktree hashes, try prefix match first to resolve to parent
+        # project before falling back to exact match on the worktree's own entry.
         if project_hash:
+            is_worktree_hash = ("--claude-worktrees-" in project_hash
+                                or "--worktrees-" in project_hash)
+
+            if is_worktree_hash:
+                # Prefix match: resolve worktree hash to parent project
+                for separator in ("--claude-worktrees-", "--worktrees-"):
+                    base = project_hash.rsplit(separator, 1)[0]
+                    if base != project_hash:
+                        for _path, data in projects.items():
+                            for ep in data.get("encodedPaths", []):
+                                ep_base = ep.rsplit(separator, 1)[0]
+                                if base == ep_base:
+                                    return data.get("name")
+                        break  # matched separator but no parent found
+
+            # Exact match against encodedPaths
             for _path, data in projects.items():
                 if project_hash in data.get("encodedPaths", []):
                     return data.get("name")
-
-            # Fallback 2: prefix match for unindexed worktrees
-            base = project_hash.rsplit("--worktrees-", 1)[0]
-            if base != project_hash:  # only if hash contains --worktrees-
-                for _path, data in projects.items():
-                    for ep in data.get("encodedPaths", []):
-                        ep_base = ep.rsplit("--worktrees-", 1)[0]
-                        if base == ep_base:
-                            return data.get("name")
     except Exception:
         pass
     return None
@@ -1163,17 +1029,9 @@ if __name__ == "__main__":
 
     settings = load_settings()
     print("Settings:")
-    print(f"  Global short-term days:  {settings['globalShortTerm']['workingDays']}")
-    print(f"  Project short-term days: {settings['projectShortTerm']['workingDays']}")
+    print(f"  Global LTM token limit:  {settings['globalLongTerm']['tokenLimit']}")
+    print(f"  Project LTM token limit: {settings['projectLongTerm']['tokenLimit']}")
     print(f"  Token budget:            {settings['totalTokenBudget']}")
-    print()
-
-    working_days = get_working_days(7)
-    print(f"Recent working days ({len(working_days)}):")
-    for day in working_days[:5]:
-        print(f"  - {day}")
-    if len(working_days) > 5:
-        print(f"  ... and {len(working_days) - 5} more")
 
 
 # =============================================================================

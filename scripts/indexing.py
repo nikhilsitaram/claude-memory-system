@@ -297,11 +297,17 @@ def get_session_date(session: SessionInfo) -> str:
 # =============================================================================
 
 
+_EXTRACT_MAX_LINES = 10
+
+
 def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
     """
     Extract original path and work days from JSONL transcript files.
 
-    Reads the first line of each .jsonl file to get cwd and timestamp.
+    Reads the first few lines of each .jsonl file to find cwd and timestamp.
+    Some sessions start with non-message lines (e.g., file-history-snapshot)
+    that lack cwd, so we scan up to _EXTRACT_MAX_LINES per file.
+
     Returns (original_path, work_days_set). original_path may be empty
     if no cwd field is found.
     """
@@ -310,23 +316,40 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
 
     for jsonl_file in sorted(folder.glob("*.jsonl")):
         try:
+            file_cwd = ""
+            file_timestamp = ""
             with open(jsonl_file, "r", encoding="utf-8") as f:
-                first_line = f.readline().strip()
-                if not first_line:
-                    continue
-                data = json.loads(first_line)
+                for i, line in enumerate(f):
+                    if i >= _EXTRACT_MAX_LINES:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                # Extract cwd as original path (first valid one wins)
-                cwd = data.get("cwd", "")
-                if cwd and not original_path:
-                    original_path = cwd
+                    if not file_cwd:
+                        cwd = data.get("cwd", "")
+                        if cwd:
+                            file_cwd = cwd
 
-                # Extract timestamp as work day
-                timestamp = data.get("timestamp", "")
-                if timestamp:
-                    dt = from_iso_z(timestamp)
-                    work_days.add(utc_to_local_datestr(dt))
-        except (json.JSONDecodeError, IOError, ValueError):
+                    if not file_timestamp:
+                        timestamp = data.get("timestamp", "")
+                        if timestamp:
+                            file_timestamp = timestamp
+
+                    if file_cwd and file_timestamp:
+                        break
+
+            if file_cwd and not original_path:
+                original_path = file_cwd
+
+            if file_timestamp:
+                dt = from_iso_z(file_timestamp)
+                work_days.add(utc_to_local_datestr(dt))
+        except (IOError, ValueError):
             continue
 
     return original_path, work_days

@@ -18,7 +18,7 @@ claude-memory-system/
 │   ├── decay.py                # Salience-based decay for memory lifecycle
 │   ├── synthesis.py            # Synthesis output parser and DB apply pipeline
 │   ├── synthesis_cron.py       # Deferred synthesis runner (launchd/systemd)
-│   ├── storage.py              # SQLite storage layer (data_points, edges, migration)
+│   ├── storage.py              # SQLite storage layer (data_points, edges)
 │   ├── embeddings.py           # Vector embedding and semantic search
 │   ├── health.py               # Memory health diagnostics
 │   └── session_import.py       # Cross-machine session import utility
@@ -94,7 +94,7 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 **Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → vector pre-retrieval → LLM produces `MEMORY_OPS` JSON → `apply_memory_ops_v3` writes to `data_points` + creates provenance edges. No markdown writing.
 
-**Decay** (`decay.py`): Applies salience decay to `data_points` entries older than threshold. Archives markdown LTM entries for backward compatibility. `## Pinned` section protected.
+**Decay** (`decay.py`): Applies salience decay to `data_points` entries older than threshold. `## Pinned` section protected.
 
 ## Implementation Details
 
@@ -128,9 +128,7 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 
 | Setting | Default |
 |---------|---------|
-| `globalShortTerm.workingDays` | 2 |
 | `globalLongTerm.tokenLimit` | 3,000 |
-| `projectShortTerm.workingDays` | 5 |
 | `projectLongTerm.tokenLimit` | 3,000 |
 | `synthesis.intervalHours` | 0.5 |
 | `synthesis.model` | sonnet |
@@ -141,9 +139,6 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `synthesis.backfill.recentWorkingDays` | 7 |
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |
-| `decay.archiveRetentionDays` | 365 |
-
-Short-term token limits: `workingDays × 750` (calculated in `_calculate_token_limits()`).
 
 ## Available Commands
 

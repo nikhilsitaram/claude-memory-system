@@ -37,8 +37,8 @@ except ImportError:
 # These exist today and must always import cleanly.
 from memory_utils import (  # noqa: E402
     DEFAULT_SETTINGS,
-    _calculate_token_limits,
     find_current_project,
+    load_settings,
 )
 
 # =============================================================================
@@ -83,7 +83,12 @@ needs_fcp_two_args = pytest.mark.xfail(
 
 def _make_fake_settings() -> dict:
     """Derive a valid settings dict from DEFAULT_SETTINGS (no hardcoded values)."""
-    return _calculate_token_limits(copy.deepcopy(DEFAULT_SETTINGS))
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
+    settings["totalTokenBudget"] = (
+        settings.get("globalLongTerm", {}).get("tokenLimit", 3000)
+        + settings.get("projectLongTerm", {}).get("tokenLimit", 3000)
+    )
+    return settings
 
 
 class CompletedProcessFake:
