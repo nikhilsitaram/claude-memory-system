@@ -116,32 +116,19 @@
         },
         {
           "id": "B2",
-          "name": "Remove LTM-operating commands from devtools.py",
+          "name": "Remove LTM-operating commands from devtools.py and orphaned LTM helpers from memory_utils.py",
           "status": "pending",
           "depends_on": [],
           "files": {
             "create": [],
-            "modify": ["scripts/devtools.py"],
-            "test": ["tests/test_devtools.py"]
+            "modify": ["scripts/devtools.py", "scripts/memory_utils.py"],
+            "test": ["tests/test_devtools.py", "tests/test_memory_utils.py"]
           },
-          "verification": "python3 -m pytest tests/test_devtools.py -q",
-          "done_when": "devtools.py has no cmd_mark_routed, cmd_validate_ltm functions. The main() parser no longer registers mark-routed or validate-ltm subcommands. No imports of collect_ltm_files. All tests pass."
+          "verification": "python3 -m pytest tests/test_devtools.py tests/test_memory_utils.py -q",
+          "done_when": "devtools.py has no cmd_mark_routed, cmd_validate_ltm functions. The main() parser no longer registers mark-routed or validate-ltm subcommands. No imports of collect_ltm_files. memory_utils.py has no collect_ltm_files, LTM_ENTRY_PATTERN, or is_routed_match. All tests pass."
         },
         {
           "id": "B3",
-          "name": "Remove LTM references from project_manager.py list/plan operations",
-          "status": "pending",
-          "depends_on": [],
-          "files": {
-            "create": [],
-            "modify": ["scripts/project_manager.py"],
-            "test": ["tests/test_project_manager.py"]
-          },
-          "verification": "python3 -m pytest tests/test_project_manager.py -q",
-          "done_when": "project_manager.py list_projects() and plan_move() do not reference *-long-term-memory.md. plan_merge_orphan() does not reference *-long-term-memory.md. restore_from_backup() and get_memory_files_for_merge() keep their LTM handling for legacy file recovery. All tests pass."
-        },
-        {
-          "id": "B4",
           "name": "Delete token_usage.py, markdown templates, test_migration.py, and test_token_usage.py",
           "status": "pending",
           "depends_on": [],
@@ -161,7 +148,7 @@
           "done_when": "scripts/token_usage.py, templates/daily-template.md, templates/global-long-term-memory.md, templates/project-long-term-memory.md, tests/test_migration.py, and tests/test_token_usage.py are all deleted. Full test suite passes."
         },
         {
-          "id": "B5",
+          "id": "B4",
           "name": "Remove ChunkRow imports from test_health.py and update CLAUDE.md",
           "status": "pending",
           "depends_on": [],
@@ -178,7 +165,7 @@
   ],
   "success_criteria": [
     {
-      "run": "grep -rE 'daily/\\*\\.md|long-term-memory\\.md' scripts/ || true",
+      "run": "grep -rE 'daily/\\*\\.md|long-term-memory\\.md' scripts/storage.py scripts/decay.py scripts/load_memory.py scripts/install.py scripts/synthesis_cron.py scripts/embeddings.py scripts/devtools.py || true",
       "expect_exit": 1
     },
     {
@@ -194,7 +181,7 @@
       "expect_output": "passed"
     },
     {
-      "run": "python3 -c \"from memory_utils import DEFAULT_SETTINGS; assert 'globalShortTerm' not in DEFAULT_SETTINGS; print('ok')\"",
+      "run": "PYTHONPATH=scripts python3 -c \"from memory_utils import DEFAULT_SETTINGS; assert 'globalShortTerm' not in DEFAULT_SETTINGS; print('ok')\"",
       "expect_output": "ok"
     },
     {

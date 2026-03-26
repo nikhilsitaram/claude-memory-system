@@ -26,5 +26,22 @@
     "remaining": 0,
     "verdict": "pass",
     "timestamp": "2026-03-26T17:55:00Z"
+  },
+  {
+    "type": "plan-review",
+    "scope": "plan",
+    "iteration": 1,
+    "issues_found": 6,
+    "severity": { "critical": 0, "high": 1, "medium": 3, "low": 2 },
+    "actionable": 4,
+    "dismissed": 2,
+    "dismissals": [
+      {"id": 5, "reason": "Fixed: updated reference from _build_status to if __name__ block"},
+      {"id": 6, "reason": "Informational: no files.delete field in schema, prose is clear"}
+    ],
+    "fixed": 4,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-26T18:15:00Z"
   }
 ]
