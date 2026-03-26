@@ -19,7 +19,6 @@ from memory_utils import (
     _clear_working_days_cache,
     _deep_merge,
     estimate_tokens,
-    extract_entry_keywords,
     filter_daily_content,
     find_current_project,
     from_iso_z,
@@ -28,7 +27,6 @@ from memory_utils import (
     get_sessions_original_path,
     get_synthesis_state_file,
     get_working_days,
-    is_routed_match,
     load_json_file,
     load_sessions_index,
     load_settings,
@@ -598,40 +596,6 @@ class TestFileLock:
 # =============================================================================
 
 
-class TestRoutedMatching:
-    def test_extract_keywords_strips_tags_and_stopwords(self):
-        keywords = extract_entry_keywords(
-            "- [claude-memory-system/gotcha] Missing defaultdict import crashed build_projects_index()"
-        )
-        assert "defaultdict" in keywords
-        assert "crashed" in keywords
-        assert "claude-memory-system" not in keywords  # tag stripped
-        assert "the" not in keywords  # stopword stripped
-
-    def test_match_same_concept_different_wording(self):
-        stm = "- [claude-memory-system/gotcha] Missing defaultdict import crashed build_projects_index()"
-        ltm = "- (2026-02-12) [gotcha] Missing imports cause cascading failures in indexing — defaultdict missing from build_projects_index()"
-        assert is_routed_match(stm, ltm) is True
-
-    def test_no_match_different_concepts(self):
-        stm = "- [claude-memory-system/pattern] FileLock prevents concurrent file corruption"
-        ltm = "- (2026-02-12) [gotcha] Missing imports cause cascading failures in indexing"
-        assert is_routed_match(stm, ltm) is False
-
-    def test_match_with_high_keyword_overlap(self):
-        stm = "- [global/pattern] ETL schedule awareness - REBUILDDATAWAREHOUSE runs 6 PM CT"
-        ltm = "- (2026-01-28) [pattern] ETL schedule awareness - REBUILDDATAWAREHOUSE runs 6 PM CT"
-        assert is_routed_match(stm, ltm) is True
-
-    def test_already_routed_entry_ignored(self):
-        """extract_entry_keywords should handle [routed] prefix gracefully."""
-        keywords = extract_entry_keywords(
-            "- [routed][global/pattern] Already marked"
-        )
-        assert "already" in keywords
-        assert "routed" not in keywords
-
-
 # =============================================================================
 # ISO Datetime Helper Tests
 # =============================================================================
@@ -702,110 +666,6 @@ class TestIsoDatetimeHelpers:
     def test_roundtrip_with_microseconds(self):
         dt = datetime(2026, 2, 18, 15, 30, 45, 123456, tzinfo=timezone.utc)
         assert from_iso_z(to_iso_z(dt)) == dt
-
-
-# =============================================================================
-# LTM Entry Pattern Tests
-# =============================================================================
-
-
-class TestLtmEntryPattern:
-    def test_matches_dated_entry(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert LTM_ENTRY_PATTERN.match("- (2026-02-18) [pattern] Some text")
-
-    def test_matches_indented_dated_entry(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert LTM_ENTRY_PATTERN.match("  - (2026-01-01) [gotcha] Indented")
-
-    def test_rejects_non_dated_tagged(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert not LTM_ENTRY_PATTERN.match("- [scope/type] No date")
-
-    def test_rejects_section_header(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert not LTM_ENTRY_PATTERN.match("## Section header")
-
-    def test_rejects_plain_text(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert not LTM_ENTRY_PATTERN.match("Just plain text without bullet")
-
-    def test_rejects_empty_string(self):
-        from memory_utils import LTM_ENTRY_PATTERN
-        assert not LTM_ENTRY_PATTERN.match("")
-
-
-# =============================================================================
-# Collect LTM Files Tests
-# =============================================================================
-
-
-class TestCollectLtmFiles:
-    def test_collects_global_and_project_files(self, tmp_path):
-        from memory_utils import collect_ltm_files
-
-        global_f = tmp_path / "global-long-term-memory.md"
-        global_f.write_text("# Global\n")
-        proj_dir = tmp_path / "project-memory"
-        proj_dir.mkdir()
-        proj_f = proj_dir / "foo-long-term-memory.md"
-        proj_f.write_text("# Foo\n")
-
-        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
-             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
-            files = collect_ltm_files()
-
-        assert len(files) == 2
-        assert global_f in files
-        assert proj_f in files
-
-    def test_only_global_when_no_project_dir(self, tmp_path):
-        from memory_utils import collect_ltm_files
-
-        global_f = tmp_path / "global-long-term-memory.md"
-        global_f.write_text("# Global\n")
-        proj_dir = tmp_path / "project-memory"  # does not exist
-
-        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
-             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
-            files = collect_ltm_files()
-
-        assert files == [global_f]
-
-    def test_empty_when_nothing_exists(self, tmp_path):
-        from memory_utils import collect_ltm_files
-
-        global_f = tmp_path / "global-long-term-memory.md"  # does not exist
-        proj_dir = tmp_path / "project-memory"  # does not exist
-
-        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
-             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
-            files = collect_ltm_files()
-
-        assert files == []
-
-    def test_multiple_project_files(self, tmp_path):
-        from memory_utils import collect_ltm_files
-
-        global_f = tmp_path / "global-long-term-memory.md"
-        global_f.write_text("# Global\n")
-        proj_dir = tmp_path / "project-memory"
-        proj_dir.mkdir()
-        (proj_dir / "foo-long-term-memory.md").write_text("# Foo\n")
-        (proj_dir / "bar-long-term-memory.md").write_text("# Bar\n")
-        # Non-LTM file should be excluded
-        (proj_dir / "notes.md").write_text("# Notes\n")
-
-        with mock.patch("memory_utils.get_global_memory_file", return_value=global_f), \
-             mock.patch("memory_utils.get_project_memory_dir", return_value=proj_dir):
-            files = collect_ltm_files()
-
-        assert len(files) == 3  # global + 2 project files
-        assert global_f in files
-        filenames = {f.name for f in files}
-        assert "foo-long-term-memory.md" in filenames
-        assert "bar-long-term-memory.md" in filenames
-        assert "notes.md" not in filenames
 
 
 # =============================================================================
@@ -1197,40 +1057,6 @@ class TestResolveSessionPath:
             mock_worktree.assert_called_once_with("/repo/vendor/lib")
             mock_subdir.assert_called_once_with("/repo/vendor/lib")
             assert result == "/repo/vendor/lib"
-
-
-class TestExtractEntryKeywordsMultiScope:
-    """Verify keyword extraction handles multi-scope tags like [global|cartwheel/gotcha]."""
-
-    def test_strips_multi_scope_tag(self):
-        entry = "- [global|cartwheel/gotcha] Tailscale MTU black hole"
-        keywords = extract_entry_keywords(entry)
-        assert "tailscale" in keywords
-        assert "global" not in keywords
-        assert "cartwheel" not in keywords
-        assert "gotcha" not in keywords
-
-    def test_strips_single_scope_unchanged(self):
-        entry = "- [cartwheel/implement] Built OAuth flow"
-        keywords = extract_entry_keywords(entry)
-        assert "oauth" in keywords
-        assert "cartwheel" not in keywords
-
-    def test_strips_multi_scope_with_routed_prefix(self):
-        entry = "- [routed][global|cartwheel/pattern] Shared CI config"
-        keywords = extract_entry_keywords(entry)
-        assert "shared" in keywords
-        assert "config" in keywords
-        assert "routed" not in keywords
-        assert "global" not in keywords
-        assert "cartwheel" not in keywords
-
-    def test_strips_multi_scope_with_date(self):
-        entry = "- (2026-02-23) [global|cartwheel/gotcha] Tailscale MTU"
-        keywords = extract_entry_keywords(entry)
-        assert "tailscale" in keywords
-        assert "2026" not in keywords
-        assert "global" not in keywords
 
 
 # =============================================================================
