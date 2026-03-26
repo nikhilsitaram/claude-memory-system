@@ -12,9 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from memory_utils import (
     DEFAULT_SETTINGS,
-    SHORT_TERM_TOKENS_PER_DAY,
     FileLock,
-    _calculate_token_limits,
     _clear_projects_index_cache,
     _clear_working_days_cache,
     _deep_merge,
@@ -27,7 +25,6 @@ from memory_utils import (
     get_project_working_days,
     get_sessions_original_path,
     get_synthesis_state_file,
-    get_working_days,
     is_routed_match,
     load_json_file,
     load_sessions_index,
@@ -77,34 +74,36 @@ class TestLoadSettings:
 
     def test_defaults_when_no_file(self, no_settings_file):
         settings = load_settings()
-        assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-        assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+        assert "globalShortTerm" not in settings
+        assert "projectShortTerm" not in settings
         assert settings["globalLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
+        assert settings["projectLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
 
-    def test_calculated_token_limits(self, no_settings_file):
-        settings = load_settings()
-        assert settings["globalShortTerm"]["tokenLimit"] == 2 * SHORT_TERM_TOKENS_PER_DAY
-        assert settings["projectShortTerm"]["tokenLimit"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
+    def test_no_short_term_settings(self, no_settings_file):
+        """DEFAULT_SETTINGS no longer contains short-term keys."""
+        assert "globalShortTerm" not in DEFAULT_SETTINGS
+        assert "projectShortTerm" not in DEFAULT_SETTINGS
+
+    def test_no_archive_retention_days(self, no_settings_file):
+        """DEFAULT_SETTINGS.decay no longer contains archiveRetentionDays."""
+        assert "archiveRetentionDays" not in DEFAULT_SETTINGS["decay"]
 
     def test_total_budget_calculation(self, no_settings_file):
         settings = load_settings()
         expected = (
             DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
-            + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
             + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
-            + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
         )
         assert settings["totalTokenBudget"] == expected
 
     def test_user_overrides_merge(self, tmp_path):
         f = tmp_path / "settings.json"
-        f.write_text(json.dumps({"globalShortTerm": {"workingDays": 5}}))
+        f.write_text(json.dumps({"globalLongTerm": {"tokenLimit": 5000}}))
         with mock.patch("memory_utils.get_settings_file") as mock_sf:
             mock_sf.return_value = f
             settings = load_settings()
-            assert settings["globalShortTerm"]["workingDays"] == 5
-            # Other defaults preserved
-            assert settings["projectShortTerm"]["workingDays"] == DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
+            assert settings["globalLongTerm"]["tokenLimit"] == 5000
+            assert settings["totalTokenBudget"] == 5000 + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
 
     def test_invalid_json_returns_defaults(self, tmp_path):
         f = tmp_path / "settings.json"
@@ -112,33 +111,7 @@ class TestLoadSettings:
         with mock.patch("memory_utils.get_settings_file") as mock_sf:
             mock_sf.return_value = f
             settings = load_settings()
-            assert settings["globalShortTerm"]["workingDays"] == DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-
-
-class TestCalculateTokenLimits:
-    def test_fallback_defaults_match_default_settings(self):
-        """_calculate_token_limits fallbacks must match DEFAULT_SETTINGS."""
-        # Pass empty settings to trigger all fallbacks
-        result = _calculate_token_limits({})
-        expected_project_days = DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]  # 5
-        assert result["projectShortTerm"]["tokenLimit"] == expected_project_days * SHORT_TERM_TOKENS_PER_DAY
-
-    def test_fallback_global_short_term_matches_default_settings(self):
-        """Global short-term fallback must match DEFAULT_SETTINGS."""
-        result = _calculate_token_limits({})
-        expected_global_days = DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]  # 2
-        assert result["globalShortTerm"]["tokenLimit"] == expected_global_days * SHORT_TERM_TOKENS_PER_DAY
-
-    def test_fallback_long_term_limits_match_default_settings(self):
-        """Long-term token limit fallbacks must match DEFAULT_SETTINGS."""
-        result = _calculate_token_limits({})
-        expected_total = (
-            DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
-            + DEFAULT_SETTINGS["globalShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
-            + DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]
-            + DEFAULT_SETTINGS["projectShortTerm"]["workingDays"] * SHORT_TERM_TOKENS_PER_DAY
-        )
-        assert result["totalTokenBudget"] == expected_total
+            assert settings["globalLongTerm"]["tokenLimit"] == DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]
 
 
 class TestDeepMerge:
@@ -304,35 +277,6 @@ class TestPruneStaleStateEntries:
 # =============================================================================
 # Working Days Tests
 # =============================================================================
-
-
-class TestGetWorkingDays:
-    def test_empty_when_no_dir(self):
-        with mock.patch("memory_utils.get_daily_dir") as mock_dd:
-            mock_dd.return_value = Path("/nonexistent/daily")
-            assert get_working_days(7) == []
-
-    def test_returns_sorted_descending(self, tmp_path):
-        daily_dir = tmp_path
-        (daily_dir / "2026-01-01.md").write_text("day 1")
-        (daily_dir / "2026-01-03.md").write_text("day 3")
-        (daily_dir / "2026-01-02.md").write_text("day 2")
-
-        with mock.patch("memory_utils.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            days = get_working_days(10)
-            assert days == ["2026-01-03", "2026-01-02", "2026-01-01"]
-
-    def test_respects_limit(self, tmp_path):
-        daily_dir = tmp_path
-        for i in range(1, 6):
-            (daily_dir / f"2026-01-0{i}.md").write_text(f"day {i}")
-
-        with mock.patch("memory_utils.get_daily_dir") as mock_dd:
-            mock_dd.return_value = daily_dir
-            days = get_working_days(2)
-            assert len(days) == 2
-            assert days[0] == "2026-01-05"
 
 
 # =============================================================================

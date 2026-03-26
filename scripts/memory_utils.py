@@ -24,7 +24,6 @@ __all__ = [
     # Constants
     "MIN_PYTHON",
     "LTM_ENTRY_PATTERN",
-    "SHORT_TERM_TOKENS_PER_DAY",
     "DEFAULT_SETTINGS",
     # Version check
     "check_python_version",
@@ -60,7 +59,6 @@ __all__ = [
     # Content filtering
     "filter_daily_content",
     "find_current_project",
-    "get_working_days",
     "get_global_working_days",
     "get_project_working_days",
     "_clear_working_days_cache",
@@ -111,7 +109,6 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Content:
 #   filter_daily_content(content, scope) -> str
 #   find_current_project(index, pwd) -> dict | None
-#   get_working_days(days_limit) -> list[str]
 # Utilities:
 #   estimate_tokens(text) -> int          FileLock(path, timeout?, poll?)
 #   load_json_file(path, default?) -> Any  save_json_file(path, data) -> bool
@@ -219,22 +216,10 @@ def get_db_path() -> Path:
     return get_memory_dir() / "memory.db"
 
 
-# Token limit formulas
-SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per day
-
-# Default settings (tokenLimit for short-term calculated dynamically)
 DEFAULT_SETTINGS = {
     "version": 3,
-    "globalShortTerm": {
-        "workingDays": 2,
-        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
-    },
     "globalLongTerm": {
         "tokenLimit": 3000,
-    },
-    "projectShortTerm": {
-        "workingDays": 5,
-        # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY
     },
     "projectLongTerm": {
         "tokenLimit": 3000,
@@ -253,7 +238,6 @@ DEFAULT_SETTINGS = {
     "decay": {
         "ageDays": 30,
         "projectWorkingDays": 20,
-        "archiveRetentionDays": 365,
     },
     "consolidation": {
         "intervalHours": 24,
@@ -269,7 +253,7 @@ DEFAULT_SETTINGS = {
         "maxInjectionsPerPrompt": 3,
         "maxTokenBudget": 500,
     },
-    # totalTokenBudget calculated as sum of 4 components
+    # totalTokenBudget calculated as globalLongTerm + projectLongTerm
 }
 
 
@@ -278,8 +262,7 @@ def load_settings() -> dict[str, Any]:
     Load memory settings from settings.json with defaults.
 
     Returns settings dict with all expected keys populated.
-    Short-term tokenLimits and totalTokenBudget are calculated dynamically
-    from workingDays × SHORT_TERM_TOKENS_PER_DAY.
+    totalTokenBudget is calculated as globalLongTerm + projectLongTerm.
     """
     settings_file = get_settings_file()
     settings = DEFAULT_SETTINGS.copy()
@@ -293,35 +276,10 @@ def load_settings() -> dict[str, Any]:
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load settings from {settings_file}: {e}", file=sys.stderr)
 
-    # Calculate dynamic token limits from workingDays
-    settings = _calculate_token_limits(settings)
-
-    return settings
-
-
-def _calculate_token_limits(settings: dict[str, Any]) -> dict[str, Any]:
-    """
-    Calculate short-term tokenLimits and totalTokenBudget from workingDays.
-
-    Formula: tokenLimit = workingDays × SHORT_TERM_TOKENS_PER_DAY (750)
-    """
-    global_days = settings.get("globalShortTerm", {}).get(
-        "workingDays", DEFAULT_SETTINGS["globalShortTerm"]["workingDays"]
-    )
-    project_days = settings.get("projectShortTerm", {}).get(
-        "workingDays", DEFAULT_SETTINGS["projectShortTerm"]["workingDays"]
-    )
-
-    # Calculate short-term limits (setdefault ensures sub-dicts exist)
-    settings.setdefault("globalShortTerm", {})["tokenLimit"] = global_days * SHORT_TERM_TOKENS_PER_DAY
-    settings.setdefault("projectShortTerm", {})["tokenLimit"] = project_days * SHORT_TERM_TOKENS_PER_DAY
-
-    # Calculate total budget as sum of 4 components
+    # Calculate total budget from long-term components
     settings["totalTokenBudget"] = (
         settings.get("globalLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["globalLongTerm"]["tokenLimit"]) +
-        settings["globalShortTerm"]["tokenLimit"] +
-        settings.get("projectLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"]) +
-        settings["projectShortTerm"]["tokenLimit"]
+        settings.get("projectLongTerm", {}).get("tokenLimit", DEFAULT_SETTINGS["projectLongTerm"]["tokenLimit"])
     )
 
     return settings
@@ -540,28 +498,6 @@ def project_name_to_filename(project_name: str) -> str:
     # Remove leading/trailing hyphens
     kebab = kebab.strip("-")
     return f"{kebab}-long-term-memory.md"
-
-
-def get_working_days(days_limit: int) -> list[str]:
-    """
-    Get the most recent N working days (days with daily files).
-
-    This scans existing files rather than iterating calendar dates,
-    so days without activity don't count against the limit.
-    """
-    daily_dir = get_daily_dir()
-    if not daily_dir.exists():
-        return []
-
-    # Find all daily files and sort by date descending
-    daily_files = sorted(
-        daily_dir.glob("*.md"),
-        key=lambda p: p.stem,
-        reverse=True
-    )
-
-    # Return the most recent N dates
-    return [f.stem for f in daily_files[:days_limit]]
 
 
 # =============================================================================
@@ -1175,17 +1111,9 @@ if __name__ == "__main__":
 
     settings = load_settings()
     print("Settings:")
-    print(f"  Global short-term days:  {settings['globalShortTerm']['workingDays']}")
-    print(f"  Project short-term days: {settings['projectShortTerm']['workingDays']}")
+    print(f"  Global LTM token limit:  {settings['globalLongTerm']['tokenLimit']}")
+    print(f"  Project LTM token limit: {settings['projectLongTerm']['tokenLimit']}")
     print(f"  Token budget:            {settings['totalTokenBudget']}")
-    print()
-
-    working_days = get_working_days(7)
-    print(f"Recent working days ({len(working_days)}):")
-    for day in working_days[:5]:
-        print(f"  - {day}")
-    if len(working_days) > 5:
-        print(f"  ... and {len(working_days) - 5} more")
 
 
 # =============================================================================
