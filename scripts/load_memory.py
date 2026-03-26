@@ -110,6 +110,9 @@ def should_synthesize(settings: dict) -> bool:
     2. Last synthesis was on a different day (UTC) - first session of day
     3. More than intervalHours since last synthesis
 
+    .last-synthesis file format: ISO format with UTC timezone (e.g., "2026-02-03T14:30:00+00:00")
+    This file is written by load_memory.py when synthesis is triggered.
+
     Args:
         settings: Memory settings dict with synthesis.intervalHours
 
@@ -952,6 +955,7 @@ def main() -> None:
     if pending_dates and should_synthesize(settings) and not synthesis_deferred:
         # Write timestamp eagerly to prevent duplicate synthesis when multiple
         # sessions start simultaneously (all would see stale timestamp otherwise)
+        # Format: ISO format with UTC timezone (e.g., "2026-02-03T14:30:00+00:00")
         get_last_synthesis_file().write_text(
             datetime.now(timezone.utc).isoformat(), encoding="utf-8"
         )

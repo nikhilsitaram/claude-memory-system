@@ -753,12 +753,13 @@ def run_backfill(days=None, import_from=None) -> int:
     conn = ensure_db()
     state = load_synthesis_state()
     sessions_state = state.get("sessions", {})
-    session_updates = {}
     v3_instructions = _build_synthesis_instructions_v3()
 
+    project_updates = {}
     try:
         for project_name, batch in project_batches.items():
             print(f"\n  {project_name} ({batch['total']} sessions)...")
+            project_updates = {}
 
             for model_tier, model_name in [("sonnet", default_model), ("haiku", "haiku")]:
                 tier_sessions = batch[model_tier]
@@ -772,6 +773,7 @@ def run_backfill(days=None, import_from=None) -> int:
 
                 for day, day_sessions in sorted(by_date.items()):
                     transcripts = []
+                    batch_sessions = {}
                     for s in day_sessions:
                         sid = s.session_id
                         prev = sessions_state.get(sid)
@@ -784,7 +786,7 @@ def run_backfill(days=None, import_from=None) -> int:
                         )
                         if messages:
                             transcripts.append({"session_id": sid, "messages": messages})
-                            session_updates[sid] = {
+                            batch_sessions[sid] = {
                                 "offset": s.file_size, "lines": total_lines,
                             }
 
@@ -810,11 +812,15 @@ def run_backfill(days=None, import_from=None) -> int:
                         sr = parse_synthesis_output(output)
                         if sr and sr.memory_ops:
                             apply_memory_ops_v3(conn, sr.memory_ops)
+                        project_updates.update(batch_sessions)
 
                 print(f"    {model_name}: {len(tier_sessions)} sessions processed")
 
-        if session_updates:
-            update_synthesis_state(session_updates)
+            # Flush session state after each project for resumability
+            if project_updates:
+                update_synthesis_state(project_updates)
+                sessions_state.update(project_updates)
+                project_updates = {}
 
         _run_decay_v3(conn)
         print("\nBackfill complete.")
@@ -822,8 +828,8 @@ def run_backfill(days=None, import_from=None) -> int:
 
     except Exception as e:
         print(f"Backfill error: {e}", file=sys.stderr)
-        if session_updates:
-            update_synthesis_state(session_updates)
+        if project_updates:
+            update_synthesis_state(project_updates)
         return 1
     finally:
         conn.close()
