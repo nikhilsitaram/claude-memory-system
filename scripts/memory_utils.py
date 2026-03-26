@@ -23,7 +23,6 @@ from typing import Any
 __all__ = [
     # Constants
     "MIN_PYTHON",
-    "LTM_ENTRY_PATTERN",
     "DEFAULT_SETTINGS",
     # Version check
     "check_python_version",
@@ -43,7 +42,6 @@ __all__ = [
     "get_global_memory_file",
     "get_synthesis_error_log",
     "get_db_path",
-    "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     "resolve_git_subdir_to_root",
     "resolve_session_path",
@@ -75,8 +73,6 @@ __all__ = [
     # Utilities
     "estimate_tokens",
     "project_name_to_filename",
-    "extract_entry_keywords",
-    "is_routed_match",
     "rebuild_projects_index_quiet",
     "FileLock",
     "sanitize_secrets",
@@ -135,24 +131,6 @@ def to_iso_z(dt: datetime) -> str:
 def from_iso_z(date_str: str) -> datetime:
     """Parse ISO datetime string, handling both Z and +00:00 suffixes."""
     return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-
-
-# Pattern matching LTM dated entries: - (YYYY-MM-DD) [type] description
-# Note: decay.py has its own DATE_PATTERN that captures the date group for
-# computation. LTM_ENTRY_PATTERN is for detection/matching only.
-LTM_ENTRY_PATTERN = re.compile(r"^\s*-\s*\(\d{4}-\d{2}-\d{2}\)")
-
-
-def collect_ltm_files() -> list[Path]:
-    """Collect all LTM files (global + all project files)."""
-    files: list[Path] = []
-    global_f = get_global_memory_file()
-    if global_f.exists():
-        files.append(global_f)
-    proj_dir = get_project_memory_dir()
-    if proj_dir.exists():
-        files.extend(proj_dir.glob("*-long-term-memory.md"))
-    return files
 
 
 def check_python_version() -> None:
@@ -702,66 +680,6 @@ def filter_daily_content(content: str, scope: str) -> str:
     if filtered.strip() and not _DATE_ONLY_RE.match(filtered.strip()):
         return filtered
     return ""
-
-
-# Stopwords for keyword extraction (common English words that don't help matching)
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "out", "off", "over",
-    "under", "again", "further", "then", "once", "that", "this", "these",
-    "those", "not", "no", "nor", "or", "and", "but", "if", "so", "than",
-    "too", "very", "just", "about", "up", "it", "its", "use", "when",
-})
-
-# Regex to strip tag prefixes: [routed], [scope/type], (YYYY-MM-DD)
-_ENTRY_PREFIX_PATTERN = re.compile(
-    r"^\s*-\s*(?:\[routed\])?\s*(?:\[[^\]]+\])?\s*(?:\(\d{4}-\d{2}-\d{2}\))?\s*(?:\[[^\]]+\])?\s*"
-)
-
-
-def extract_entry_keywords(entry: str) -> set[str]:
-    """
-    Extract meaningful keywords from a memory entry line.
-
-    Strips tag prefixes ([scope/type], [routed], (date)), stopwords,
-    and short tokens. Returns lowercase keyword set.
-    """
-    # Remove tag/date prefixes
-    text = _ENTRY_PREFIX_PATTERN.sub("", entry)
-    # Tokenize: split on non-alphanumeric, lowercase
-    tokens = re.findall(r"[a-z0-9_]+", text.lower())
-    # Filter stopwords and short tokens
-    return {t for t in tokens if t not in _STOPWORDS and len(t) > 2}
-
-
-def is_routed_match(stm_entry: str, ltm_entry: str, threshold: float = 0.5) -> bool:
-    """
-    Check if a short-term memory entry matches a long-term memory entry.
-
-    Uses keyword overlap: if >= threshold of the smaller set's keywords
-    appear in the larger set, it's a match.
-
-    Args:
-        stm_entry: Daily file entry line (e.g., "- [scope/type] Description")
-        ltm_entry: LTM entry line (e.g., "- (2026-02-12) [type] Description")
-        threshold: Minimum overlap ratio (0.0-1.0) to consider a match
-
-    Returns:
-        True if entries are conceptual duplicates
-    """
-    stm_kw = extract_entry_keywords(stm_entry)
-    ltm_kw = extract_entry_keywords(ltm_entry)
-
-    if not stm_kw or not ltm_kw:
-        return False
-
-    overlap = len(stm_kw & ltm_kw)
-    smaller = min(len(stm_kw), len(ltm_kw))
-
-    return overlap / smaller >= threshold
 
 
 def get_synthesis_state_file() -> Path:

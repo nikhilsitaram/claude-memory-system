@@ -176,7 +176,7 @@
         {
           "id": "B3",
           "name": "Delete token_usage.py, markdown templates, test_migration.py, and test_token_usage.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -196,7 +196,7 @@
         {
           "id": "B4",
           "name": "Remove ChunkRow imports from test_health.py and update CLAUDE.md",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
