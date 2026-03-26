@@ -15,13 +15,10 @@ import pytest
 from load_memory import (
     _build_embedded_files,
     _build_preextracted_prompt,
-    _build_synthesis_instructions,
     _build_synthesis_instructions_v3,
     _build_synthesis_prompt,
     _find_projects_in_extracts,
-    _get_project_names_str,
     _load_from_db,
-    _strip_profile_sections,
     pre_extract_transcripts_incremental,
     should_synthesize,
     write_synthesis_prompt,
@@ -46,91 +43,6 @@ def _make_v2_db(db_path):
     conn.execute("PRAGMA user_version=2")
     conn.commit()
     return conn
-
-# =============================================================================
-# _strip_profile_sections Tests
-# =============================================================================
-
-
-SAMPLE_GLOBAL_LTM = """# Long-Term Memory
-
-## About Me
-- **Name**: Test User
-- **Role**: Developer
-
-## Current Projects
-- **ProjectA**: Building stuff
-
-## Technical Environment
-- **OS**: Linux
-- **Tools**: vim, git
-
-## Patterns & Preferences
-- Prefers tabs over spaces
-
-## Pinned
-- (2026-01-01) [pattern] Important pinned item
-
-## Key Actions
-- (2026-02-01) [implement] Built feature X
-
-## Key Decisions
-- (2026-02-01) [design] Chose architecture Y
-
-## Key Learnings
-- (2026-02-01) [gotcha] Watch out for Z
-
-## Key Lessons
-- (2026-02-01) [tip] Use command W
-"""
-
-
-class TestStripProfileSections:
-    def test_strips_profile_sections(self):
-        """About Me, Current Projects, Technical Environment, Patterns & Preferences removed."""
-        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
-        assert "## About Me" not in result
-        assert "Test User" not in result
-        assert "## Current Projects" not in result
-        assert "ProjectA" not in result
-        assert "## Technical Environment" not in result
-        assert "## Patterns & Preferences" not in result
-        assert "tabs over spaces" not in result
-
-    def test_keeps_key_sections(self):
-        """Key Actions/Decisions/Learnings/Lessons preserved."""
-        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
-        assert "## Key Actions" in result
-        assert "Built feature X" in result
-        assert "## Key Decisions" in result
-        assert "Chose architecture Y" in result
-        assert "## Key Learnings" in result
-        assert "Watch out for Z" in result
-        assert "## Key Lessons" in result
-        assert "Use command W" in result
-
-    def test_keeps_pinned(self):
-        """Pinned section preserved."""
-        result = _strip_profile_sections(SAMPLE_GLOBAL_LTM)
-        assert "## Pinned" in result
-        assert "Important pinned item" in result
-
-    def test_empty_content(self):
-        """Empty string returns empty."""
-        assert _strip_profile_sections("") == ""
-
-    def test_project_ltm_unchanged(self):
-        """Content without profile sections passes through unchanged."""
-        project_content = """# Project Memory
-
-## Pinned
-- Important
-
-## Key Learnings
-- (2026-02-01) [pattern] Something useful
-"""
-        assert _strip_profile_sections(project_content) == project_content
-
 
 # =============================================================================
 # should_synthesize Tests
@@ -244,115 +156,6 @@ class TestShouldSynthesize:
 # =============================================================================
 
 
-class TestSynthesisPromptRoutedMarker:
-    """Verify [routed] marking is handled by synthesis.py, not subagent."""
-
-    def test_prompt_does_not_contain_routed_instruction(self, tmp_path):
-        """Subagent should NOT be told to mark [routed] -- synthesis.py handles it."""
-        extract = tmp_path / "extract.txt"
-        extract.write_text("content\n")
-        prompt = _build_synthesis_prompt(
-            ["2026-02-01"], {"2026-02-01": str(extract)}
-        )
-        assert "Dedup marking" not in prompt
-
-    def test_prompt_contains_synthesis_apply(self, tmp_path):
-        """Prompt should instruct subagent to run synthesis.py apply."""
-        extract = tmp_path / "extract.txt"
-        extract.write_text("content\n")
-        prompt = _build_synthesis_prompt(
-            ["2026-02-01"], {"2026-02-01": str(extract)}
-        )
-        assert "synthesis.py apply" in prompt
-
-
-# =============================================================================
-# _get_project_names_str Tests
-# =============================================================================
-
-
-class TestGetProjectNamesStr:
-    def test_returns_formatted_names(self):
-        index = {"projects": {
-            "/path/a": {"name": "alpha"},
-            "/path/b": {"name": "beta"},
-        }}
-        with mock.patch("load_memory.load_json_file", return_value=index):
-            result = _get_project_names_str()
-        assert "`alpha`" in result
-        assert "`beta`" in result
-        # Sorted order
-        assert result.index("`alpha`") < result.index("`beta`")
-
-    def test_returns_none_registered_when_empty(self):
-        with mock.patch("load_memory.load_json_file", return_value={}):
-            result = _get_project_names_str()
-        assert result == "(none registered)"
-
-    def test_deduplicates_names(self):
-        index = {"projects": {
-            "/path/a": {"name": "same"},
-            "/path/b": {"name": "same"},
-        }}
-        with mock.patch("load_memory.load_json_file", return_value=index):
-            result = _get_project_names_str()
-        assert result.count("`same`") == 1
-
-    def test_skips_entries_without_name(self):
-        index = {"projects": {
-            "/path/a": {"name": "valid"},
-            "/path/b": {},
-            "/path/c": {"name": ""},
-        }}
-        with mock.patch("load_memory.load_json_file", return_value=index):
-            result = _get_project_names_str()
-        assert "`valid`" in result
-        assert result.count("`") == 2  # only `valid`
-
-
-# =============================================================================
-# _build_synthesis_instructions Tests
-# =============================================================================
-
-
-class TestBuildSynthesisInstructions:
-    def test_contains_type_format(self):
-        instructions = _build_synthesis_instructions("`alpha`, `beta`")
-        # New prompt uses [type] not [scope/type]
-        assert "[type]" in instructions
-        assert "[GLOBAL]" in instructions
-
-    def test_contains_routing_rules(self):
-        instructions = _build_synthesis_instructions("(none registered)")
-        assert "[LTM]" in instructions
-        assert "Maximum 5" in instructions
-        # Dedup is now handled by deterministic code, not LLM
-        assert "DEDUP REQUIREMENT" not in instructions
-
-    def test_no_dedup_in_instructions(self):
-        """Dedup is handled by deterministic code, not the LLM."""
-        instructions = _build_synthesis_instructions("`proj`")
-        assert "DEDUP REQUIREMENT" not in instructions
-        assert "system handles" in instructions
-
-    def test_contains_project_block_template(self):
-        instructions = _build_synthesis_instructions("`proj`")
-        assert "===PROJECT:" in instructions
-        assert "===END===" in instructions
-        assert "[LTM]" in instructions
-
-    def test_scope_injection_documented(self):
-        """Prompt tells LLM that scope is injected automatically."""
-        instructions = _build_synthesis_instructions("`proj`")
-        assert "scope injection automatically" in instructions
-
-    def test_exclusion_criteria_has_categories(self):
-        """Routing exclusions are categorized, not a single vague line."""
-        instructions = _build_synthesis_instructions("`proj`")
-        assert "Common dev knowledge" in instructions
-        assert "Generic software patterns" in instructions
-        assert "One-time fixes" in instructions
-        assert "Version-specific notes" in instructions
 
 
 # =============================================================================
@@ -381,21 +184,17 @@ class TestBuildPreextractedPrompt:
         assert "===ROUTE:" not in prompt  # old format removed
         assert "Step 1: Read" not in prompt  # no Read instructions
 
-    def test_embeds_ltm_content(self, tmp_path):
-        """Global and project LTM content should be embedded inline."""
+    def test_no_vector_memories_shows_placeholder(self, tmp_path):
+        """Without vector memories, prompt shows '(no existing memories)' placeholder."""
         prompt = _build_preextracted_prompt(
             pending_dates=["2026-02-22"],
             extracted_files={"2026-02-22": "/tmp/dummy.txt"},
             synthesis_instructions="INSTRUCTIONS",
             embedded_files={
                 "transcripts": {"2026-02-22": "transcript"},
-                "global_ltm": "## Key Learnings\n- existing",
-                "project_ltms": {"proj": "## Key Learnings\n- proj existing"},
             },
         )
-        assert "## Key Learnings" in prompt
-        assert "- existing" in prompt
-        assert "- proj existing" in prompt
+        assert "(no existing memories)" in prompt
 
     def test_structured_output_instructions(self, tmp_path):
         """Prompt should include delivery instructions and prohibitions."""
@@ -485,8 +284,8 @@ class TestBuildPreextractedPrompt:
 class TestBuildSynthesisPromptIntegration:
     """Test the orchestrator dispatches correctly to _build_preextracted_prompt."""
 
-    def test_includes_synthesis_instructions(self, tmp_path):
-        """Prompt includes shared synthesis instructions from _build_synthesis_instructions."""
+    def test_uses_v3_instructions(self, tmp_path):
+        """Prompt includes v3 MEMORY_OPS instructions (not v2 PROJECT blocks)."""
         transcript = tmp_path / "extract.txt"
         transcript.write_text("content\n")
 
@@ -494,9 +293,9 @@ class TestBuildSynthesisPromptIntegration:
             ["2026-02-01"],
             extracted_files={"2026-02-01": str(transcript)},
         )
-        # Should contain instructions generated by _build_synthesis_instructions
-        assert "[type]" in prompt
-        assert "[LTM]" in prompt
+        # v3 instructions use MEMORY_OPS format
+        assert "MEMORY_OPS" in prompt
+        assert "salience" in prompt.lower()
 
     def test_passes_embedded_files(self, tmp_path):
         """embedded_files are forwarded to _build_preextracted_prompt."""
@@ -508,14 +307,12 @@ class TestBuildSynthesisPromptIntegration:
             extracted_files={"2026-02-01": str(transcript)},
             embedded_files={
                 "transcripts": {"2026-02-01": "EMBEDDED TRANSCRIPT DATA"},
-                "global_ltm": "GLOBAL LTM CONTENT",
             },
         )
         assert "EMBEDDED TRANSCRIPT DATA" in prompt
-        assert "GLOBAL LTM CONTENT" in prompt
 
     def test_structured_output_format(self, tmp_path):
-        """Prompt includes structured output delimiters."""
+        """Prompt includes structured output delimiters (v3 uses MEMORY_OPS + END)."""
         transcript = tmp_path / "extract.txt"
         transcript.write_text("content\n")
 
@@ -523,7 +320,7 @@ class TestBuildSynthesisPromptIntegration:
             ["2026-02-01"],
             extracted_files={"2026-02-01": str(transcript)},
         )
-        assert "===PROJECT:" in prompt
+        assert "===MEMORY_OPS===" in prompt
         assert "===END===" in prompt
         assert "===DAILY:" not in prompt
         assert "===ROUTE:" not in prompt
@@ -535,118 +332,36 @@ class TestBuildSynthesisPromptIntegration:
 
 
 class TestBuildEmbeddedFiles:
-    """Tests for _build_embedded_files helper."""
+    """Tests for _build_embedded_files helper (transcript-only)."""
 
     def test_reads_transcript_files(self, tmp_path):
         """Transcript extract files are read into embedded dict."""
         extract = tmp_path / "extract-2026-02-01.txt"
         extract.write_text("transcript content")
 
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({"2026-02-01": str(extract)})
+        result = _build_embedded_files({"2026-02-01": str(extract)})
 
         assert result["transcripts"]["2026-02-01"] == "transcript content"
 
-    def test_reads_global_ltm(self, tmp_path):
-        """Global LTM file content is read into embedded dict."""
-        ltm = tmp_path / "global-long-term-memory.md"
-        ltm.write_text("## Key Learnings\n- something")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
-            mock_gm.return_value = ltm
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({})
-
-        assert "## Key Learnings" in result["global_ltm"]
-
-    def test_reads_project_ltms(self, tmp_path):
-        """Project LTM files are read when project found in extracts."""
-        proj_dir = tmp_path / "project-memory"
-        proj_dir.mkdir()
-        (proj_dir / "myproject-long-term-memory.md").write_text("project content")
-        extract = tmp_path / "extract.txt"
-        extract.write_text("transcript data")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value={"myproject"}):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = proj_dir
-            result = _build_embedded_files({"2026-02-01": str(extract)})
-
-        assert result["project_ltms"]["myproject"] == "project content"
-
     def test_handles_missing_transcript_file(self, tmp_path):
         """Missing transcript files are silently skipped."""
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({"2026-02-01": "/nonexistent/file.txt"})
+        result = _build_embedded_files({"2026-02-01": "/nonexistent/file.txt"})
 
         assert "2026-02-01" not in result["transcripts"]
 
-    def test_handles_missing_global_ltm(self, tmp_path):
-        """Missing global LTM returns empty string."""
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({})
-
-        assert result["global_ltm"] == ""
-
-    def test_handles_missing_project_dir(self, tmp_path):
-        """Missing project memory dir returns empty project_ltms."""
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd:
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({})
-
-        assert result["project_ltms"] == {}
-
-    def test_multiple_projects(self, tmp_path):
-        """Multiple project LTM files are read when found in extracts."""
-        proj_dir = tmp_path / "project-memory"
-        proj_dir.mkdir()
-        (proj_dir / "alpha-long-term-memory.md").write_text("alpha content")
-        (proj_dir / "beta-long-term-memory.md").write_text("beta content")
+    def test_returns_only_transcripts_key(self, tmp_path):
+        """Result dict has only 'transcripts' key (no global_ltm, project_ltms)."""
         extract = tmp_path / "extract.txt"
-        extract.write_text("transcript data")
+        extract.write_text("content")
 
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value={"alpha", "beta"}):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = proj_dir
-            result = _build_embedded_files({"2026-02-01": str(extract)})
+        result = _build_embedded_files({"2026-02-01": str(extract)})
 
-        assert result["project_ltms"]["alpha"] == "alpha content"
-        assert result["project_ltms"]["beta"] == "beta content"
+        assert set(result.keys()) == {"transcripts"}
 
-    def test_filters_unmentioned_projects(self, tmp_path):
-        """Project LTMs not in extracts are excluded."""
-        proj_dir = tmp_path / "project-memory"
-        proj_dir.mkdir()
-        (proj_dir / "mentioned-long-term-memory.md").write_text("included")
-        (proj_dir / "unrelated-long-term-memory.md").write_text("excluded")
-        extract = tmp_path / "extract.txt"
-        extract.write_text("transcript data")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value={"mentioned"}):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = proj_dir
-            result = _build_embedded_files({"2026-02-01": str(extract)})
-
-        assert "mentioned" in result["project_ltms"]
-        assert "unrelated" not in result["project_ltms"]
+    def test_empty_input(self):
+        """Empty input returns empty transcripts dict."""
+        result = _build_embedded_files({})
+        assert result == {"transcripts": {}}
 
 
 # =============================================================================
@@ -837,105 +552,6 @@ class TestPreExtractTranscriptsIncremental:
         assert mock_extract.call_args[1].get("min_session_messages") == threshold
 
 
-# =============================================================================
-# _build_embedded_files with dailies Tests
-# =============================================================================
-
-
-class TestBuildEmbeddedFilesWithDailies:
-    """Test that _build_embedded_files includes existing daily files as merge context."""
-
-    def test_includes_existing_daily_when_available(self, tmp_path):
-        """Existing daily file for a date is read into embedded dict."""
-        daily_dir = tmp_path / "daily"
-        daily_dir.mkdir()
-        (daily_dir / "2026-02-22.md").write_text("## Actions\n- [global/implement] Old stuff")
-
-        extract = tmp_path / "extract.txt"
-        extract.write_text("transcript data")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            mock_dd.return_value = daily_dir
-            result = _build_embedded_files(
-                {"2026-02-22": str(extract)},
-                include_dailies=True,
-            )
-
-        assert "existing_dailies" in result
-        assert "2026-02-22" in result["existing_dailies"]
-        assert "Old stuff" in result["existing_dailies"]["2026-02-22"]
-
-    def test_no_daily_returns_empty(self, tmp_path):
-        """When no daily file exists for a date, it's not in embedded dict."""
-        daily_dir = tmp_path / "daily"
-        daily_dir.mkdir()
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory.get_daily_dir") as mock_dd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            mock_dd.return_value = daily_dir
-            result = _build_embedded_files({}, include_dailies=True)
-
-        assert result.get("existing_dailies", {}) == {}
-
-    def test_include_dailies_false_skips(self, tmp_path):
-        """include_dailies=False (default) does not read daily files."""
-        daily_dir = tmp_path / "daily"
-        daily_dir.mkdir()
-        (daily_dir / "2026-02-22.md").write_text("## Actions\n- stuff")
-
-        with mock.patch("load_memory.get_global_memory_file") as mock_gm, \
-             mock.patch("load_memory.get_project_memory_dir") as mock_pd, \
-             mock.patch("load_memory._find_projects_in_extracts", return_value=set()):
-            mock_gm.return_value = tmp_path / "nonexistent-ltm.md"
-            mock_pd.return_value = tmp_path / "nonexistent-proj"
-            result = _build_embedded_files({"2026-02-22": str(tmp_path / "x.txt")})
-
-        assert "existing_dailies" not in result or result["existing_dailies"] == {}
-
-
-# =============================================================================
-# Prompt merge context Tests
-# =============================================================================
-
-
-class TestPromptMergeContext:
-    """Test that prompts include merge instructions when existing dailies present."""
-
-    def test_prompt_includes_existing_daily(self):
-        """When existing_dailies in embedded, prompt includes merge context section."""
-        prompt = _build_preextracted_prompt(
-            pending_dates=["2026-02-22"],
-            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
-            synthesis_instructions="INSTRUCTIONS",
-            embedded_files={
-                "transcripts": {"2026-02-22": "new transcript data"},
-                "existing_dailies": {"2026-02-22": "## Actions\n- [global/implement] Old stuff"},
-            },
-        )
-        assert "Existing daily summary" in prompt
-        assert "Old stuff" in prompt
-        assert "merge" in prompt.lower()
-
-    def test_prompt_no_merge_when_no_dailies(self):
-        """Without existing_dailies, no merge section in prompt."""
-        prompt = _build_preextracted_prompt(
-            pending_dates=["2026-02-22"],
-            extracted_files={"2026-02-22": "/tmp/dummy.txt"},
-            synthesis_instructions="INSTRUCTIONS",
-            embedded_files={
-                "transcripts": {"2026-02-22": "transcript data"},
-            },
-        )
-        assert "Existing daily summary" not in prompt
 
 
 # =============================================================================
@@ -981,7 +597,7 @@ class TestSynthesisPromptFileOutput:
         )
         monkeypatch.setattr(
             "load_memory._build_embedded_files",
-            lambda *a, **kw: {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}},
+            lambda *a, **kw: {"transcripts": {"2026-02-23": "test"}},
         )
         monkeypatch.setattr(
             "load_memory._build_synthesis_prompt",
@@ -1050,7 +666,7 @@ class TestSynthesisPromptFileOutput:
         captured_embedded = {}
 
         def mock_build_embedded(*a, **kw):
-            return {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}}
+            return {"transcripts": {"2026-02-23": "test"}}
 
         def mock_build_prompt(*a, **kw):
             if len(a) >= 3:
@@ -1100,100 +716,6 @@ class TestWorktreeProjectDetection:
         assert imported is not None
 
 
-# =============================================================================
-# Simplified Synthesis Prompt Tests (Task 7: deterministic synthesis)
-# =============================================================================
-
-
-class TestSynthesisPromptSimplified:
-    def test_no_scope_tagging_instructions(self):
-        """Prompt should not instruct LLM to add scope tags."""
-        from load_memory import _build_synthesis_instructions
-        result = _build_synthesis_instructions("cartwheel, investing")
-        assert "scope is `global` or one of" not in result
-        assert "[scope/type]" not in result or "[type]" in result
-
-    def test_no_merge_instructions(self):
-        """Prompt should not instruct LLM to merge."""
-        from load_memory import _build_synthesis_instructions
-        result = _build_synthesis_instructions("cartwheel, investing")
-        assert "merge new insights" not in result.lower()
-
-    def test_no_dedup_instructions(self):
-        """Prompt should not instruct LLM to check for duplicates."""
-        from load_memory import _build_synthesis_instructions
-        result = _build_synthesis_instructions("cartwheel, investing")
-        assert "DEDUP REQUIREMENT" not in result
-
-    def test_global_marker_documented(self):
-        """Prompt should document [GLOBAL] marker usage."""
-        from load_memory import _build_synthesis_instructions
-        result = _build_synthesis_instructions("cartwheel, investing")
-        assert "[GLOBAL]" in result
-
-    def test_existing_dailies_marked_readonly(self):
-        """Existing daily content labeled as read-only context."""
-        from load_memory import _build_preextracted_prompt
-        result = _build_preextracted_prompt(
-            pending_dates=["2026-02-23"],
-            extracted_files={"2026-02-23": "/tmp/test.txt"},
-            synthesis_instructions="test instructions",
-            embedded_files={
-                "transcripts": {"2026-02-23": "transcript content"},
-                "existing_dailies": {"2026-02-23": "# 2026-02-23\n## Actions\n- [proj/impl] Old"},
-            },
-        )
-        assert "read-only" in result.lower() or "READ-ONLY" in result
-        assert "do NOT repeat" in result or "do not repeat" in result.lower()
-
-
-# =============================================================================
-# Synthesis Prompt PROJECT Format Tests
-# =============================================================================
-
-
-class TestSynthesisPromptProjectFormat:
-    """Verify the prompt uses ===PROJECT:X=== format instead of ===DAILY: + ===ROUTE:."""
-
-    def test_instructions_mention_project_blocks(self):
-        instructions = _build_synthesis_instructions("`swyfft`, `investing`")
-        assert "===PROJECT:" in instructions
-        assert "[LTM]" in instructions
-        assert "===DAILY:" not in instructions
-        assert "===ROUTE:" not in instructions
-
-    def test_example_shows_project_format(self):
-        instructions = _build_synthesis_instructions("`swyfft`")
-        assert "===PROJECT:" in instructions
-        assert "===END===" in instructions
-
-    def test_project_names_in_instructions(self):
-        instructions = _build_synthesis_instructions("`swyfft`, `investing`")
-        assert "`swyfft`, `investing`" in instructions
-
-    def test_preextracted_prompt_uses_project_format(self, tmp_path):
-        instructions = "test instructions"
-        prompt = _build_preextracted_prompt(
-            ["2026-02-24"],
-            {"2026-02-24": str(tmp_path / "extract.txt")},
-            instructions,
-            {"transcripts": {"2026-02-24": "session content"},
-             "global_ltm": "", "project_ltms": {}},
-        )
-        assert "===PROJECT:" in prompt
-        assert "===END===" in prompt
-
-    def test_preextracted_prompt_no_daily_format(self, tmp_path):
-        instructions = "test instructions"
-        prompt = _build_preextracted_prompt(
-            ["2026-02-24"],
-            {"2026-02-24": str(tmp_path / "extract.txt")},
-            instructions,
-            {"transcripts": {"2026-02-24": "session content"},
-             "global_ltm": "", "project_ltms": {}},
-        )
-        # Should not reference old format in examples or reminders
-        assert "===ROUTE:" not in prompt
 
 
 # =============================================================================
@@ -1215,105 +737,13 @@ class TestSkipMemory:
         from load_memory import main
 
         monkeypatch.delenv("CLAUDE_SKIP_MEMORY", raising=False)
-        # main() should proceed past the env var check and hit load_settings.
-        # We mock load_settings to raise so we can confirm it got past the check.
-        with mock.patch("load_memory.load_settings", side_effect=RuntimeError("reached")):
+        # main() should proceed past the env var check and hit check_synthesis_errors.
+        # We mock it to raise so we can confirm it got past the check.
+        with mock.patch("load_memory.check_synthesis_errors", side_effect=RuntimeError("reached")):
             with pytest.raises(RuntimeError, match="reached"):
                 main()
 
 
-# =============================================================================
-# Synthesis Deferred Setting Tests
-# =============================================================================
-
-
-class TestSynthesisDeferredSetting:
-    def test_default_deferred_matches_default_settings(self, tmp_path):
-        """synthesis.deferred defaults to DEFAULT_SETTINGS value."""
-        from memory_utils import DEFAULT_SETTINGS, load_settings
-
-        settings_file = tmp_path / "settings.json"
-        with mock.patch("memory_utils.get_settings_file", return_value=settings_file):
-            settings = load_settings()
-        assert settings["synthesis"]["deferred"] is DEFAULT_SETTINGS["synthesis"]["deferred"]
-
-    def _make_settings(self, deferred=False):
-        """Build a settings dict with synthesis.deferred set."""
-        import copy
-
-        from memory_utils import DEFAULT_SETTINGS, _calculate_token_limits
-
-        s = copy.deepcopy(DEFAULT_SETTINGS)
-        s["synthesis"]["deferred"] = deferred
-        _calculate_token_limits(s)
-        return s
-
-    def _run_main_with_mocks(self, monkeypatch, capsys, tmp_path, settings):
-        """Run main() with enough mocks to reach the synthesis gate, then return captured output."""
-        import io
-
-        from load_memory import main
-
-        # stdin is not a tty in tests; provide valid JSON so session_id parsing works
-        monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id": "test-session"}'))
-
-        # Settings
-        monkeypatch.setattr("load_memory.load_settings", lambda: settings)
-
-        # get_recent_days returns pending dates (triggers synthesis path)
-        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
-
-        # should_synthesize returns True (time-based check passes)
-        monkeypatch.setattr("load_memory.should_synthesize", lambda s: True)
-
-        # Mock the synthesis file write (eager timestamp)
-        synth_file = tmp_path / "last-synthesis"
-        monkeypatch.setattr("load_memory.get_last_synthesis_file", lambda: synth_file)
-
-        # Mock pre-extraction to return data that reaches the AUTO-SYNTHESIZE banner
-        monkeypatch.setattr(
-            "load_memory.pre_extract_transcripts_incremental",
-            lambda dates, **kw: (
-                {"2026-02-23": "/tmp/extract.txt"},
-                {"sid1": {"offset": 100, "lines": 10}},
-                {"2026-02-23": [{"session_id": "sid1", "project_path": "/test", "messages": ["hi"]}]},
-            ),
-        )
-        monkeypatch.setattr(
-            "load_memory._build_embedded_files",
-            lambda *a, **kw: {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}},
-        )
-        monkeypatch.setattr(
-            "load_memory._build_synthesis_prompt",
-            lambda *a, **kw: "FAKE_PROMPT",
-        )
-        monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
-
-        # Mock memory loading functions (not under test here)
-        monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
-        monkeypatch.setattr("load_memory.load_json_file", lambda p, d: {})
-        monkeypatch.setattr("load_memory.find_current_project", lambda *a: None)
-        monkeypatch.setattr("load_memory._load_from_db", lambda *a: "")
-
-        main()
-        return capsys.readouterr().out
-
-    def test_deferred_true_skips_auto_synthesis(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=True, main() should not print AUTO-SYNTHESIZE banner."""
-        settings = self._make_settings(deferred=True)
-        output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" not in output
-
-    def test_deferred_false_forced_to_deferred_on_v3(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=False on v3 schema, forced to deferred mode (no in-session synthesis)."""
-        settings = self._make_settings(deferred=False)
-        # Mock storage.get_db and _get_schema_version to simulate v3 schema
-        import storage as _storage_mod
-        monkeypatch.setattr(_storage_mod, "_get_schema_version", lambda c: 3)
-        monkeypatch.setattr(_storage_mod, "get_db", lambda: type("FakeConn", (), {"execute": lambda *a: None})())
-        monkeypatch.setattr(_storage_mod, "close_db", lambda c: None)
-        output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" not in output
 
 
 class TestCheckSynthesisErrors:
@@ -1377,7 +807,7 @@ class TestSynthesisPromptCrud:
 
     def test_prompt_contains_memory_ops_format_spec(self):
         """Prompt includes ===MEMORY_OPS=== output format with examples."""
-        instructions = _build_synthesis_instructions("test-project")
+        instructions = _build_synthesis_instructions_v3()
         assert "===MEMORY_OPS===" in instructions
         assert "ADD" in instructions
         assert "UPDATE" in instructions
@@ -1385,9 +815,8 @@ class TestSynthesisPromptCrud:
         assert "NOOP" in instructions
 
     def test_prompt_includes_crud_action_descriptions(self):
-        """Prompt describes what each CRUD action means and chunk ID referencing."""
-        instructions = _build_synthesis_instructions("test-project")
-        assert "chunk_id" in instructions or "chunk" in instructions.lower()
+        """Prompt describes what each CRUD action means and ID referencing."""
+        instructions = _build_synthesis_instructions_v3()
         assert "id" in instructions.lower()
 
     def test_prompt_includes_existing_memories_with_ids(self, tmp_path):
@@ -1409,8 +838,8 @@ class TestSynthesisPromptCrud:
         assert "def456" in prompt
         assert "Existing Memories" in prompt
 
-    def test_prompt_falls_back_to_ltm_without_vector(self, tmp_path):
-        """Without vector memories, prompt uses full LTM embedding."""
+    def test_prompt_shows_placeholder_without_vector(self, tmp_path):
+        """Without vector memories, prompt shows placeholder text."""
         extract_file = tmp_path / "extract.txt"
         extract_file.write_text("test transcript")
         prompt = _build_preextracted_prompt(
@@ -1419,10 +848,9 @@ class TestSynthesisPromptCrud:
             synthesis_instructions="test instructions",
             embedded_files={
                 "transcripts": {"2026-03-21": "test transcript"},
-                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
             },
         )
-        assert "Key Actions" in prompt
+        assert "(no existing memories)" in prompt
 
 
 # ============================================================================
@@ -1452,8 +880,8 @@ class TestPreRetrievalPrompt:
         assert "abc123" in prompt
         assert "def456" in prompt
 
-    def test_fallback_to_full_ltm_when_vec_unavailable(self, tmp_path):
-        """When vector_memories is None/empty, falls back to full LTM embedding."""
+    def test_placeholder_when_vec_unavailable(self, tmp_path):
+        """When vector_memories is None, shows '(no existing memories)' placeholder."""
         extract_file = tmp_path / "extract.txt"
         extract_file.write_text("test transcript")
         prompt = _build_preextracted_prompt(
@@ -1462,10 +890,9 @@ class TestPreRetrievalPrompt:
             synthesis_instructions="test instructions",
             embedded_files={
                 "transcripts": {"2026-03-21": "test transcript"},
-                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] test",
             },
         )
-        assert "Key Actions" in prompt
+        assert "(no existing memories)" in prompt
 
     def test_vector_results_formatted_with_chunk_ids(self, tmp_path):
         """Each retrieved memory includes its chunk ID for CRUD reference."""
@@ -1483,8 +910,8 @@ class TestPreRetrievalPrompt:
         )
         assert "[chunk_abc123] content text here" in prompt
 
-    def test_empty_vector_memories_falls_back_to_ltm(self, tmp_path):
-        """Empty vector_memories list uses full LTM fallback."""
+    def test_empty_vector_memories_shows_placeholder(self, tmp_path):
+        """Empty vector_memories list shows '(no existing memories)' placeholder."""
         extract_file = tmp_path / "extract.txt"
         extract_file.write_text("test transcript")
         prompt = _build_preextracted_prompt(
@@ -1493,11 +920,10 @@ class TestPreRetrievalPrompt:
             synthesis_instructions="instructions",
             embedded_files={
                 "transcripts": {"2026-03-21": "test transcript"},
-                "global_ltm": "## Key Actions\n- (2026-01-01) [implement] some fact",
             },
             vector_memories=[],
         )
-        assert "Key Actions" in prompt
+        assert "(no existing memories)" in prompt
 
 
 # =============================================================================
