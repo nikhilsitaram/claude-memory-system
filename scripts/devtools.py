@@ -6,7 +6,7 @@ Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/
 
 Usage:
     python scripts/devtools.py verify-install [--mode all|install-only|verify-only|smoke-test]
-    python scripts/devtools.py memory-status [--mode all|pending|tokens|synthesis|decay|daily]
+    python scripts/devtools.py memory-status [--mode all|recent|synthesis|decay|daily]
     python scripts/devtools.py extract-debug [DAY] [--mode all|sessions|extract|state|content]
 
 Requirements: Python 3.9+
@@ -61,7 +61,6 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
         scripts = [
             "memory_utils.py", "load_memory.py", "indexing.py",
             "transcript_ops.py", "project_manager.py", "decay.py", "synthesis.py",
-            "token_usage.py",
         ]
         for name in scripts:
             src = REPO_DIR / "scripts" / name
@@ -129,12 +128,6 @@ def cmd_memory_status(args: argparse.Namespace) -> int:
             print("  None")
         print()
 
-    if do_all or args.mode == "tokens":
-        print("Token usage:")
-        rc, out, _ = _run([sys.executable, str(SCRIPTS_DIR / "token_usage.py")])
-        for line in (out if rc == 0 else "Error").strip().splitlines():
-            print(f"  {line}")
-        print()
 
     if do_all or args.mode == "synthesis":
         print("Synthesis status:")
@@ -436,7 +429,7 @@ def main() -> int:
     vi.set_defaults(func=cmd_verify_install)
 
     ms = sub.add_parser("memory-status", help="Show memory system status")
-    ms.add_argument("--mode", choices=["all", "recent", "tokens", "synthesis", "decay", "daily"], default="all")
+    ms.add_argument("--mode", choices=["all", "recent", "synthesis", "decay", "daily"], default="all")
     ms.set_defaults(func=cmd_memory_status)
 
     ed = sub.add_parser("extract-debug", help="Debug transcript extraction")

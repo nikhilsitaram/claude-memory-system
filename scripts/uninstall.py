@@ -216,7 +216,6 @@ def purge_memory_data() -> None:
         claude_dir / "scripts" / "indexing.py",
         claude_dir / "scripts" / "transcript_ops.py",
         claude_dir / "scripts" / "decay.py",
-        claude_dir / "scripts" / "token_usage.py",
         claude_dir / "scripts" / "project_manager.py",
         claude_dir / "scripts" / "synthesis_cron.py",
         claude_dir / "scripts" / "synthesis.py",
@@ -277,7 +276,7 @@ def print_cleanup_instructions() -> None:
     print("  rm -rf ~/.claude/memory")
     print("  rm -rf ~/.claude/skills/{remember,synthesize,recall,settings,projects,consolidate}")
     print("  rm -rf ~/.claude/hooks  # if empty after removing memory hook")
-    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,token_usage,project_manager,synthesis_cron,synthesis,devtools}.py")
+    print("  rm ~/.claude/scripts/{memory_utils,load_memory,indexing,transcript_ops,decay,project_manager,synthesis_cron,synthesis,devtools}.py")
     if sys.platform == "darwin":
         print(f"  launchctl bootout gui/$(id -u)/{LAUNCHD_LABEL}")
         print(f"  rm -f ~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")

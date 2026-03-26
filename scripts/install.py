@@ -152,7 +152,6 @@ def link_scripts(script_dir: Path) -> None:
         "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
         "storage.py",  # SQLite storage layer (DB lifecycle, CRUD, migration)
         "health.py",  # Memory health diagnostics
-        "token_usage.py",  # Token usage calculation for /settings
         "simhash.py",  # SimHash fingerprinting for near-duplicate detection
         "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
@@ -230,18 +229,6 @@ def copy_templates(script_dir: Path) -> None:
     memory_dir = get_memory_dir()
     templates_dir = memory_dir / "templates"
 
-    # Always copy templates to templates/ dir (for subagent reference)
-    templates_to_copy = [
-        "global-long-term-memory.md",
-        "project-long-term-memory.md",
-        "daily-template.md",
-    ]
-    for template_name in templates_to_copy:
-        src = script_dir / "templates" / template_name
-        if src.exists():
-            shutil.copy2(src, templates_dir / template_name)
-    print("Copied templates to ~/.claude/memory/templates/")
-
     # Copy web frontend templates
     web_templates_src = script_dir / "templates" / "web"
     web_templates_dest = templates_dir / "web"
@@ -250,14 +237,6 @@ def copy_templates(script_dir: Path) -> None:
         for f in web_templates_src.iterdir():
             shutil.copy2(f, web_templates_dest / f.name)
         print("Copied web frontend templates")
-
-    # Copy global-long-term-memory.md to memory root if it doesn't exist
-    long_term_file = memory_dir / "global-long-term-memory.md"
-    if not long_term_file.exists():
-        src = script_dir / "templates" / "global-long-term-memory.md"
-        if src.exists():
-            shutil.copy2(src, long_term_file)
-            print("Created default global-long-term-memory.md")
 
     # Copy settings.json template if it doesn't exist
     settings_file = memory_dir / "settings.json"

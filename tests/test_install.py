@@ -281,46 +281,41 @@ class TestRemoveObsoleteHooks:
 
 
 class TestCopyTemplates:
-    def test_copies_templates_and_defaults(self, tmp_path):
+    def test_copies_settings_and_web_templates(self, tmp_path):
         # Set up repo structure
         script_dir = tmp_path / "repo"
         templates_src = script_dir / "templates"
         templates_src.mkdir(parents=True)
-        (templates_src / "global-long-term-memory.md").write_text("# LTM")
-        (templates_src / "project-long-term-memory.md").write_text("# Project")
-        (templates_src / "daily-template.md").write_text("# Daily")
         (templates_src / "settings.json").write_text('{"version": 3}')
+        web_src = templates_src / "web"
+        web_src.mkdir()
+        (web_src / "index.html").write_text("<html></html>")
 
         with mock.patch("memory_utils.Path.home", return_value=tmp_path):
             install.create_directories()
             install.copy_templates(script_dir)
 
         memory_dir = tmp_path / ".claude" / "memory"
-        # Templates copied
-        assert (memory_dir / "templates" / "global-long-term-memory.md").exists()
-        assert (memory_dir / "templates" / "project-long-term-memory.md").exists()
-        # Defaults created
-        assert (memory_dir / "global-long-term-memory.md").read_text() == "# LTM"
+        # Settings created
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 3
+        # Web templates copied
+        assert (memory_dir / "templates" / "web" / "index.html").exists()
 
-    def test_does_not_overwrite_existing_files(self, tmp_path):
+    def test_does_not_overwrite_existing_settings(self, tmp_path):
         script_dir = tmp_path / "repo"
         templates_src = script_dir / "templates"
         templates_src.mkdir(parents=True)
-        (templates_src / "global-long-term-memory.md").write_text("# New")
         (templates_src / "settings.json").write_text('{"version": 99}')
 
         with mock.patch("memory_utils.Path.home", return_value=tmp_path):
             install.create_directories()
             memory_dir = tmp_path / ".claude" / "memory"
-            # Pre-create files with existing content
-            (memory_dir / "global-long-term-memory.md").write_text("# Existing")
+            # Pre-create settings with existing content
             (memory_dir / "settings.json").write_text('{"version": 1}')
 
             install.copy_templates(script_dir)
 
-        # Existing files preserved
-        assert (memory_dir / "global-long-term-memory.md").read_text() == "# Existing"
+        # Existing settings preserved
         assert json.loads((memory_dir / "settings.json").read_text())["version"] == 1
 
 
