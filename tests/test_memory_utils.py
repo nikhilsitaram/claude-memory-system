@@ -958,6 +958,21 @@ class TestWorktreePatternFallback:
         from memory_utils import _worktree_pattern_fallback
         assert _worktree_pattern_fallback("/home/user/projects/myrepo/.worktrees/bugfix") == "/home/user/projects/myrepo"
 
+    def test_claude_worktree_path_resolves_to_parent(self):
+        """Path with /.claude/worktrees/ returns everything before the marker."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/repo/.claude/worktrees/feature") == "/repo"
+
+    def test_claude_worktree_nested_path(self):
+        """Path with subdirectory after .claude/worktrees/ name."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/repo/.claude/worktrees/feature/src/main") == "/repo"
+
+    def test_claude_worktree_deep_path(self):
+        """Claude worktree marker deep in path resolves correctly."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/home/user/projects/myrepo/.claude/worktrees/bugfix") == "/home/user/projects/myrepo"
+
 
 class TestResolveWorktreeToMainRepo:
     """Tests for resolve_worktree_to_main_repo()."""
@@ -1310,6 +1325,59 @@ class TestResolveProjectPathToName:
              mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
             result = resolve_project_path_to_name(None, project_hash="-home-user-myproject-subfolder")
         assert result is None
+
+    def test_claude_worktree_prefix_fallback(self, tmp_path):
+        """Hash with --claude-worktrees- resolves to parent project."""
+        index = {"projects": {
+            "/home/user/repo": {
+                "name": "repo",
+                "encodedPaths": ["-home-user-repo"],
+            }
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name(
+                None,
+                project_hash="-home-user-repo--claude-worktrees-feature-branch",
+            )
+        assert result == "repo"
+
+    def test_worktree_project_path_resolves_to_parent(self, tmp_path):
+        """project_path with /.worktrees/ resolves to parent project."""
+        index = {"projects": {
+            "/home/user/repo": {"name": "repo", "encodedPaths": ["-home-user-repo"]},
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name("/home/user/repo/.worktrees/feature")
+        assert result == "repo"
+
+    def test_claude_worktree_project_path_resolves_to_parent(self, tmp_path):
+        """project_path with /.claude/worktrees/ resolves to parent project."""
+        index = {"projects": {
+            "/home/user/repo": {"name": "repo", "encodedPaths": ["-home-user-repo"]},
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name(
+                "/home/user/repo/.claude/worktrees/storage-foundation"
+            )
+        assert result == "repo"
+
+    def test_claude_worktree_path_case_insensitive(self, tmp_path):
+        """Worktree path with different case matches lowercase index key."""
+        index = {"projects": {
+            "/users/nsitaram/personal/repo": {
+                "name": "repo",
+                "encodedPaths": ["-users-nsitaram-personal-repo"],
+            },
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            result = resolve_project_path_to_name(
+                "/Users/nsitaram/personal/repo/.claude/worktrees/feature"
+            )
+        assert result == "repo"
 
 
 # =============================================================================

@@ -915,15 +915,16 @@ def prune_stale_state_entries(max_age_days: int = 7) -> int:
 
 
 def _worktree_pattern_fallback(path: str) -> str:
-    """Resolve a worktree path using /.worktrees/ directory convention.
+    """Resolve a worktree path using directory convention.
 
     Fallback for when git is unavailable (directory deleted, git not installed).
-    If path contains /.worktrees/, returns everything before it.
+    Checks for both /.claude/worktrees/ (Claude Code convention) and
+    /.worktrees/ (legacy convention), returning everything before the marker.
     """
-    marker = "/.worktrees/"
-    idx = path.find(marker)
-    if idx != -1:
-        return path[:idx]
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        idx = path.find(marker)
+        if idx != -1:
+            return path[:idx]
     return path
 
 
@@ -1080,26 +1081,37 @@ def resolve_project_path_to_name(
             _projects_index_cache = load_json_file(get_projects_index_file(), {})
         projects = _projects_index_cache.get("projects", {})
 
-        # Primary: direct path lookup
+        # Primary: direct path lookup (resolve worktree paths first)
         if project_path:
-            data = projects.get(project_path)
-            if data and data.get("name"):
-                return data["name"]
+            resolved = _worktree_pattern_fallback(project_path)
+            for try_path in dict.fromkeys([resolved, project_path]):
+                data = projects.get(try_path) or projects.get(try_path.lower())
+                if data and data.get("name"):
+                    return data["name"]
 
         # Fallback 1: match encoded folder name against encodedPaths
+        # For worktree hashes, try prefix match first to resolve to parent
+        # project before falling back to exact match on the worktree's own entry.
         if project_hash:
+            is_worktree_hash = ("--claude-worktrees-" in project_hash
+                                or "--worktrees-" in project_hash)
+
+            if is_worktree_hash:
+                # Prefix match: resolve worktree hash to parent project
+                for separator in ("--claude-worktrees-", "--worktrees-"):
+                    base = project_hash.rsplit(separator, 1)[0]
+                    if base != project_hash:
+                        for _path, data in projects.items():
+                            for ep in data.get("encodedPaths", []):
+                                ep_base = ep.rsplit(separator, 1)[0]
+                                if base == ep_base:
+                                    return data.get("name")
+                        break  # matched separator but no parent found
+
+            # Exact match against encodedPaths
             for _path, data in projects.items():
                 if project_hash in data.get("encodedPaths", []):
                     return data.get("name")
-
-            # Fallback 2: prefix match for unindexed worktrees
-            base = project_hash.rsplit("--worktrees-", 1)[0]
-            if base != project_hash:  # only if hash contains --worktrees-
-                for _path, data in projects.items():
-                    for ep in data.get("encodedPaths", []):
-                        ep_base = ep.rsplit("--worktrees-", 1)[0]
-                        if base == ep_base:
-                            return data.get("name")
     except Exception:
         pass
     return None
