@@ -68,7 +68,9 @@ Remove all v1/v2 logic so the codebase contains only v3 SQL-first architecture c
 - Markdown decay: `decay_file()`, `append_to_archive()`, `purge_old_archives()`
 - Deprecated orchestrator: `run()`
 
-**Keep:** `decay_data_points()`, `cleanup_near_zero_salience()`, `main()` (simplified to v3-only path).
+**Keep:** `decay_data_points()`, `cleanup_near_zero_salience()`, `main()`.
+
+**Refactor `main()`:** Replace `run(dry_run=args.dry_run)` call with v3 logic: open DB via `storage.get_db()`, call `decay_data_points(conn, dry_run=args.dry_run)` then `cleanup_near_zero_salience(conn, dry_run=args.dry_run)`, close DB.
 
 ### 3. Settings Layer (memory_utils.py) — ~100 lines removed
 
@@ -78,14 +80,14 @@ Remove all v1/v2 logic so the codebase contains only v3 SQL-first architecture c
 - `decay.archiveRetentionDays` from `DEFAULT_SETTINGS` (only used by removed markdown archive purge)
 - `_calculate_token_limits()` function
 - `get_working_days()` (scans `daily/*.md` — markdown-based)
-- `_clear_working_days_cache()` if only used by `get_working_days()`
 - `collect_ltm_files()` (scans for `*-long-term-memory.md` files)
 
 **Keep:**
 - `get_global_working_days()`, `get_project_working_days()` (scan `.jsonl` files — transcript-based, v3)
 - `totalTokenBudget` — simplify to `globalLongTerm.tokenLimit + projectLongTerm.tokenLimit`
 - `decay.ageDays`, `decay.projectWorkingDays` — still referenced by `decay_data_points()` for salience tier thresholds
-- `get_global_memory_file()`, `get_project_memory_dir()`, `get_daily_dir()`, `project_name_to_filename()` — still used by surviving synthesis prompt builder code
+- `_clear_working_days_cache()` — used by `rebuild_projects_index_quiet()` to clear shared cache for surviving JSONL working-day functions
+- `get_global_memory_file()`, `get_project_memory_dir()`, `get_daily_dir()`, `project_name_to_filename()` — still used by `project_manager.py` and `devtools.py`
 
 ### 4. Synthesis Layer (synthesis_cron.py) — ~42 lines removed
 
@@ -104,13 +106,14 @@ Remove all v1/v2 logic so the codebase contains only v3 SQL-first architecture c
 
 **Remove:**
 - `_build_synthesis_instructions()` (v2 format, line 196) — the v3 instructions function `_build_synthesis_instructions_v3()` (line 270) is what synthesis_cron.py actually uses
+- `_get_project_names_str()` — only caller was in `_build_synthesis_prompt()` v2 path (passing to `_build_synthesis_instructions()`)
 - `_strip_profile_sections()` — only used to strip markdown profile sections from LTM file content
 - Inline synthesis code path in `main()` (the `if pending_dates and should_synthesize and not synthesis_deferred` block, ~lines 955-1038)
 
 **Refactor:**
 - `_build_embedded_files()` — remove LTM markdown reads (global_ltm, project_ltms) and daily file reads (existing_dailies). Keep only transcript extract reads (`.txt` files, not markdown). In v3, `vector_memories` always provides existing memory context from DB.
-- `_build_preextracted_prompt()` — remove v2 LTM embedding path (the `else` branch at lines 363-370 that embeds markdown LTM content). Remove existing_dailies merge context (lines 373-391). Keep the `vector_memories` path (lines 360-362).
-- `_build_synthesis_prompt()` — update to use `_build_synthesis_instructions_v3()` instead of the removed v2 instructions function
+- `_build_preextracted_prompt()` — remove v2 LTM embedding path (the `else` branch at lines 363-370 that embeds markdown LTM content). Remove existing_dailies merge context (lines 373-391). Keep the `vector_memories` path (lines 360-362). After removal, the `embedded_files` parameter only needs the `transcripts` key; remove handling of `global_ltm`, `project_ltms`, and `existing_dailies` from the function body.
+- `_build_synthesis_prompt()` — update to call `_build_synthesis_instructions_v3()` (no arguments) instead of `_build_synthesis_instructions(project_names_str)`. Remove the `project_names_str` local variable.
 
 **Keep:**
 - `write_synthesis_prompt()` — entry point for deferred synthesis
@@ -119,7 +122,7 @@ Remove all v1/v2 logic so the codebase contains only v3 SQL-first architecture c
 - `_build_preextracted_prompt()` (refactored)
 - `_build_synthesis_instructions_v3()` — v3 instructions
 - `_retrieve_vector_memories()` — DB-sourced memory context
-- `_find_projects_in_extracts()`, `_get_project_names_str()` — project detection
+- `_find_projects_in_extracts()` — project detection from extracted session data
 - All DB-first loading code (the core v3 path)
 
 ### 7. Peripheral Scripts
@@ -133,7 +136,8 @@ Remove all v1/v2 logic so the codebase contains only v3 SQL-first architecture c
 - Delete entirely. Was an approximation of token usage across memory tiers using short-term settings that no longer exist.
 
 **project_manager.py:**
-- Remove `*-long-term-memory.md` references from `list_projects()`, `plan_move()`, `plan_merge_orphan()`, `restore_from_backup()`, `get_memory_files_for_merge()`
+- Remove `*-long-term-memory.md` references from `list_projects()`, `plan_move()`, `plan_merge_orphan()`
+- Keep LTM references in `restore_from_backup()` and `get_memory_files_for_merge()` — users may still have legacy markdown files that need to be restorable
 
 **devtools.py:**
 - Remove functions that operate on markdown LTM files: the dedup-LTM command and mark-routed migration utility that call `collect_ltm_files()`
