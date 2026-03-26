@@ -140,7 +140,7 @@
         {
           "id": "B1",
           "name": "Clean install.py: remove markdown template copying and migration calls",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],

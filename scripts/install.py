@@ -152,7 +152,6 @@ def link_scripts(script_dir: Path) -> None:
         "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
         "storage.py",  # SQLite storage layer (DB lifecycle, CRUD, migration)
         "health.py",  # Memory health diagnostics
-        "token_usage.py",  # Token usage calculation for /settings
         "simhash.py",  # SimHash fingerprinting for near-duplicate detection
         "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
