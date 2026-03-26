@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for scripts/health.py."""
 
-import sqlite3
 from unittest import mock
 
 import pytest
@@ -12,23 +11,19 @@ from health import (
     health_report,
 )
 from storage import (
-    SCHEMA_DDL,
-    ChunkRow,
-    NodeRow,
+    DataPointRow,
     close_db,
-    insert_chunk,
-    insert_node,
+    ensure_db,
+    insert_data_point,
 )
 
 
-def _make_v2_db(db_path):
-    """Create a v2 DB for testing health operations."""
-    conn = sqlite3.connect(str(db_path))
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA foreign_keys=ON')
-    conn.executescript(SCHEMA_DDL)
-    conn.execute("PRAGMA user_version=2")
-    conn.commit()
+def _make_db(tmp_path):
+    """Create a v3 DB for testing health operations."""
+    db_path = tmp_path / "memory.db"
+    with mock.patch("storage.get_db_path", return_value=db_path), \
+         mock.patch("storage.get_memory_dir", return_value=tmp_path):
+        conn = ensure_db()
     return conn
 
 
@@ -42,8 +37,7 @@ def db_dir(tmp_path):
 
 @pytest.fixture
 def db(db_dir):
-    db_path = db_dir / "memory.db"
-    conn = _make_v2_db(db_path)
+    conn = _make_db(db_dir)
     yield conn
     close_db(conn)
 
@@ -57,27 +51,23 @@ class TestHealthReport:
 
     def test_schema_version(self, db):
         report = health_report(db)
-        # v2 DB for testing chunks/nodes tables
-        assert report.schema_version == 2
+        # v3 DB using data_points table
+        assert report.schema_version >= 3
 
     def test_chunk_counts(self, db):
         for i in range(5):
-            insert_chunk(db, ChunkRow(
+            insert_data_point(db, DataPointRow(
+                type="memory",
                 content=f"LTM entry {i}",
-                source_file="global-long-term-memory.md",
                 source_type="ltm",
                 scope="global",
-                chunk_index=i,
-                created_at="2026-03-01",
             ))
         for i in range(3):
-            insert_chunk(db, ChunkRow(
+            insert_data_point(db, DataPointRow(
+                type="memory",
                 content=f"Daily entry {i}",
-                source_file="2026-03-01.md",
                 source_type="daily",
                 scope="global",
-                chunk_index=i,
-                created_at="2026-03-01",
             ))
         db.commit()
         report = health_report(db)
@@ -87,22 +77,19 @@ class TestHealthReport:
 
     def test_salience_distribution(self, db):
         # Hot
-        insert_chunk(db, ChunkRow(
-            content="Hot entry", source_file="t.md", source_type="ltm",
-            scope="global", chunk_index=0, created_at="2026-03-01",
-            salience=0.9,
+        insert_data_point(db, DataPointRow(
+            type="memory", content="Hot entry", source_type="ltm",
+            scope="global", salience=0.9,
         ))
         # Warm
-        insert_chunk(db, ChunkRow(
-            content="Warm entry", source_file="t.md", source_type="ltm",
-            scope="global", chunk_index=1, created_at="2026-03-01",
-            salience=0.5,
+        insert_data_point(db, DataPointRow(
+            type="memory", content="Warm entry", source_type="ltm",
+            scope="global", salience=0.5,
         ))
         # Cold
-        insert_chunk(db, ChunkRow(
-            content="Cold entry", source_file="t.md", source_type="ltm",
-            scope="global", chunk_index=2, created_at="2026-03-01",
-            salience=0.05,
+        insert_data_point(db, DataPointRow(
+            type="memory", content="Cold entry", source_type="ltm",
+            scope="global", salience=0.05,
         ))
         db.commit()
         report = health_report(db)
@@ -111,9 +98,9 @@ class TestHealthReport:
         assert report.cold_chunks == 1
 
     def test_node_count(self, db):
-        insert_node(db, NodeRow(
-            name="pytest", type="tool", scope="global",
-            created_at="2026-03-01",
+        insert_data_point(db, DataPointRow(
+            type="entity", name="pytest", content="pytest",
+            scope="global",
         ))
         db.commit()
         report = health_report(db)
@@ -177,20 +164,8 @@ class TestFormatReport:
 class TestExtendedHealthReport:
     """Tests for new health metrics fields."""
 
-    def _make_v3_db(self, tmp_path):
-        from unittest.mock import patch
-
-        from storage import ensure_db
-        db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path), \
-             patch("health.get_db_path", return_value=db_path):
-            conn = ensure_db()
-        return conn
-
     def test_memories_by_scope(self, tmp_path):
-        from storage import DataPointRow, insert_data_point
-        conn = self._make_v3_db(tmp_path)
+        conn = _make_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="g1", scope="global", salience=0.5))
         insert_data_point(conn, DataPointRow(type="memory", content="p1", scope="my-project", salience=0.5))
         conn.commit()
@@ -201,8 +176,7 @@ class TestExtendedHealthReport:
         conn.close()
 
     def test_memories_by_type(self, tmp_path):
-        from storage import DataPointRow, insert_data_point
-        conn = self._make_v3_db(tmp_path)
+        conn = _make_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
         insert_data_point(conn, DataPointRow(type="entity", name="Redis", content="Redis", scope="global", salience=0.5))
         conn.commit()
@@ -213,8 +187,7 @@ class TestExtendedHealthReport:
         conn.close()
 
     def test_never_accessed_pct(self, tmp_path):
-        from storage import DataPointRow, insert_data_point
-        conn = self._make_v3_db(tmp_path)
+        conn = _make_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="never", scope="global", salience=0.5, access_count=0))
         insert_data_point(conn, DataPointRow(type="memory", content="once", scope="global", salience=0.5, access_count=1))
         conn.commit()
@@ -226,8 +199,8 @@ class TestExtendedHealthReport:
     def test_edges_per_entity(self, tmp_path):
         from datetime import datetime, timezone
 
-        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
-        conn = self._make_v3_db(tmp_path)
+        from storage import EdgeRow, insert_edge
+        conn = _make_db(tmp_path)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
         m_id = insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
@@ -255,8 +228,7 @@ class TestExtendedHealthReport:
 
     def test_last_consolidation_populated(self, tmp_path):
         """last_consolidation is read from metadata table."""
-        from storage import DataPointRow, insert_data_point
-        conn = self._make_v3_db(tmp_path)
+        conn = _make_db(tmp_path)
         insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
         conn.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO metadata (key, value) VALUES ('last_consolidation', '2026-03-20T10:00:00Z')")
@@ -270,8 +242,8 @@ class TestExtendedHealthReport:
         """newest_edge_days is calculated from the most recent active edge."""
         from datetime import datetime, timedelta, timezone
 
-        from storage import DataPointRow, EdgeRow, insert_data_point, insert_edge
-        conn = self._make_v3_db(tmp_path)
+        from storage import EdgeRow, insert_edge
+        conn = _make_db(tmp_path)
         old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat().replace("+00:00", "Z")
         e_id = insert_data_point(conn, DataPointRow(type="entity", name="X", content="X", scope="global", salience=0.5))
         m_id = insert_data_point(conn, DataPointRow(type="memory", content="m", scope="global", salience=0.5))
