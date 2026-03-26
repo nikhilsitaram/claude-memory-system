@@ -168,8 +168,8 @@ class TestRunSynthesis:
         output = capsys.readouterr().out
         assert "No pending" in output
 
-    def test_calls_claude_p_with_prompt(self, tmp_path):
-        """When prompt is generated, should invoke claude -p."""
+    def test_calls_v3_synthesis(self, tmp_path):
+        """When prompt is generated, should invoke _run_synthesis_v3."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
 
@@ -177,22 +177,26 @@ class TestRunSynthesis:
             print("model=sonnet")
             print(f"prompt_file={prompt_file}")
 
+        mock_conn = MagicMock()
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron._run_synthesis_v3", return_value=True) as mock_v3, \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step"), \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             result = run_synthesis()
 
         assert result == 0
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "claude"
-        assert "-p" in cmd
+        mock_v3.assert_called_once()
+        args = mock_v3.call_args[0]
+        assert args[0] is mock_conn
+        assert args[1] == "sonnet"
 
     def test_returns_1_on_claude_failure(self, tmp_path):
-        """When claude -p fails, should return 1."""
+        """When _run_synthesis_v3 returns False, should return 1."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
 
@@ -200,19 +204,21 @@ class TestRunSynthesis:
             print("model=sonnet")
             print(f"prompt_file={prompt_file}")
 
+        mock_conn = MagicMock()
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron._run_synthesis_v3", return_value=False), \
+             patch("synthesis_cron._run_decay_v3"), \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
             result = run_synthesis()
 
         assert result == 1
 
     def test_returns_1_on_timeout(self, tmp_path):
-        """When claude -p times out, should return 1."""
+        """When _run_synthesis_v3 raises, should return failure."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
 
@@ -220,19 +226,21 @@ class TestRunSynthesis:
             print("model=sonnet")
             print(f"prompt_file={prompt_file}")
 
+        mock_conn = MagicMock()
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron._run_synthesis_v3", return_value=False), \
+             patch("synthesis_cron._run_decay_v3"), \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
             result = run_synthesis()
 
         assert result == 1
 
     def test_writes_timestamp_before_running(self, tmp_path):
-        """Should write .last-synthesis timestamp before calling claude."""
+        """Should write .last-synthesis timestamp before calling v3 synthesis."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
         last_synth = tmp_path / ".last-synthesis"
@@ -243,20 +251,24 @@ class TestRunSynthesis:
 
         call_order = []
 
-        def track_subprocess(*args, **kwargs):
-            # Record whether timestamp was written before subprocess.run
-            call_order.append(("subprocess", last_synth.exists()))
-            return MagicMock(returncode=0, stdout="", stderr="")
+        def track_v3(*args, **kwargs):
+            call_order.append(("v3", last_synth.exists()))
+            return True
 
+        mock_conn = MagicMock()
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run", side_effect=track_subprocess), \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth):
+             patch("synthesis_cron._run_synthesis_v3", side_effect=track_v3), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step"), \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
             result = run_synthesis()
 
         assert result == 0
-        # Timestamp should have been written BEFORE subprocess.run was called
-        assert call_order == [("subprocess", True)]
+        # Timestamp should have been written BEFORE _run_synthesis_v3 was called
+        assert call_order == [("v3", True)]
 
     def test_returns_1_when_no_prompt_file_generated(self, capsys):
         """When write_synthesis_prompt outputs unexpected content, should return 1."""
@@ -271,7 +283,7 @@ class TestRunSynthesis:
         assert result == 1
 
     def test_uses_model_from_prompt_output(self, tmp_path):
-        """Should parse model from write_synthesis_prompt output."""
+        """Should parse model from write_synthesis_prompt output and pass to v3."""
         prompt_file = tmp_path / "synthesis-prompt-12345.txt"
         prompt_file.write_text("test prompt content")
 
@@ -279,203 +291,136 @@ class TestRunSynthesis:
             print("model=haiku")
             print(f"prompt_file={prompt_file}")
 
+        mock_conn = MagicMock()
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
-            mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            result = run_synthesis()
-
-        assert result == 0
-        cmd = mock_run.call_args[0][0]
-        model_idx = cmd.index("--model") + 1
-        assert cmd[model_idx] == "haiku"
-
-    def test_unsets_claudecode_env(self, tmp_path):
-        """Should unset CLAUDECODE env var to avoid nesting guard."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
-            mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            run_synthesis()
-
-        env = mock_run.call_args[1].get("env", {})
-        assert env.get("CLAUDECODE") == ""
-
-    def test_clears_timestamp_on_timeout(self, tmp_path):
-        """When claude -p times out, eager timestamp cleared to allow retry."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-        last_synth = tmp_path / ".last-synthesis"
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
-            mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
-            result = run_synthesis()
-
-        assert result == 1
-        # Timestamp cleared — allows retry on next interval
-        assert not last_synth.exists()
-
-    def test_clears_timestamp_on_nonzero_exit(self, tmp_path):
-        """When claude -p exits non-zero, eager timestamp cleared to allow retry."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-        last_synth = tmp_path / ".last-synthesis"
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
-            result = run_synthesis()
-
-        assert result == 1
-        assert not last_synth.exists()
-
-    def test_clears_timestamp_on_file_not_found(self, tmp_path):
-        """When claude binary is missing, eager timestamp cleared to allow retry."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-        last_synth = tmp_path / ".last-synthesis"
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
-            mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
-            result = run_synthesis()
-
-        assert result == 1
-        assert not last_synth.exists()
-
-    def test_logs_error_on_failure(self, tmp_path):
-        """When claude -p fails, should write to error log."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-        error_log = tmp_path / ".synthesis-errors.log"
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
-            run_synthesis()
-
-        assert error_log.exists()
-        content = error_log.read_text()
-        assert "claude -p exited 1" in content
-        assert "some error" in content
-
-    def test_logs_error_on_file_not_found(self, tmp_path):
-        """When claude binary is missing, should write to error log."""
-        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
-        prompt_file.write_text("test prompt content")
-        error_log = tmp_path / ".synthesis-errors.log"
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_file}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
-            mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
-            run_synthesis()
-
-        assert error_log.exists()
-        content = error_log.read_text()
-        assert "claude" in content
-
-
-    def test_runs_claude_once_per_date(self, tmp_path):
-        """With multiple prompt files, should call claude -p for each."""
-        prompt_a = tmp_path / "synthesis-prompt-2026-02-26-1234.txt"
-        prompt_b = tmp_path / "synthesis-prompt-2026-02-27-1234.txt"
-        prompt_a.write_text("date A content")
-        prompt_b.write_text("date B content")
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_a}")
-            print(f"prompt_file={prompt_b}")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
-            mock_lsf.return_value = tmp_path / ".last-synthesis"
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            result = run_synthesis()
-
-        assert result == 0
-        assert mock_run.call_count == 2
-
-    def test_continues_on_partial_failure(self, tmp_path, capsys):
-        """If one date fails, should continue with remaining dates."""
-        prompt_a = tmp_path / "synthesis-prompt-2026-02-26-1234.txt"
-        prompt_b = tmp_path / "synthesis-prompt-2026-02-27-1234.txt"
-        prompt_a.write_text("date A content")
-        prompt_b.write_text("date B content")
-
-        def fake_write_prompt(**kwargs):
-            print("model=sonnet")
-            print(f"prompt_file={prompt_a}")
-            print(f"prompt_file={prompt_b}")
-
-        call_count = 0
-
-        def alternating_results(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return MagicMock(returncode=1, stdout="", stderr="fail first")
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
-             patch("synthesis_cron.subprocess.run", side_effect=alternating_results), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=True) as mock_v3, \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step"), \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron._log_error"):
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             result = run_synthesis()
 
-        assert result == 1  # Partial failure
-        assert call_count == 2  # Both dates attempted
+        assert result == 0
+        args = mock_v3.call_args[0]
+        assert args[1] == "haiku"
+
+    def test_clears_timestamp_on_failure(self, tmp_path):
+        """When _run_synthesis_v3 returns False, eager timestamp cleared to allow retry."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+        last_synth = tmp_path / ".last-synthesis"
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        mock_conn = MagicMock()
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=False), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
+            result = run_synthesis()
+
+        assert result == 1
+        assert not last_synth.exists()
+
+    def test_runs_decay_after_synthesis(self, tmp_path):
+        """Should run decay after synthesis completes."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        mock_conn = MagicMock()
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=True), \
+             patch("synthesis_cron._run_decay_v3") as mock_decay, \
+             patch("synthesis_cron._run_consolidation_post_step"), \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            run_synthesis()
+
+        mock_decay.assert_called_once_with(mock_conn)
+
+    def test_runs_consolidation_on_success(self, tmp_path):
+        """Should run consolidation post-step after successful synthesis."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        mock_conn = MagicMock()
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=True), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step") as mock_consol, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            run_synthesis()
+
+        mock_consol.assert_called_once()
+
+    def test_skips_consolidation_on_failure(self, tmp_path):
+        """Should skip consolidation post-step when synthesis fails."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        mock_conn = MagicMock()
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=False), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step") as mock_consol, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            run_synthesis()
+
+        mock_consol.assert_not_called()
+
+    def test_closes_db_on_success(self, tmp_path):
+        """Should close DB connection after successful synthesis."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        mock_conn = MagicMock()
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron._run_synthesis_v3", return_value=True), \
+             patch("synthesis_cron._run_decay_v3"), \
+             patch("synthesis_cron._run_consolidation_post_step"), \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("storage.get_db", return_value=mock_conn), \
+             patch("storage.close_db") as mock_close:
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            run_synthesis()
+
+        mock_close.assert_called_once_with(mock_conn)
 
 
 class TestClearEagerTimestamp:
@@ -652,37 +597,6 @@ def _make_v3_db_for_cron(tmp_path):
 
 
 class TestSynthesisCronV3:
-    def test_get_schema_version_returns_3(self, tmp_path):
-        """_get_schema_version reads PRAGMA user_version correctly."""
-        from synthesis_cron import _get_schema_version
-        conn = _make_v3_db_for_cron(tmp_path)
-        assert _get_schema_version(conn) == 3
-
-    def test_get_schema_version_returns_0_for_fresh_db(self, tmp_path):
-        """Fresh DB has schema version 0."""
-        import sqlite3
-
-        from synthesis_cron import _get_schema_version
-        conn = sqlite3.connect(str(tmp_path / "fresh.db"))
-        assert _get_schema_version(conn) == 0
-
-    def test_v3_path_invoked_for_schema_3(self, tmp_path):
-        """_get_schema_version returns 3 for a v3 DB, confirming dispatch logic works."""
-        from synthesis_cron import _get_schema_version
-        conn = _make_v3_db_for_cron(tmp_path)
-        assert _get_schema_version(conn) == 3
-        conn.close()
-
-    def test_v2_path_invoked_for_old_schema(self, tmp_path):
-        """When schema version < 3, run_synthesis calls _run_synthesis_v2."""
-        import sqlite3
-
-        from synthesis_cron import _get_schema_version
-        conn = sqlite3.connect(str(tmp_path / "v2.db"))
-        conn.execute("PRAGMA user_version = 2")
-        conn.commit()
-        assert _get_schema_version(conn) == 2
-
     def test_pre_retrieval_queries_data_points(self, tmp_path):
         """retrieve_existing_memories falls back gracefully when DB has no data."""
         from synthesis_cron import retrieve_existing_memories

@@ -274,55 +274,6 @@ def _get_or_create_entity_in_db(conn, entity_name: str, scope: str | None) -> st
     return get_or_create_entity(conn, entity_name, scope)
 
 
-def _get_schema_version(conn) -> int:
-    """Return the schema version from PRAGMA user_version."""
-    return conn.execute("PRAGMA user_version").fetchone()[0]
-
-
-def _run_synthesis_v2(model: str, prompt_files: list) -> bool:
-    """Run the existing v2 synthesis pipeline (claude -p with PROJECT blocks).
-
-    Returns True on success, False if any prompt failed.
-    """
-    cmd_base = build_claude_command(model)
-    env = os.environ.copy()
-    env["CLAUDECODE"] = ""
-
-    failed = False
-    for prompt_file in prompt_files:
-        date_label = Path(prompt_file).stem
-        print(f"Running v2 synthesis for {date_label} with model={model}")
-        try:
-            with open(prompt_file, encoding="utf-8") as f:
-                result = subprocess.run(
-                    cmd_base,
-                    stdin=f,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            msg = f"Synthesis failed for {date_label}: {exc}"
-            print(f"Error: {msg}", file=sys.stderr)
-            _log_error(msg)
-            failed = True
-            continue
-
-        if result.returncode != 0:
-            msg = f"claude -p exited {result.returncode} for {date_label}"
-            if result.stderr:
-                msg += f": {result.stderr[:200]}"
-            print(f"Error: {msg}", file=sys.stderr)
-            _log_error(msg)
-            failed = True
-            continue
-
-        print(f"Synthesis complete for {date_label}")
-
-    return not failed
-
-
 def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
     """Run the v3 DB-primary synthesis pipeline.
 
@@ -538,9 +489,7 @@ def _run_consolidation_post_step(conn, settings):
 def run_synthesis(force: bool = False) -> int:
     """Run the full deferred synthesis pipeline.
 
-    Detects schema version and dispatches to the appropriate apply function:
-    - v3+: Uses _run_synthesis_v3 with MEMORY_OPS-only output and DB writes
-    - v2: Uses _run_synthesis_v2 with PROJECT blocks and markdown writes
+    Uses the v3 DB-primary path: MEMORY_OPS-only output with DB writes.
 
     Args:
         force: If True, skip the schedule check.
@@ -584,41 +533,22 @@ def run_synthesis(force: bool = False) -> int:
         encoding="utf-8",
     )
 
-    # Detect schema version and dispatch
-    conn = None
-    try:
-        from storage import close_db, get_db
-        conn = get_db()
-        version = _get_schema_version(conn)
-    except Exception:
-        version = 0  # No DB yet — fall back to v2
-        conn = None
+    from storage import close_db, get_db
 
+    conn = get_db()
     try:
-        if version >= 3 and conn is not None:
-            success = _run_synthesis_v3(conn, model, prompt_files)
-            _run_decay_v3(conn)
-            if success:
-                settings = load_settings()
-                _run_consolidation_post_step(conn, settings)
-        else:
-            if conn:
-                close_db(conn)
-                conn = None
-            success = _run_synthesis_v2(model, prompt_files)
+        success = _run_synthesis_v3(conn, model, prompt_files)
+        _run_decay_v3(conn)
+        if success:
+            settings = load_settings()
+            _run_consolidation_post_step(conn, settings)
     finally:
-        if conn:
-            try:
-                from storage import close_db
-                close_db(conn)
-            except Exception:
-                pass
+        close_db(conn)
 
     if not success:
         _clear_eager_timestamp()
         return 1
 
-    print("All synthesis runs complete")
     return 0
 
 
