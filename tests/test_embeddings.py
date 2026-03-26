@@ -33,11 +33,9 @@ from embeddings import (
     search_similar,
 )
 from storage import (
-    ChunkRow,
     DataPointRow,
     close_db,
     ensure_db,
-    insert_chunk,
     insert_data_point,
 )
 
@@ -96,62 +94,54 @@ def mock_embedder():
 
 @pytest.fixture
 def sample_chunks(db):
-    """Insert 5 sample chunks and return their IDs."""
+    """Insert 5 sample data_points and return their IDs."""
     now = datetime.now(timezone.utc)
-    chunks = [
-        ChunkRow(
+    data_points = [
+        DataPointRow(
+            type="memory",
             content="Use pytest tmp_path fixture for filesystem isolation",
-            source_file="global-long-term-memory.md",
             source_type="ltm",
-            section="## Key Patterns",
             scope="global",
             entry_type="pattern",
-            chunk_index=0,
             created_at=(now - timedelta(days=1)).isoformat(),
         ),
-        ChunkRow(
+        DataPointRow(
+            type="memory",
             content="SQLite WAL mode enables concurrent reads from multiple tabs",
-            source_file="global-long-term-memory.md",
             source_type="ltm",
-            section="## Key Learnings",
             scope="global",
             entry_type="gotcha",
-            chunk_index=1,
             created_at=(now - timedelta(days=5)).isoformat(),
         ),
-        ChunkRow(
+        DataPointRow(
+            type="memory",
             content="FastEmbed produces 384-dim CPU embeddings without API keys",
-            source_file="claude-memory-system-long-term-memory.md",
             source_type="ltm",
-            section="## Architecture",
             scope="claude-memory-system",
             entry_type="design",
-            chunk_index=0,
             created_at=(now - timedelta(days=2)).isoformat(),
         ),
-        ChunkRow(
+        DataPointRow(
+            type="memory",
             content="Implemented vector search with sqlite-vec virtual table",
-            source_file="2026-03-20.md",
             source_type="daily",
             scope="claude-memory-system",
             entry_type="implement",
-            chunk_index=0,
             created_at=(now - timedelta(days=0)).isoformat(),
         ),
-        ChunkRow(
+        DataPointRow(
+            type="memory",
             content="Decay runs after synthesis to archive stale entries",
-            source_file="2026-03-19.md",
             source_type="daily",
             scope="global",
             entry_type="implement",
-            chunk_index=0,
             created_at=(now - timedelta(days=10)).isoformat(),
         ),
     ]
     ids = []
-    for chunk in chunks:
-        chunk_id = insert_chunk(db, chunk)
-        ids.append(chunk_id)
+    for dp in data_points:
+        dp_id = insert_data_point(db, dp)
+        ids.append(dp_id)
     db.commit()
     return ids
 
@@ -208,8 +198,8 @@ class TestGracefulDegradation:
 
 class TestScoring:
     def test_score_memory_perfect_match(self):
-        chunk = ChunkRow(
-            content="test", source_file="test.md", source_type="ltm",
+        chunk = DataPointRow(
+            type="memory", content="test", source_type="ltm",
             created_at=datetime.now(timezone.utc).isoformat(),
             salience=1.0,
         )
@@ -219,8 +209,8 @@ class TestScoring:
         assert abs(score - expected) < 0.01
 
     def test_score_memory_zero_similarity(self):
-        chunk = ChunkRow(
-            content="test", source_file="test.md", source_type="ltm",
+        chunk = DataPointRow(
+            type="memory", content="test", source_type="ltm",
             created_at=datetime.now(timezone.utc).isoformat(),
             salience=1.0,
         )
@@ -229,13 +219,13 @@ class TestScoring:
 
     def test_score_memory_recency_decay(self):
         old_date = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        chunk_old = ChunkRow(
-            content="test", source_file="test.md", source_type="ltm",
+        chunk_old = DataPointRow(
+            type="memory", content="test", source_type="ltm",
             created_at=old_date, salience=1.0,
         )
         new_date = datetime.now(timezone.utc).isoformat()
-        chunk_new = ChunkRow(
-            content="test", source_file="test.md", source_type="ltm",
+        chunk_new = DataPointRow(
+            type="memory", content="test", source_type="ltm",
             created_at=new_date, salience=1.0,
         )
         score_old = score_memory(0.2, chunk_old)
@@ -243,8 +233,8 @@ class TestScoring:
         assert score_new > score_old
 
     def test_score_memory_fallback_values(self):
-        chunk = ChunkRow(
-            content="test", source_file="test.md", source_type="ltm",
+        chunk = DataPointRow(
+            type="memory", content="test", source_type="ltm",
             last_accessed=None, salience=None, created_at=None,
         )
         score = score_memory(0.3, chunk)
@@ -368,7 +358,7 @@ class TestScoreMemoryWithDataPointRow:
     """Tests that score_memory works with DataPointRow."""
 
     def test_score_memory_with_data_point_row(self):
-        """score_memory accepts DataPointRow (duck-typed alongside ChunkRow)."""
+        """score_memory accepts DataPointRow."""
         dp = DataPointRow(
             type="memory",
             content="test",
