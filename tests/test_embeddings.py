@@ -1,6 +1,6 @@
 """Tests for embeddings.py -- vector embedding and semantic search.
 
-Tests cover: FastEmbed wrapper, batch embedding, vec_chunks population,
+Tests cover: FastEmbed wrapper, batch embedding, vec_data population,
 content hash skip, scoring function, search_similar, reindex, and
 graceful degradation when optional dependencies are missing.
 
@@ -22,7 +22,6 @@ from embeddings import (
     SALIENCE_WEIGHT,
     VEC_BOOST_RATE,
     VEC_SIM_WEIGHT,
-    ScoredChunk,
     ScoredDataPoint,
     delete_vec_data,
     embed_batch,
@@ -61,7 +60,7 @@ def db(db_dir):
 
 @pytest.fixture
 def db_with_vec(db):
-    """DB with sqlite-vec loaded and vec_chunks table created.
+    """DB with sqlite-vec loaded and vec_data table created.
 
     Skips test if sqlite-vec is not installed.
     """
@@ -269,7 +268,7 @@ class TestFastEmbedIntegration:
 
 
 class TestScoredDataPoint:
-    """Tests for the ScoredDataPoint dataclass and ScoredChunk alias."""
+    """Tests for the ScoredDataPoint dataclass."""
 
     def test_scored_data_point_has_correct_fields(self):
         """ScoredDataPoint wraps a DataPointRow with score and vec_similarity."""
@@ -278,10 +277,6 @@ class TestScoredDataPoint:
         assert scored.data_point.content == "test fact"
         assert scored.score == 0.8
         assert scored.vec_similarity == 0.7
-
-    def test_scored_chunk_alias_still_works(self):
-        """ScoredChunk is a backward-compat alias for ScoredDataPoint."""
-        assert ScoredChunk is ScoredDataPoint
 
     def test_scored_data_point_accepts_data_point_row(self):
         """ScoredDataPoint.data_point stores a DataPointRow."""
@@ -369,12 +364,8 @@ class TestIndexDataPoints:
         assert "vec_data" in tables
 
 
-class TestBackwardCompatAliases:
-    """Tests that backward-compat aliases are preserved."""
-
-    def test_scored_chunk_is_scored_data_point(self):
-        """ScoredChunk must be the same class as ScoredDataPoint."""
-        assert ScoredChunk is ScoredDataPoint
+class TestScoreMemoryWithDataPointRow:
+    """Tests that score_memory works with DataPointRow."""
 
     def test_score_memory_with_data_point_row(self):
         """score_memory accepts DataPointRow (duck-typed alongside ChunkRow)."""
