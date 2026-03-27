@@ -38,7 +38,7 @@ Recover ~1,500 wasted tokens from SessionStart injection, prevent systemic dupli
 | # | File | Change | Lines est. |
 |---|------|--------|------------|
 | 1 | `scripts/health.py` | Check `user_version` first; when >=3, skip `chunks`/`nodes` branches | ~10 |
-| 2 | `scripts/storage.py` | Drop legacy `chunks`/`nodes` tables when user_version >= 3; update SCHEMA_DDL to remove legacy table definitions | ~20 |
+| 2 | `scripts/storage.py` | Drop legacy `chunks`/`nodes` tables in `ensure_db` when user_version >= 3 (SCHEMA_DDL already cleaned by PR #104) | ~15 |
 | 3 | `scripts/synthesis.py` | SimHash dedup gate in `_apply_add_v3` | ~30 |
 | 4 | `scripts/synthesis_cron.py` | Include existing scope-filtered memories in synthesis pre-retrieval prompt | ~20 |
 | 5 | `scripts/load_memory.py` | Add `passive` parameter to `_batch_update_data_point_access`; skip salience reinforcement on passive loads (all scopes) | ~15 |
@@ -79,7 +79,7 @@ With reinforcement removed from passive loads, the existing decay tiers naturall
 
 **health.py**: When `user_version >= 3` (checked via `_get_schema_version`), skip the `if 'chunks' in tables` branch entirely and go straight to the `data_points` query. Similarly skip the `if 'nodes' in tables` branch for graph stats.
 
-**storage.py**: In the DB open/migration path, when `user_version >= 3`, execute `DROP TABLE IF EXISTS chunks` and `DROP TABLE IF EXISTS nodes`. The `chunks` table has 0 rows; `nodes` has data but all entity information was migrated to `data_points` (type='entity') during the v2-to-v3 migration. The existing `SCHEMA_DDL` still defines these tables — remove those definitions so they are not recreated.
+**storage.py**: In `ensure_db`, when `user_version >= 3`, execute `DROP TABLE IF EXISTS chunks` and `DROP TABLE IF EXISTS nodes`. The `chunks` table has 0 rows; `nodes` has data but all entity information was migrated to `data_points` (type='entity') during the v2-to-v3 migration. PR #104 already removed these definitions from `SCHEMA_DDL`, so they will not be recreated — the DROP just cleans up stale tables in existing databases.
 
 ### One-time Data Cleanup (storage.py)
 
@@ -109,5 +109,7 @@ New function `cleanup_stale_data(conn)` callable from CLI or migration:
 - Changing the decay formula or adding new decay tiers
 
 ## Implementation Approach
+
+**Prerequisite:** Rebase onto origin/main (which includes PR #104) before starting. The changes described assume the post-#104 state of `storage.py` and `health.py`.
 
 Single phase — all 7 changes are independent. Tasks can be parallelized via subagents with worktree isolation.

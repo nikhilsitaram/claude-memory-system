@@ -1,0 +1,30 @@
+[
+  {
+    "type": "design-review",
+    "scope": "design",
+    "iteration": 1,
+    "issues_found": 7,
+    "severity": { "critical": 1, "high": 3, "medium": 2, "low": 1 },
+    "actionable": 7,
+    "dismissed": 0,
+    "dismissals": [],
+    "fixed": 7,
+    "remaining": 0,
+    "verdict": "fail",
+    "timestamp": "2026-03-26T21:35:00Z"
+  },
+  {
+    "type": "design-review",
+    "scope": "design",
+    "iteration": 2,
+    "issues_found": 2,
+    "severity": { "critical": 0, "high": 0, "medium": 0, "low": 2 },
+    "actionable": 2,
+    "dismissed": 0,
+    "dismissals": [],
+    "fixed": 2,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-26T21:45:00Z"
+  }
+]
