@@ -18,7 +18,6 @@ from load_memory import (
     _build_preextracted_prompt,
     _build_synthesis_instructions_v3,
     _build_synthesis_prompt,
-    _find_projects_in_extracts,
     _load_from_db,
     pre_extract_transcripts_incremental,
     should_synthesize,
@@ -364,65 +363,6 @@ class TestBuildEmbeddedFiles:
         result = _build_embedded_files({})
         assert result == {"transcripts": {}}
 
-
-# =============================================================================
-# _find_projects_in_extracts Tests
-# =============================================================================
-
-
-class TestFindProjectsInExtracts:
-    """Tests for _find_projects_in_extracts helper."""
-
-    def setup_method(self):
-        """Clear the projects index cache before each test."""
-        from memory_utils import _clear_projects_index_cache
-        _clear_projects_index_cache()
-
-    def test_maps_project_path_to_name(self, tmp_path):
-        index = {"projects": {
-            "/home/user/myproject": {"name": "myproject", "encodedPaths": ["-home-user-myproject"]}
-        }}
-        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
-            mock_idx.return_value = tmp_path / "index.json"
-            (tmp_path / "index.json").write_text(json.dumps(index))
-            result = _find_projects_in_extracts({
-                "2026-02-01": [{"session_id": "s1", "project_path": "/home/user/myproject"}]
-            })
-        assert result == {"myproject"}
-
-    def test_multiple_projects(self, tmp_path):
-        index = {"projects": {
-            "/proj/a": {"name": "alpha", "encodedPaths": []},
-            "/proj/b": {"name": "beta", "encodedPaths": []},
-        }}
-        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
-            mock_idx.return_value = tmp_path / "index.json"
-            (tmp_path / "index.json").write_text(json.dumps(index))
-            result = _find_projects_in_extracts({
-                "2026-02-01": [
-                    {"session_id": "s1", "project_path": "/proj/a"},
-                    {"session_id": "s2", "project_path": "/proj/b"},
-                ]
-            })
-        assert result == {"alpha", "beta"}
-
-    def test_empty_data_returns_empty(self):
-        from memory_utils import _clear_projects_index_cache
-        _clear_projects_index_cache()
-        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
-            mock_idx.return_value = Path("/nonexistent/index.json")
-            result = _find_projects_in_extracts({})
-        assert result == set()
-
-    def test_unknown_project_skipped(self, tmp_path):
-        index = {"projects": {}}
-        with mock.patch("memory_utils.get_projects_index_file") as mock_idx:
-            mock_idx.return_value = tmp_path / "index.json"
-            (tmp_path / "index.json").write_text(json.dumps(index))
-            result = _find_projects_in_extracts({
-                "2026-02-01": [{"session_id": "s1", "project_path": "/unknown/path"}]
-            })
-        assert result == set()
 
 
 # =============================================================================
@@ -1487,7 +1427,7 @@ class TestSalienceReinforcement:
         """Create a v3 DB for testing data_point access tracking."""
         from unittest.mock import patch
         with patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+             patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 
@@ -1577,7 +1517,7 @@ class TestPassiveReinforcement:
     def _make_v3_db(self, tmp_path):
         """Create a v3 DB for testing passive reinforcement."""
         with mock.patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
-             mock.patch("storage.get_memory_dir", return_value=tmp_path):
+             mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 

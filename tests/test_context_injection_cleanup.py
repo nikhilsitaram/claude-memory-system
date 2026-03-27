@@ -9,11 +9,9 @@ SessionStart injection.
 from datetime import datetime, timezone
 from unittest import mock
 
-import pytest
 from storage import (
     DataPointRow,
     cleanup_stale_data,
-    close_db,
     ensure_db,
     insert_data_point,
     query_data_point_by_id,
@@ -24,7 +22,7 @@ def _make_db(tmp_path):
     """Create a v3 DB with patched paths."""
     db_path = tmp_path / "memory.db"
     with mock.patch("storage.get_db_path", return_value=db_path), \
-         mock.patch("storage.get_memory_dir", return_value=tmp_path):
+         mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
     return conn
 

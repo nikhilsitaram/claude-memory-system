@@ -247,8 +247,6 @@ class TestRunPostProcessing:
         extract.write_text("data")
 
         with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"):
             run_post_processing(extract_paths=[str(extract)])
 
@@ -257,8 +255,6 @@ class TestRunPostProcessing:
     def test_prunes_stale_state(self):
         """Calls prune_stale_state_entries during post-processing."""
         with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries") as mock_prune:
             run_post_processing(extract_paths=[])
 
@@ -267,8 +263,6 @@ class TestRunPostProcessing:
     def test_updates_timestamp(self, tmp_path):
         """Writes .last-synthesis timestamp file."""
         with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
@@ -288,8 +282,6 @@ class TestRunPostProcessingOffsetsCleanup:
         offsets_file.write_text('{"s1": {"offset": 100}}')
 
         with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(
@@ -302,8 +294,6 @@ class TestRunPostProcessingOffsetsCleanup:
     def test_no_offsets_no_error(self, tmp_path):
         """run_post_processing works fine without offsets_json."""
         with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
@@ -319,33 +309,12 @@ class TestRunPostProcessingNoSubprocess:
         assert not hasattr(synthesis, "subprocess"), \
             "synthesis.py should not import subprocess anymore"
 
-    def test_calls_run_validate_ltm(self, tmp_path):
-        """run_post_processing calls run_validate_ltm."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
-             patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm") as mock_vl, \
-             patch("synthesis.run_decay"):
-            run_post_processing(extract_paths=[])
-        mock_vl.assert_called_once()
-
-    def test_calls_run_decay(self, tmp_path):
-        """run_post_processing calls run_decay."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
-             patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay") as mock_decay:
-            run_post_processing(extract_paths=[])
-        mock_decay.assert_called_once()
 
     def test_calls_reindex_after_synthesis(self, tmp_path):
         """run_post_processing calls _reindex_after_synthesis."""
         with patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
              patch("synthesis._reindex_after_synthesis") as mock_reindex:
             run_post_processing(extract_paths=[])
         mock_reindex.assert_called_once()
@@ -354,67 +323,11 @@ class TestRunPostProcessingNoSubprocess:
         """run_post_processing rebuilds projects index before decay."""
         with patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
-             patch("synthesis.rebuild_projects_index_quiet") as mock_rebuild, \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"):
+             patch("synthesis.rebuild_projects_index_quiet") as mock_rebuild:
             run_post_processing(extract_paths=[])
         mock_rebuild.assert_called_once()
 
-    def test_rebuild_before_decay_ordering(self, tmp_path):
-        """Projects index rebuild runs before decay."""
-        call_order = []
 
-        def track_rebuild():
-            call_order.append("rebuild")
-
-        def track_decay():
-            call_order.append("decay")
-
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
-             patch("synthesis.rebuild_projects_index_quiet", side_effect=track_rebuild), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay", side_effect=track_decay):
-            run_post_processing(extract_paths=[])
-
-        assert call_order.index("rebuild") < call_order.index("decay")
-
-
-# =============================================================================
-# _extract_date_from_extracts Tests
-# =============================================================================
-
-from synthesis import _extract_date_from_extracts  # noqa: E402
-
-
-class TestExtractDateFromExtracts:
-    """Test date extraction from extract file paths."""
-
-    def test_extracts_date_from_filename(self, tmp_path):
-        """Extract date from standard extract filename."""
-        f = tmp_path / "extract-2026-02-24.txt"
-        f.write_text("content")
-        assert _extract_date_from_extracts([str(f)]) == "2026-02-24"
-
-    def test_uses_first_match(self, tmp_path):
-        """Returns date from first matching file."""
-        f1 = tmp_path / "extract-2026-02-20.txt"
-        f2 = tmp_path / "extract-2026-02-21.txt"
-        f1.write_text("c1")
-        f2.write_text("c2")
-        assert _extract_date_from_extracts([str(f1), str(f2)]) == "2026-02-20"
-
-    def test_no_date_in_filename_falls_back_to_today(self):
-        """Falls back to today's date if no date found in filenames."""
-        result = _extract_date_from_extracts(["/tmp/nodatehere.txt"])
-        import re
-        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
-
-    def test_empty_paths_falls_back_to_today(self):
-        """Empty path list falls back to today's date."""
-        import re
-        result = _extract_date_from_extracts([])
-        assert re.match(r"\d{4}-\d{2}-\d{2}", result)
 
 
 # =============================================================================

@@ -18,8 +18,7 @@ def shared_db(tmp_path):
     from storage import ensure_db
 
     db_path = tmp_path / "memory.db"
-    with patch("storage.get_db_path", return_value=db_path), \
-         patch("storage.get_memory_dir", return_value=tmp_path):
+    with patch("storage.get_db_path", return_value=db_path):
         conn = ensure_db()
         yield conn
     conn.close()

@@ -15,7 +15,7 @@ class TestFindClusters:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with p("storage.get_db_path", return_value=db_path), \
-             p("storage.get_memory_dir", return_value=tmp_path):
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
             return ensure_db()
 
     def test_no_clusters_when_insufficient_memories(self, tmp_path):
@@ -72,7 +72,7 @@ class TestWriteMergeResult:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with p("storage.get_db_path", return_value=db_path), \
-             p("storage.get_memory_dir", return_value=tmp_path):
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
             return ensure_db()
 
     def test_merge_creates_new_data_point(self, tmp_path):
@@ -169,7 +169,7 @@ class TestMergeCluster:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with p("storage.get_db_path", return_value=db_path), \
-             p("storage.get_memory_dir", return_value=tmp_path):
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
             return ensure_db()
 
     def test_merge_decision_returns_merge(self, tmp_path):
@@ -265,7 +265,7 @@ class TestRunConsolidation:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with p("storage.get_db_path", return_value=db_path), \
-             p("storage.get_memory_dir", return_value=tmp_path):
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
             return ensure_db()
 
     def test_dry_run_does_not_merge(self, tmp_path):
@@ -426,14 +426,14 @@ class TestConnectedComponents:
 
     def test_single_pair(self):
         from consolidation import _connected_components
-        result = _connected_components([("a", "b", 0.9)], ["a", "b"])
+        result = _connected_components([("a", "b", 0.9)])
         members = [set(comp[0]) for comp in result]
         assert members == [{"a", "b"}]
 
     def test_disjoint_pairs(self):
         from consolidation import _connected_components
         result = _connected_components(
-            [("a", "b", 0.9), ("c", "d", 0.85)], ["a", "b", "c", "d"]
+            [("a", "b", 0.9), ("c", "d", 0.85)]
         )
         members = sorted([set(comp[0]) for comp in result], key=len)
         assert len(members) == 2
@@ -443,7 +443,7 @@ class TestConnectedComponents:
     def test_transitive_merge(self):
         from consolidation import _connected_components
         result = _connected_components(
-            [("a", "b", 0.9), ("b", "c", 0.85)], ["a", "b", "c"]
+            [("a", "b", 0.9), ("b", "c", 0.85)]
         )
         members = [set(comp[0]) for comp in result]
         assert len(members) == 1
@@ -451,7 +451,7 @@ class TestConnectedComponents:
 
     def test_empty_input(self):
         from consolidation import _connected_components
-        result = _connected_components([], [])
+        result = _connected_components([])
         assert result == []
 
     def test_complex_graph(self):
@@ -463,7 +463,7 @@ class TestConnectedComponents:
             ("d", "e", 0.88),
             ("e", "f", 0.92),
         ]
-        result = _connected_components(pairs, ["a", "b", "c", "d", "e", "f"])
+        result = _connected_components(pairs)
         members = sorted([set(comp[0]) for comp in result], key=len)
         assert len(members) == 2
         assert {"a", "b", "c"} in members

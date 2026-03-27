@@ -12,20 +12,18 @@ import sqlite3
 from unittest import mock
 
 import pytest
-
 from storage import (
     SCHEMA_VERSION,
     DataPointRow,
     EdgeRow,
-    close_db,
     cleanup_stale_data,
+    close_db,
     ensure_db,
     get_db,
     insert_data_point,
     insert_edge,
     invalidate_edge,
     query_current_edges,
-    query_data_point_by_id,
     query_edges_at_date,
 )
 
@@ -38,8 +36,7 @@ from storage import (
 def db_dir(tmp_path):
     """Provide a temporary directory for the DB and patch get_db_path."""
     db_path = tmp_path / "memory.db"
-    with mock.patch("storage.get_db_path", return_value=db_path), \
-         mock.patch("storage.get_memory_dir", return_value=tmp_path):
+    with mock.patch("storage.get_db_path", return_value=db_path):
         yield tmp_path
 
 
@@ -892,8 +889,7 @@ class TestFTS5:
     def _make_db(self, tmp_path):
         from unittest.mock import patch
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             return ensure_db()
 
     def test_fts_data_table_created(self, tmp_path):
@@ -972,8 +968,7 @@ class TestFTS5:
         from storage import DataPointRow, _backfill_fts, _ensure_fts_table, fts_search, insert_data_point
 
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             conn = ensure_db()
 
         insert_data_point(conn, DataPointRow(type="memory", content="migration backfill test content", scope="global"))
@@ -993,8 +988,7 @@ class TestEpistemicMetadata:
     def _make_db(self, tmp_path):
         from unittest.mock import patch
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             return ensure_db()
 
     def test_certainty_column_exists(self, tmp_path):
@@ -1063,8 +1057,7 @@ class TestMetadataTable:
     def _make_db(self, tmp_path):
         from unittest.mock import patch
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             return ensure_db()
 
     def test_metadata_table_exists(self, tmp_path):
@@ -1102,8 +1095,7 @@ class TestGetOrCreateEntity:
 
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             return ensure_db()
 
     def test_creates_new_entity(self, tmp_path):
@@ -1179,8 +1171,7 @@ class TestPruneSessionContexts:
 
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+        with patch("storage.get_db_path", return_value=db_path):
             return ensure_db()
 
     def test_session_context_pruning(self, tmp_path):

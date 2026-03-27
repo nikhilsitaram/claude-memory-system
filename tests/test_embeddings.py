@@ -385,7 +385,7 @@ class TestHybridSearch:
         from storage import DataPointRow, ensure_db, fts_insert, insert_data_point
         db_path = tmp_path / "memory.db"
         with patch("storage.get_db_path", return_value=db_path), \
-             patch("storage.get_memory_dir", return_value=tmp_path):
+             patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         dp1 = DataPointRow(type="memory", content="Redis cache requires explicit TTL", scope="global", salience=0.8)
         dp2 = DataPointRow(type="memory", content="SQLite WAL mode for concurrency", scope="global", salience=0.7)

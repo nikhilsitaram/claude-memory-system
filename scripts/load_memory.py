@@ -38,7 +38,6 @@ from memory_utils import (
     load_json_file,
     load_settings,
     load_synthesis_state,
-    resolve_project_path_to_name,
     resolve_session_path,
 )
 from transcript_ops import (
@@ -318,27 +317,6 @@ def _build_synthesis_prompt(
     )
 
 
-def _find_projects_in_extracts(daily_data: dict[str, list[dict]]) -> set[str]:
-    """Find project names from extracted session data.
-
-    Delegates path-to-name resolution to
-    ``memory_utils.resolve_project_path_to_name()``.
-
-    Args:
-        daily_data: Dict mapping date -> list of session dicts
-
-    Returns set of project names that had sessions extracted.
-    """
-    result: set[str] = set()
-    for sessions in daily_data.values():
-        for s in sessions:
-            pp = s.get("project_path")
-            if pp:
-                name = resolve_project_path_to_name(pp)
-                if name:
-                    result.add(name)
-    return result
-
 
 def _build_embedded_files(extracted_files: dict[str, str]) -> dict:
     """Pre-read transcript extract files for embedding in synthesis prompt.
@@ -447,7 +425,7 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
         print("No pending transcripts.")
         return
 
-    extracted_files, session_offsets, daily_data = pre_extract_transcripts_incremental(
+    extracted_files, _, _ = pre_extract_transcripts_incremental(
         pending_dates, exclude_session_id=exclude_session_id
     )
 
@@ -711,7 +689,7 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
 
         try:
-            from health import health_alerts as _health_alerts, health_report
+            from health import health_alerts as _health_alerts, health_report  # noqa: I001
             hr = health_report(conn)
             alerts = _health_alerts(hr)
             if alerts:
@@ -764,9 +742,12 @@ def main() -> None:
 
     # Include current local time for context
     now = datetime.now(timezone.utc).astimezone()
-    utc_offset_hours = now.utcoffset().total_seconds() / 3600
-    offset_sign = "+" if utc_offset_hours >= 0 else ""
-    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
+    utc_offset = now.utcoffset() or timedelta(0)
+    total_minutes = int(utc_offset.total_seconds() // 60)
+    offset_sign = "+" if total_minutes >= 0 else "-"
+    offset_hours, offset_mins = divmod(abs(total_minutes), 60)
+    tz_str = f"UTC{offset_sign}{offset_hours}" + (f":{offset_mins:02d}" if offset_mins else "")
+    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} ({tz_str})")
     print()
 
     # Surface synthesis errors from deferred runs

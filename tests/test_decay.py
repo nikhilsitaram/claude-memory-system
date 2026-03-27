@@ -5,10 +5,8 @@ Unit tests for decay.py
 Run with: python -m pytest tests/test_decay.py -v
 """
 
-import sqlite3
 import sys as _sys
-from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -16,7 +14,6 @@ from decay import (  # noqa: I001
     ARCHIVE_SALIENCE_THRESHOLD,
     COLD_LAMBDA,
     DEFAULT_AGE_DAYS,
-    DEFAULT_PROJECT_WORKING_DAYS,
     HOT_LAMBDA,
     WARM_LAMBDA,
     days_since,
@@ -142,7 +139,7 @@ class TestDecayDataPoints:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
-             _patch("storage.get_memory_dir", return_value=tmp_path):
+             _patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 
@@ -260,7 +257,7 @@ class TestCertaintyDecay:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
-             _patch("storage.get_memory_dir", return_value=tmp_path):
+             _patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 
@@ -344,7 +341,7 @@ class TestCleanupNearZeroSalience:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
-             _patch("storage.get_memory_dir", return_value=tmp_path):
+             _patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 
@@ -469,7 +466,7 @@ class TestConsolidatedDecay:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
-             _patch("storage.get_memory_dir", return_value=tmp_path):
+             _patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 
@@ -546,7 +543,7 @@ class TestMain:
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
         with _patch("storage.get_db_path", return_value=db_path), \
-             _patch("storage.get_memory_dir", return_value=tmp_path):
+             _patch("memory_utils.get_memory_dir", return_value=tmp_path):
             conn = ensure_db()
         return conn
 

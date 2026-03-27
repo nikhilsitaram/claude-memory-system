@@ -36,7 +36,7 @@ def seed_benchmark_db(tmp_path):
     """
     db_path = tmp_path / "benchmark.db"
     with patch("storage.get_db_path", return_value=db_path), \
-         patch("storage.get_memory_dir", return_value=tmp_path):
+         patch("memory_utils.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
 
     id_map = {}
