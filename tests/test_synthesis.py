@@ -958,3 +958,104 @@ class TestApplyAddV3SimhashDedup:
             "SELECT content FROM data_points WHERE id=?", (dp_id,)
         ).fetchone()
         assert row[0] == long_fact
+
+
+class TestApplyAddV3CosineDedup:
+    """Tests for embedding cosine similarity dedup fallback in _apply_add_v3."""
+
+    def test_paraphrased_duplicate_deduped_by_cosine(self, shared_db):
+        """Paraphrased content (different SimHash) caught by cosine similarity."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        content_a = "ExitWorktree or cd to main repo must run BEFORE removing the worktree you are standing in"
+        dp_id = insert_data_point(shared_db, DataPointRow(
+            type="memory", content=content_a, scope="global",
+            salience=0.7, simhash=_simhash_to_sqlite(compute_simhash(content_a)),
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        content_b = "Worktree cleanup order: always cd to the main repo directory BEFORE removing the worktree you are standing in"
+
+        fake_vecs = {
+            content_a: [1.0, 0.0, 0.0, 0.0],
+            content_b: [0.98, 0.1, 0.0, 0.0],
+        }
+
+        def fake_embed(text):
+            return fake_vecs.get(text, [0.0, 0.0, 0.0, 0.0])
+
+        op = MemoryOp(action="ADD", fact=content_b, scope="global")
+        with patch("embeddings.embed_text", side_effect=fake_embed):
+            result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "deduped_cosine"
+        assert result["id"] == dp_id
+
+        count = shared_db.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='memory' AND scope='global' AND salience > 0"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_cosine_skipped_when_no_fastembed(self, shared_db):
+        """When fastembed is unavailable, cosine dedup is skipped and new row inserted."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        content_a = "Always use git rebase for feature branches instead of merge"
+        insert_data_point(shared_db, DataPointRow(
+            type="memory", content=content_a, scope="global",
+            salience=0.7, simhash=_simhash_to_sqlite(compute_simhash(content_a)),
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        content_b = "For feature branches prefer git rebase over merge to keep history linear"
+
+        op = MemoryOp(action="ADD", fact=content_b, scope="global")
+        with patch("synthesis._find_cosine_duplicate", return_value=None):
+            result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "inserted"
+
+    def test_cosine_below_threshold_inserts_normally(self, shared_db):
+        """Content with low cosine similarity is not deduped."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        content_a = "Redis requires explicit TTL settings for caching"
+        insert_data_point(shared_db, DataPointRow(
+            type="memory", content=content_a, scope="global",
+            salience=0.7, simhash=_simhash_to_sqlite(compute_simhash(content_a)),
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        content_b = "User works across 4 active projects: claude-caliper, claude-memory-system"
+
+        fake_vecs = {
+            content_a: [1.0, 0.0, 0.0, 0.0],
+            content_b: [0.0, 1.0, 0.0, 0.0],
+        }
+
+        def fake_embed(text):
+            return fake_vecs.get(text, [0.0, 0.0, 0.0, 0.0])
+
+        op = MemoryOp(action="ADD", fact=content_b, scope="global")
+        with patch("embeddings.embed_text", side_effect=fake_embed):
+            result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "inserted"

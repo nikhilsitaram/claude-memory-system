@@ -47,7 +47,14 @@ __all__ = [
     "_apply_noop_v3",
     "_get_or_create_entity",
     "_simhash_to_sqlite",
+    "_merge_into_duplicate",
+    "_find_cosine_duplicate",
+    "_COSINE_DEDUP_THRESHOLD",
 ]
+
+# Cosine similarity threshold for embedding-based dedup (catches paraphrased duplicates)
+# SimHash (threshold=3) catches near-identical text; cosine catches reworded duplicates
+_COSINE_DEDUP_THRESHOLD = 0.88
 
 # Delimiter patterns (legacy format headers retained for parse_synthesis_output backward compat)
 DAILY_HEADER = re.compile(r"^===DAILY:(\d{4}-\d{2}-\d{2})===$")  # Legacy format
@@ -311,8 +318,79 @@ def _simhash_to_sqlite(val: int) -> int:
     return val - (1 << 64) if val >= (1 << 63) else val
 
 
+def _merge_into_duplicate(conn, cand_id, cand_content, cand_evidence, cand_salience,
+                          new_fact, new_simhash_db, scope, status):
+    """Merge a new fact into an existing duplicate data_point.
+
+    Bumps evidence_count/salience. Replaces content if new fact is longer.
+    Re-syncs FTS and embeddings when content changes.
+    """
+    from storage import update_data_point
+
+    new_evidence = (cand_evidence or 1) + 1
+    new_salience = min(1.0, (cand_salience or 0.5) + 0.05)
+    update_kwargs = {
+        "evidence_count": new_evidence,
+        "salience": new_salience,
+    }
+    if len(new_fact) > len(cand_content or ""):
+        update_kwargs["content"] = new_fact
+        update_kwargs["content_hash"] = __import__("hashlib").sha256(
+            new_fact.encode("utf-8")
+        ).hexdigest()[:16]
+        update_kwargs["simhash"] = new_simhash_db
+
+    update_data_point(conn, cand_id, **update_kwargs)
+
+    if "content" in update_kwargs:
+        try:
+            from storage import fts_delete, fts_insert
+            fts_delete(conn, cand_id)
+            fts_insert(conn, cand_id, new_fact, scope)
+        except Exception:
+            pass
+        try:
+            from embeddings import index_data_points
+            index_data_points(conn, [cand_id])
+        except Exception:
+            pass
+
+    return {"action": "ADD", "status": status, "id": cand_id}
+
+
+def _find_cosine_duplicate(candidates, fact):
+    """Find the best cosine-similarity match among candidates. Returns (id, content, evidence, salience) or None."""
+    try:
+        from embeddings import embed_text
+    except ImportError:
+        return None
+
+    new_vec = embed_text(fact)
+    if not new_vec:
+        return None
+
+    best_sim = 0.0
+    best_cand = None
+    for cand_id, cand_content, _simhash, cand_evidence, _sessions, cand_salience in candidates:
+        cand_vec = embed_text(cand_content or "")
+        if not cand_vec:
+            continue
+        dot = sum(a * b for a, b in zip(new_vec, cand_vec))
+        norm_a = sum(a * a for a in new_vec) ** 0.5
+        norm_b = sum(b * b for b in cand_vec) ** 0.5
+        if norm_a > 0 and norm_b > 0:
+            sim = dot / (norm_a * norm_b)
+            if sim > best_sim:
+                best_sim = sim
+                best_cand = (cand_id, cand_content, cand_evidence, cand_salience)
+
+    if best_sim >= _COSINE_DEDUP_THRESHOLD and best_cand:
+        return best_cand
+    return None
+
+
 def _apply_add_v3(conn, op: "MemoryOp") -> dict:
-    """Apply an ADD operation — inserts a new data_point (with SimHash dedup gate)."""
+    """Apply an ADD operation — inserts a new data_point (with dedup gate)."""
     from datetime import datetime, timezone
 
     from memory_utils import sanitize_secrets
@@ -323,7 +401,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
     salience = op.salience if op.salience is not None else 0.5
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # --- SimHash dedup gate ---
+    # --- Dedup gate: SimHash (exact) then cosine similarity (semantic) ---
     new_simhash = compute_simhash(fact)
     new_simhash_db = _simhash_to_sqlite(new_simhash)
 
@@ -342,56 +420,24 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
             (op.scope, ninety_days_ago),
         ).fetchall()
 
-        for cand_id, cand_content, cand_simhash, cand_evidence, cand_sessions, cand_salience in candidates:
+        # Pass 1: exact SimHash match
+        for cand_id, cand_content, cand_simhash, cand_evidence, _sessions, cand_salience in candidates:
             unsigned_cand = cand_simhash & 0xFFFFFFFFFFFFFFFF if cand_simhash else 0
             unsigned_new = new_simhash & 0xFFFFFFFFFFFFFFFF
-
             if hamming_distance(unsigned_cand, unsigned_new) <= DEFAULT_HAMMING_THRESHOLD:
-                import json as _json
+                return _merge_into_duplicate(
+                    conn, cand_id, cand_content, cand_evidence, cand_salience,
+                    fact, new_simhash_db, op.scope, "deduped",
+                )
 
-                new_evidence = (cand_evidence or 1) + 1
-
-                existing_sessions = []
-                if cand_sessions:
-                    try:
-                        existing_sessions = _json.loads(cand_sessions)
-                    except (ValueError, TypeError):
-                        existing_sessions = []
-                merged_sessions = _json.dumps(existing_sessions)
-
-                new_salience = min(1.0, (cand_salience or 0.5) + 0.05)
-
-                update_kwargs = {
-                    "evidence_count": new_evidence,
-                    "salience": new_salience,
-                    "source_sessions": merged_sessions,
-                }
-                if len(fact) > 2 * len(cand_content or ""):
-                    update_kwargs["content"] = fact
-                    update_kwargs["content_hash"] = __import__("hashlib").sha256(
-                        fact.encode("utf-8")
-                    ).hexdigest()[:16]
-                    update_kwargs["simhash"] = new_simhash_db
-
-                from storage import update_data_point
-                update_data_point(conn, cand_id, **update_kwargs)
-
-                # Re-sync FTS and embeddings when content was replaced
-                if "content" in update_kwargs:
-                    try:
-                        from storage import fts_delete, fts_insert
-                        fts_delete(conn, cand_id)
-                        fts_insert(conn, cand_id, fact, op.scope)
-                    except Exception:
-                        pass
-                    try:
-                        from embeddings import index_data_points
-                        index_data_points(conn, [cand_id])
-                    except Exception:
-                        pass
-
-                return {"action": "ADD", "status": "deduped", "id": cand_id}
-    # --- End SimHash dedup gate ---
+        # Pass 2: cosine similarity fallback (catches paraphrased duplicates)
+        cosine_match = _find_cosine_duplicate(candidates, fact)
+        if cosine_match:
+            cand_id, cand_content, cand_evidence, cand_salience = cosine_match
+            return _merge_into_duplicate(
+                conn, cand_id, cand_content, cand_evidence, cand_salience,
+                fact, new_simhash_db, op.scope, "deduped_cosine",
+            )
 
     dp = DataPointRow(
         type="memory",

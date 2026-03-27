@@ -727,6 +727,36 @@ class TestSessionContextIdempotencyWildcard:
         assert count == 2
 
 
+class TestSessionContextContentDedup:
+    """Tests that session_context entries with identical content are deduped."""
+
+    def test_same_content_different_session_id_deduped(self, tmp_path):
+        """Different session_ids producing identical content return existing row."""
+        from synthesis_cron import _write_session_context
+        conn = _make_v3_db_for_cron(tmp_path)
+
+        id1 = _write_session_context(conn, "proj", ["CLAUDE", "Let", "Now"], "sess-001")
+        id2 = _write_session_context(conn, "proj", ["CLAUDE", "Let", "Now"], "sess-002")
+        assert id1 == id2
+        count = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context' AND salience > 0"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_different_content_not_deduped(self, tmp_path):
+        """Different topics produce different content — both inserted."""
+        from synthesis_cron import _write_session_context
+        conn = _make_v3_db_for_cron(tmp_path)
+
+        id1 = _write_session_context(conn, "proj", ["sqlite", "test"], "sess-001")
+        id2 = _write_session_context(conn, "proj", ["grpc", "auth"], "sess-002")
+        assert id1 != id2
+        count = conn.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='session_context' AND salience > 0"
+        ).fetchone()[0]
+        assert count == 2
+
+
 # =============================================================================
 # TestV3PromptCleanup — HIGH-1: v3 prompt strips v2-only sections
 # =============================================================================
