@@ -274,7 +274,50 @@ def _get_or_create_entity_in_db(conn, entity_name: str, scope: str | None) -> st
     return get_or_create_entity(conn, entity_name, scope)
 
 
-def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
+def _inject_scope_memories(conn, prompt_text: str, scope: str, limit: int = 10) -> str:
+    """Inject top existing memories for the scope into the synthesis prompt.
+
+    Adds an 'Existing Memories for scope' section before the '## Transcripts'
+    marker. This gives the LLM context to choose UPDATE over ADD for semantic
+    duplicates that SimHash might miss.
+
+    Args:
+        conn: Open SQLite connection.
+        prompt_text: The synthesis prompt text.
+        scope: Project scope to query memories for.
+        limit: Maximum number of memories to inject.
+
+    Returns:
+        Modified prompt text with injected memories section.
+    """
+    rows = conn.execute(
+        "SELECT id, content FROM data_points "
+        "WHERE type='memory' AND scope=? AND salience > 0 "
+        "ORDER BY salience DESC LIMIT ?",
+        (scope, limit),
+    ).fetchall()
+
+    if not rows:
+        return prompt_text
+
+    memory_lines = [f"[{row[0]}] {row[1]}" for row in rows if row[1]]
+    if not memory_lines:
+        return prompt_text
+
+    section = (
+        f"\n## Existing Memories for scope: {scope}\n"
+        "Reference these by [id] when choosing UPDATE vs ADD.\n\n"
+        + "\n".join(memory_lines)
+        + "\n"
+    )
+
+    # Insert before ## Transcripts if present, otherwise append before end
+    if "## Transcripts" in prompt_text:
+        return prompt_text.replace("## Transcripts", section + "\n## Transcripts", 1)
+    return prompt_text + section
+
+
+def _run_synthesis_v3(conn, model: str, prompt_files: list, scope: str = "") -> bool:
     """Run the v3 DB-primary synthesis pipeline.
 
     Uses _build_synthesis_instructions_v3 prompt and apply_memory_ops_v3.
@@ -336,6 +379,9 @@ def _run_synthesis_v3(conn, model: str, prompt_files: list) -> bool:
                         prompt_text = sec_parts[0] + after[next_sec + 1:]
                     else:
                         prompt_text = sec_parts[0]
+
+        if scope:
+            prompt_text = _inject_scope_memories(conn, prompt_text, scope)
 
         import tempfile
         with tempfile.NamedTemporaryFile(
