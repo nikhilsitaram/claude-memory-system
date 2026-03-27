@@ -22,7 +22,7 @@ Add an on-demand debug view to the web frontend that shows what context is being
 2. PromptRecall injections appear in the timeline as they happen, showing injected memories and filtered candidates with reasons
 3. The monitor auto-updates without manual refresh while the tab is active
 4. Clicking a memory ID in the monitor opens the existing detail modal
-5. Hook latency increases by less than 5ms (one JSONL file append per invocation)
+5. Hook latency does not regress observably (verified by before/after timing of `load_memory.py` and `prompt_recall.py`)
 6. Log file does not grow unboundedly (rotation on SessionStart)
 
 ## Architecture
@@ -42,6 +42,8 @@ Shared helper with two public functions:
 - `log_prompt_recall(session_id, prompt_preview, candidates, injected, filtered, latency_ms)` — appends one JSONL line
 
 Both are fire-and-forget: exceptions are caught and silently ignored (logging must never break the hook).
+
+**Design constraint:** Each hook invocation appends a single JSONL line (<1ms). This budget is validated by before/after timing during development.
 
 **Log file:** `~/.claude/memory/.injection-log.jsonl` (dot-prefixed, alongside existing state files)
 
@@ -119,6 +121,14 @@ New "Monitor" tab alongside Dashboard, Browse, Search, Graph.
 3. **Rotation on SessionStart** — simple truncation keeps ~1 day of history. No separate rotation daemon.
 4. **Content previews in log, full content on-demand** — keeps log lines small while allowing drill-down.
 
+## Alternatives Considered
+
+- **Tail stderr/log file** — hooks could write to stderr and the user tails a log. Rejected: no structured breakdown, no clickable memory IDs, requires a dedicated terminal window.
+- **CLI command** (`python3 injection_log.py tail`) — simpler than a web tab. Rejected: loses the ability to click memory IDs into the existing detail modal and view tier breakdowns visually.
+- **Extend existing `/api/data_points` with "recently accessed" sort** — approximates SessionStart visibility. Rejected: doesn't show per-tier grouping, prompt recall history, or filtered candidates.
+
+The web UI was chosen because it provides structured tier breakdowns, clickable memory IDs linking to the existing detail modal, and auto-refresh — all in the already-running web frontend.
+
 ## Non-Goals
 
 - Persistent historical analytics (this is a live debug tool)
@@ -130,9 +140,14 @@ New "Monitor" tab alongside Dashboard, Browse, Search, Graph.
 
 **Single phase** — all changes are additive with no dependency layers:
 
-1. New `scripts/injection_log.py` — logging helpers + rotation
-2. Modify `scripts/load_memory.py` — collect tier metadata during `_load_from_db()`, call `log_session_start()` after
-3. Modify `scripts/prompt_recall.py` — call `log_prompt_recall()` after search/filter
+1. New `scripts/injection_log.py` — logging helpers + rotation. Add `injection_log.py` to the `scripts_to_link` list in `scripts/install.py` `link_scripts()`.
+2. Modify `scripts/load_memory.py`:
+   - **Return type change:** `_load_from_db()` currently returns a formatted string. Refactor to build a `tiers` list alongside `sections`, tracking `(name, ids, content_text)` per tier. Return a tuple `(formatted_text, tiers_metadata)` instead of a plain string. Token estimates computed as `sum(len(content) // 4 for each item in tier)`.
+   - **Session ID capture:** `main()` currently discards the stdin JSON payload. Capture it and extract `sessionId` for passing to `log_session_start()`. Fall back to a timestamp-based ID if `sessionId` is not present.
+   - Call `log_session_start()` after `_load_from_db()` returns.
+3. Modify `scripts/prompt_recall.py`:
+   - **Candidate tracking:** Refactor the recall loop to track filtered candidates. Before the loop, record `candidates = len(results)`. Inside the loop, when `is_recently_injected()` returns True, append `{"id": dp.id, "content_preview": dp.content[:80], "reason": "deduped"}` to a `filtered` list.
+   - Call `log_prompt_recall()` with both `injected` and `filtered` lists after the search/filter loop.
 4. Modify `scripts/web_app.py` — add `GET /api/injection-log` endpoint
 5. Modify `templates/web/index.html` — add Monitor tab with polling JS and timeline rendering
 6. Tests for injection_log module, API endpoint, rotation, and hook integration
