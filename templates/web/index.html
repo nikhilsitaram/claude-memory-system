@@ -953,7 +953,7 @@
         var params = [];
         if (_monitorLastTs) params.push('since=' + encodeURIComponent(_monitorLastTs));
         var sessionFilter = document.getElementById('monitor-session').value;
-        if (sessionFilter) params.push('session_id=' + encodeURIComponent(sessionFilter));
+        if (sessionFilter) params.push('session=' + encodeURIComponent(sessionFilter));
         if (params.length) url += '?' + params.join('&');
 
         try {
@@ -974,8 +974,8 @@
                     sel.appendChild(opt);
                 }
                 timeline.appendChild(renderMonitorEntry(entry));
-                if (entry.timestamp && (!_monitorLastTs || entry.timestamp > _monitorLastTs)) {
-                    _monitorLastTs = entry.timestamp;
+                if (entry.ts && (!_monitorLastTs || entry.ts > _monitorLastTs)) {
+                    _monitorLastTs = entry.ts;
                 }
             }
 
@@ -1004,7 +1004,7 @@
         var headerHtml = '<div class="entry-header">' +
             '<span class="hook-badge ' + badgeClass + '">' + badgeLabel + '</span>' +
             '<span>' + escHtml((entry.session_id || '').substring(0, 12)) + '</span>' +
-            '<span>' + escHtml(entry.timestamp || '') + '</span>' +
+            '<span>' + escHtml(entry.ts ? new Date(entry.ts).toLocaleTimeString() : '') + '</span>' +
             latencyHtml +
             '</div>';
 
@@ -1017,41 +1017,44 @@
             }
             for (var t = 0; t < entry.tiers.length; t++) {
                 var tier = entry.tiers[t];
-                var pct = maxTokens > 0 ? Math.round((tier.tokens || 0) / maxTokens * 100) : 0;
-                var count = (tier.count || 0) + ' items, ~' + (tier.tokens || 0) + ' tok';
+                var pct = maxTokens > 0 ? Math.round((tier.tokens_est || 0) / maxTokens * 100) : 0;
+                var count = (tier.count || 0) + ' items, ~' + (tier.tokens_est || 0) + ' tok';
                 bodyHtml += '<div class="monitor-tier">' +
                     '<span class="tier-name">' + escHtml(tier.name || '') + '</span>' +
                     '<div class="tier-bar"><div class="tier-fill" style="width:' + pct + '%"></div></div>' +
                     '<span class="tier-count">' + escHtml(count) + '</span>' +
                     '</div>';
             }
-            if (entry.ids && entry.ids.length) {
-                bodyHtml += '<div class="monitor-ids">';
-                for (var j = 0; j < entry.ids.length; j++) {
-                    var chipId = entry.ids[j];
-                    bodyHtml += '<span class="monitor-id-chip monitor-injected" onclick="openDetail(\'' + escHtml(chipId) + '\')">' + escHtml(chipId.substring(0, 8)) + '</span>';
+            for (var t2 = 0; t2 < entry.tiers.length; t2++) {
+                var tierIds = entry.tiers[t2].ids || [];
+                if (tierIds.length) {
+                    bodyHtml += '<div class="monitor-ids">';
+                    for (var j = 0; j < tierIds.length; j++) {
+                        var chipId = tierIds[j];
+                        bodyHtml += '<span class="monitor-id-chip" onclick="openDetail(\'' + escHtml(chipId) + '\')">' + escHtml(chipId.substring(0, 8)) + '</span>';
+                    }
+                    bodyHtml += '</div>';
                 }
-                bodyHtml += '</div>';
             }
         } else {
-            if (entry.prompt) {
-                bodyHtml += '<div class="monitor-prompt-preview">' + escHtml((entry.prompt || '').substring(0, 200)) + '</div>';
+            if (entry.prompt_preview) {
+                bodyHtml += '<div class="monitor-prompt-preview">' + escHtml((entry.prompt_preview || '').substring(0, 200)) + '</div>';
             }
             if (entry.injected && entry.injected.length) {
-                bodyHtml += '<div class="monitor-ids">';
                 for (var j = 0; j < entry.injected.length; j++) {
-                    var iid = entry.injected[j];
-                    bodyHtml += '<span class="monitor-id-chip monitor-injected" onclick="openDetail(\'' + escHtml(iid) + '\')">' + escHtml(iid.substring(0, 8)) + '</span>';
+                    var item = entry.injected[j];
+                    bodyHtml += '<div class="monitor-injected" onclick="openDetail(\'' + escHtml(item.id) + '\')">' +
+                        '<strong>' + escHtml((item.id || '').substring(0, 12)) + '</strong> (' + escHtml(item.scope || '') + ') ' +
+                        escHtml(item.content_preview || '') + '</div>';
                 }
-                bodyHtml += '</div>';
             }
             if (entry.filtered && entry.filtered.length) {
-                bodyHtml += '<div class="monitor-ids">';
                 for (var j = 0; j < entry.filtered.length; j++) {
-                    var fid = entry.filtered[j];
-                    bodyHtml += '<span class="monitor-id-chip monitor-filtered" onclick="openDetail(\'' + escHtml(fid) + '\')">' + escHtml(fid.substring(0, 8)) + '</span>';
+                    var fitem = entry.filtered[j];
+                    bodyHtml += '<div class="monitor-filtered">' +
+                        '<strong>' + escHtml((fitem.id || '').substring(0, 12)) + '</strong> — ' + escHtml(fitem.reason || 'filtered') + ': ' +
+                        escHtml(fitem.content_preview || '') + '</div>';
                 }
-                bodyHtml += '</div>';
             }
         }
 
