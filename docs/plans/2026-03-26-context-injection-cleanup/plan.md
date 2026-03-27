@@ -1,5 +1,5 @@
 ---
-status: Not Yet Started
+status: In Development
 ---
 
 # Recover ~1,500 wasted tokens from SessionStart injection by cleaning stale data, preventing systemic duplication in synthesis, fixing the false health alert, and stopping passive-load reinforcement from counteracting decay. Implementation Plan
