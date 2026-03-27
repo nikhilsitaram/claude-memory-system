@@ -426,6 +426,20 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
                 from storage import update_data_point
                 update_data_point(conn, cand_id, **update_kwargs)
 
+                # Re-sync FTS and embeddings when content was replaced
+                if "content" in update_kwargs:
+                    try:
+                        from storage import fts_delete, fts_insert
+                        fts_delete(conn, cand_id)
+                        fts_insert(conn, cand_id, fact, op.scope)
+                    except Exception:
+                        pass
+                    try:
+                        from embeddings import index_data_points
+                        index_data_points(conn, [cand_id])
+                    except Exception:
+                        pass
+
                 return {"action": "ADD", "status": "deduped", "id": cand_id}
     # --- End SimHash dedup gate ---
 

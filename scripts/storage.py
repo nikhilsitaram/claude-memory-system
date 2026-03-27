@@ -319,8 +319,12 @@ def ensure_db() -> sqlite3.Connection:
     except sqlite3.OperationalError as e:
         if "no such module: vec0" not in str(e):
             raise
-    conn.execute("DROP TABLE IF EXISTS chunks")
-    conn.execute("DROP TABLE IF EXISTS nodes")
+    # Drop legacy tables only when DB is already v3+ (safe) or fresh (no data to lose).
+    # On a v2 DB, chunks/nodes may contain the only copy of data — do not drop.
+    current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current_version >= 3 or current_version == 0:
+        conn.execute("DROP TABLE IF EXISTS chunks")
+        conn.execute("DROP TABLE IF EXISTS nodes")
     assert isinstance(SCHEMA_VERSION, int), 'SCHEMA_VERSION must be int'
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
@@ -893,20 +897,19 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
     ).fetchall()
 
     for dp_id, content in profiles:
+        should_delete = False
         if not content:
+            should_delete = True
+        else:
+            content_stripped = content.strip()
+            if content_stripped.startswith("<!--"):
+                should_delete = True
+            elif len(content_stripped.split()) <= 2:
+                should_delete = True
+        if should_delete:
+            fts_delete(conn, dp_id)
             conn.execute("DELETE FROM data_points WHERE id = ?", (dp_id,))
             stats["profiles_deleted"] += 1
-            continue
-        content_stripped = content.strip()
-        if content_stripped.startswith("<!--"):
-            conn.execute("DELETE FROM data_points WHERE id = ?", (dp_id,))
-            stats["profiles_deleted"] += 1
-            continue
-        words = content_stripped.split()
-        if len(words) <= 2:
-            conn.execute("DELETE FROM data_points WHERE id = ?", (dp_id,))
-            stats["profiles_deleted"] += 1
-            continue
 
     # 2. Near-duplicate cluster cleanup
     scopes = conn.execute(
@@ -947,6 +950,7 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
                     conn.execute(
                         "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
                     )
+                    fts_delete(conn, dp_id)
                     stats["duplicates_soft_deleted"] += 1
                 consumed.add(id_a)
 
@@ -968,6 +972,7 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
             conn.execute(
                 "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
             )
+            fts_delete(conn, dp_id)
             stats["stale_soft_deleted"] += 1
 
     conn.commit()
