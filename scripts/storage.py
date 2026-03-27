@@ -889,7 +889,7 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
 
     # 1. Delete profile waste: HTML comments and bare tags
     profiles = conn.execute(
-        "SELECT id, content FROM data_points WHERE scope='user' AND salience > 0"
+        "SELECT id, content FROM data_points WHERE scope='user' AND type='profile' AND salience > 0"
     ).fetchall()
 
     for dp_id, content in profiles:

@@ -10,12 +10,6 @@ from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
-from simhash import compute_simhash
-
-def _to_signed(val):
-    """Convert unsigned 64-bit SimHash to signed for SQLite storage."""
-    return val - (1 << 64) if val >= (1 << 63) else val
-
 from storage import (
     DataPointRow,
     cleanup_stale_data,
