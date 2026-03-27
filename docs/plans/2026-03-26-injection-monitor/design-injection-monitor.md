@@ -41,9 +41,11 @@ Shared helper with two public functions:
 - `log_session_start(session_id, project_scope, tiers, latency_ms, health_alerts)` — appends one JSONL line
 - `log_prompt_recall(session_id, prompt_preview, candidates, injected, filtered, latency_ms)` — appends one JSONL line
 
-Both are fire-and-forget: exceptions are caught and silently ignored (logging must never break the hook).
+Both are fire-and-forget: exceptions are caught and silently ignored (logging must never break the hook). Both check `settings.injectionLog.enabled` (default `true`) before writing — when disabled, no file I/O occurs.
 
 **Design constraint:** Each hook invocation appends a single JSONL line (<1ms). This budget is validated by before/after timing during development.
+
+**Settings toggle:** `injectionLog.enabled` (boolean, default `true`) in `DEFAULT_SETTINGS`. Controllable via `/settings`. When `false`, hooks skip logging entirely.
 
 **Log file:** `~/.claude/memory/.injection-log.jsonl` (dot-prefixed, alongside existing state files)
 

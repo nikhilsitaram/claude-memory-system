@@ -24,13 +24,15 @@
               "scripts/injection_log.py",
               "tests/test_injection_log.py"
             ],
-            "modify": [],
+            "modify": [
+              "scripts/memory_utils.py"
+            ],
             "test": [
               "tests/test_injection_log.py"
             ]
           },
           "verification": "python3 -m pytest tests/test_injection_log.py -v",
-          "done_when": "injection_log.py exports log_session_start(), log_prompt_recall(), rotate_log(), and get_log_path(). log_session_start appends one JSONL line with ts, session_id, hook, project_scope, tiers array (each with name/count/tokens_est/ids), total_items, total_tokens_est, latency_ms, health_alerts. log_prompt_recall appends one JSONL line with ts, session_id, hook, prompt_preview (80 char truncation), candidates, injected array, filtered array, latency_ms. rotate_log(max_lines=500, keep_lines=200) truncates when exceeded. All functions catch exceptions silently. 10+ tests pass."
+          "done_when": "injection_log.py exports log_session_start(), log_prompt_recall(), rotate_log(), and get_log_path(). Both log functions check settings.injectionLog.enabled (via memory_utils.load_settings()) and return immediately when false. Add 'injectionLog': {'enabled': True} to DEFAULT_SETTINGS in memory_utils.py. log_session_start appends one JSONL line with ts, session_id, hook, project_scope, tiers array (each with name/count/tokens_est/ids), total_items, total_tokens_est, latency_ms, health_alerts. log_prompt_recall appends one JSONL line with ts, session_id, hook, prompt_preview (80 char truncation), candidates, injected array, filtered array, latency_ms. rotate_log(max_lines=500, keep_lines=200) truncates when exceeded. All functions catch exceptions silently. 12+ tests pass including enabled/disabled toggle tests."
         },
         {
           "id": "A2",
