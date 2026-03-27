@@ -1,5 +1,4 @@
 """Tests for synthesis_cron.py -- systemd-triggered deferred synthesis."""
-import subprocess as real_subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -1035,7 +1034,7 @@ def _make_db_with_metadata(tmp_path):
     from storage import ensure_db
     db_path = tmp_path / "memory.db"
     with p("storage.get_db_path", return_value=db_path), \
-         p("storage.get_memory_dir", return_value=tmp_path):
+         p("memory_utils.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
     return conn
 

@@ -50,7 +50,7 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
 
     if do_all or args.mode == "install-only":
         print("Running install.py...")
-        rc, out, err = _run([sys.executable, str(REPO_DIR / "scripts" / "install.py")])
+        rc, _, err = _run([sys.executable, str(REPO_DIR / "scripts" / "install.py")])
         _print_result("install.py", rc == 0, err.strip()[:80] if rc != 0 else "")
         if rc != 0:
             failures += 1
@@ -99,7 +99,7 @@ def cmd_verify_install(args: argparse.Namespace) -> int:
             ("indexing.py list-recent", [sys.executable, str(SCRIPTS_DIR / "indexing.py"), "list-recent"]),
             ("decay.py --dry-run", [sys.executable, str(SCRIPTS_DIR / "decay.py"), "--dry-run"]),
         ]:
-            rc, out, err = _run(cmd)
+            rc, _, err = _run(cmd)
             _print_result(label, rc == 0, err.strip()[:80] if rc != 0 else "")
             if rc != 0:
                 failures += 1

@@ -538,8 +538,9 @@ def _load_projects_index_for_working_days() -> dict:
         return _projects_index_for_working_days
     index_file = get_projects_index_file()
     raw = load_json_file(index_file, default={})
-    _projects_index_for_working_days = raw.get("projects", {})
-    return _projects_index_for_working_days
+    result = raw.get("projects", {})
+    _projects_index_for_working_days = result
+    return result
 
 
 def get_project_working_days(project_scope: str, n: int) -> list[str]:

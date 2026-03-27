@@ -22,7 +22,7 @@ def _make_db(tmp_path):
     """Create a v3 DB for testing health operations."""
     db_path = tmp_path / "memory.db"
     with mock.patch("storage.get_db_path", return_value=db_path), \
-         mock.patch("storage.get_memory_dir", return_value=tmp_path):
+         mock.patch("memory_utils.get_memory_dir", return_value=tmp_path):
         conn = ensure_db()
     return conn
 
@@ -289,7 +289,7 @@ class TestHealthV3LegacyTableBug:
 
         from storage import ensure_db
         db_path = tmp_path / "memory.db"
-        with patch("storage.get_db_path", return_value=db_path),              patch("storage.get_memory_dir", return_value=tmp_path),              patch("health.get_db_path", return_value=db_path):
+        with patch("storage.get_db_path", return_value=db_path),              patch("memory_utils.get_memory_dir", return_value=tmp_path),              patch("health.get_db_path", return_value=db_path):
             conn = ensure_db()
         return conn
 

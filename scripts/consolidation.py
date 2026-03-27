@@ -48,7 +48,7 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
     excluded = _get_excluded_pairs(conn, active_ids)
     sim_pairs = [(a, b, s) for a, b, s in sim_pairs if (a, b) not in excluded and (b, a) not in excluded]
 
-    clusters = _connected_components(sim_pairs, active_ids)
+    clusters = _connected_components(sim_pairs)
 
     result = []
     for members, edges in clusters:
@@ -133,7 +133,7 @@ def _get_excluded_pairs(conn, active_ids):
     return {(r[0], r[1]) for r in rows}
 
 
-def _connected_components(pairs, all_ids):
+def _connected_components(pairs):
     """Extract connected components from similarity pairs."""
     parent = {}
 
@@ -171,7 +171,7 @@ def _split_large_cluster(members, edges, max_size=15):
     removed = set()
     while True:
         active_edges = [e for e in sorted_edges if e not in removed]
-        components = _connected_components(active_edges, members)
+        components = _connected_components(active_edges)
         if not components:
             return [members[:max_size]]
         if all(len(c[0]) <= max_size for c in components):

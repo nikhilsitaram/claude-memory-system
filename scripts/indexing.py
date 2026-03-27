@@ -269,7 +269,7 @@ def list_recent_sessions(
             filtered = [s for s in all_sessions if s.file_mtime >= cutoff]
     else:
         # Explicit calendar-day cutoff
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_age_days))
         filtered = [s for s in all_sessions if s.file_mtime >= cutoff]
 
     return [

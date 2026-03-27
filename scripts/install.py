@@ -153,9 +153,7 @@ def link_scripts(script_dir: Path) -> None:
         "storage.py",  # SQLite storage layer (DB lifecycle, CRUD, migration)
         "health.py",  # Memory health diagnostics
         "simhash.py",  # SimHash fingerprinting for near-duplicate detection
-        "chunking.py",  # Chunk LTM and daily files for text processing
         "embeddings.py",  # Vector embedding and semantic search
-        "backfill.py",  # One-time entity re-extraction for existing chunks
         "web_app.py",  # Web frontend for browsing and managing memory
         "injection_log.py",  # Injection monitor logging for SessionStart/PromptRecall hooks
         "memory_server.py",  # MCP server - search/write/delete/traverse tools

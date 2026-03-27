@@ -101,8 +101,8 @@ def _get_stats(conn: sqlite3.Connection) -> dict:
 
 def _get_data_points(
     conn: sqlite3.Connection,
-    scope: str = None,
-    dp_type: str = None,
+    scope: str | None = None,
+    dp_type: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list:
@@ -178,7 +178,7 @@ def _search(conn: sqlite3.Connection, query: str, limit: int = 20) -> list:
     ]
 
 
-def _get_graph(conn: sqlite3.Connection, scope: str = None, limit: int = 200) -> dict:
+def _get_graph(conn: sqlite3.Connection, scope: str | None = None, limit: int = 200) -> dict:
     """Return nodes and edges for vis.js network rendering."""
     conditions = ["salience > 0"]
     params = []
@@ -316,7 +316,7 @@ def _edit_data_point(conn: sqlite3.Connection, dp_id: str, updates: dict) -> dic
     return {"status": "updated", "id": dp_id}
 
 
-def _delete_data_point(conn: sqlite3.Connection, dp_id: str, reason: str = None) -> dict:
+def _delete_data_point(conn: sqlite3.Connection, dp_id: str, reason: str | None = None) -> dict:
     """Soft-delete a data_point (set salience=0), invalidate its edges, and record provenance."""
     dp = query_data_point_by_id(conn, dp_id)
     if not dp:

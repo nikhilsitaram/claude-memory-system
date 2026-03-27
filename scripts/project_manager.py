@@ -1090,13 +1090,11 @@ def execute_move(
 
     # Use lock for thread safety
     lock_path = get_memory_dir() / ".project_manager.lock"
+    backup_path = None
     try:
         with FileLock(lock_path, timeout=30):
             # Create backup
             backup_path = backup_files([Path(f) for f in plan.backups])
-
-            old_encoded = encode_path(str(old_path))
-            new_encoded = encode_path(str(new_path))
 
             # Execute merges
             for source, dest in plan.merges:
@@ -1175,7 +1173,7 @@ def execute_move(
         return {
             "success": False,
             "message": f"Error during move: {e}",
-            "backup_path": str(backup_path) if "backup_path" in locals() else None,
+            "backup_path": str(backup_path) if backup_path else None,
         }
 
 
@@ -1216,6 +1214,7 @@ def execute_merge_orphan(
 
     lock_path = get_memory_dir() / ".project_manager.lock"
     renamed_folders = []
+    backup_path = None
 
     try:
         with FileLock(lock_path, timeout=30):
@@ -1365,7 +1364,7 @@ def execute_merge_orphan(
         return {
             "success": False,
             "message": f"Error during merge: {e}",
-            "backup_path": str(backup_path) if "backup_path" in locals() else None,
+            "backup_path": str(backup_path) if backup_path else None,
             "renamed_folders": renamed_folders,
         }
 
@@ -1396,6 +1395,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
         }
 
     lock_path = get_memory_dir() / ".project_manager.lock"
+    backup_path = None
 
     try:
         with FileLock(lock_path, timeout=30):
@@ -1434,7 +1434,7 @@ def execute_cleanup(confirmed: bool = False) -> dict:
             "success": False,
             "message": f"Error during cleanup: {e}",
             "removed_entries": [],
-            "backup_path": str(backup_path) if "backup_path" in locals() else None,
+            "backup_path": str(backup_path) if backup_path else None,
         }
 
 

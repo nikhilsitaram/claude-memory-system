@@ -14,8 +14,6 @@ Requirements: Python 3.9+
 """
 
 import argparse
-import contextlib
-import io
 import json
 import re
 import sqlite3
@@ -42,7 +40,6 @@ __all__ = [
     "parse_synthesis_output",
     "compute_offsets_from_extracts",
     "run_post_processing",
-    "run_validate_ltm",
     "apply_memory_ops_v3",
     "_apply_add_v3",
     "_apply_update_v3",
@@ -172,37 +169,6 @@ def parse_synthesis_output(text: str) -> SynthesisResult:
     return result
 
 
-def run_validate_ltm() -> None:
-    """Run LTM validation as function call (no subprocess)."""
-    try:
-        from devtools import cmd_validate_ltm
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            cmd_validate_ltm(argparse.Namespace())
-    except Exception:
-        pass  # Non-critical
-
-
-def run_decay() -> None:
-    """Run decay as function call (no subprocess).
-
-    .. deprecated:: Phase 4
-        Use ``decay.decay_data_points()`` for v3 data_points decay.
-        This function is kept for backward compatibility with ``run_post_processing``.
-    """
-    import warnings
-    warnings.warn(
-        "run_decay() is deprecated for markdown decay; use decay.decay_data_points() for v3",
-        DeprecationWarning, stacklevel=2,
-    )
-    try:
-        from decay import run as decay_run
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            decay_run(dry_run=False)
-    except Exception:
-        pass  # Non-critical
-
 
 def _reindex_after_synthesis() -> None:
     """Re-index all chunk vectors after synthesis completes.
@@ -248,10 +214,6 @@ def run_post_processing(
 
     # Rebuild projects index so decay sees current work days
     rebuild_projects_index_quiet()
-
-    # Direct function calls instead of subprocesses
-    run_validate_ltm()
-    run_decay()
 
     _reindex_after_synthesis()
 
@@ -320,21 +282,6 @@ def compute_offsets_from_extracts(extract_paths: list[str]) -> dict[str, dict]:
 
     return offsets
 
-
-def _extract_date_from_extracts(extract_paths: list[str]) -> str:
-    """Extract date from extract file names (format: *YYYY-MM-DD*).
-
-    Scans file names for a YYYY-MM-DD pattern and returns the first match.
-    Falls back to today's date if no date is found.
-    """
-    for path in extract_paths:
-        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", Path(path).name)
-        if date_match:
-            return date_match.group(1)
-    # Fallback: today
-    from datetime import date
-
-    return date.today().isoformat()
 
 
 def main() -> int:

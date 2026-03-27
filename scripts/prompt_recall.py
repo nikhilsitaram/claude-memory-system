@@ -125,6 +125,7 @@ def main():
     filtered_log = []
 
     conn = None
+    results = []
     try:
         conn = get_db()
         results = search_hybrid(conn, prompt, scope=None, top_k=MAX_INJECTIONS + 2)

@@ -22,7 +22,7 @@ script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from memory_utils import get_db_path, get_memory_dir  # noqa: E402
+from memory_utils import get_db_path  # noqa: E402
 
 SCHEMA_VERSION = 3
 
@@ -127,7 +127,6 @@ __all__ = [
     "query_data_points_by_scope",
     "update_data_point",
     "soft_delete_data_point",
-    "delete_data_point_soft",
     # Edges
     "insert_edge",
     "invalidate_edge",
@@ -705,10 +704,6 @@ def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
         import sys as _sys
         print(f"Warning: FTS5 delete failed for {dp_id}: {e}", file=_sys.stderr)
     return cursor.rowcount
-
-
-# Alias for compatibility
-delete_data_point_soft = soft_delete_data_point
 
 
 def prune_session_contexts(
