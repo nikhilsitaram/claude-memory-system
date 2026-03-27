@@ -476,11 +476,18 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
 REINFORCEMENT_ETA = 0.18  # Reinforcement rate (diminishing returns formula)
 
 
-def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str]) -> None:
+def _batch_update_data_point_access(
+    conn: sqlite3.Connection, dp_ids: list[str], passive: bool = False
+) -> None:
     """Increment access_count, update last_accessed, reinforce salience, and boost neighbors.
 
     Applies diminishing-returns salience reinforcement (REINFORCEMENT_ETA = 0.18)
     and associative graph-neighbor boosting for connected entity data_points.
+
+    When passive=True, only access_count and last_accessed are updated (useful for
+    SessionStart auto-loading where we want analytics but not salience inflation).
+    When passive=False (default), full salience reinforcement and neighbor boosting apply
+    (used by MCP search and other active access paths).
 
     Note: Does not commit. Caller must commit.
     """
@@ -493,6 +500,10 @@ def _batch_update_data_point_access(conn: sqlite3.Connection, dp_ids: list[str])
         f"last_accessed = ? WHERE id IN ({placeholders})",
         [timestamp] + list(dp_ids),
     )
+
+    # Skip salience reinforcement and neighbor boosting for passive loads
+    if passive:
+        return
 
     # Batch-fetch saliences to avoid N+1 queries
     salience_rows = conn.execute(
@@ -670,7 +681,7 @@ def _load_from_db(project_scope: str) -> str | None:
         # Access tracking for all served data_points
         if seen_ids:
             try:
-                _batch_update_data_point_access(conn, list(seen_ids))
+                _batch_update_data_point_access(conn, list(seen_ids), passive=True)
                 conn.commit()
             except Exception as e:
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
