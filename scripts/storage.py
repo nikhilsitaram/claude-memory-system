@@ -907,7 +907,10 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
             elif len(content_stripped.split()) <= 2:
                 should_delete = True
         if should_delete:
-            fts_delete(conn, dp_id)
+            try:
+                fts_delete(conn, dp_id)
+            except sqlite3.OperationalError:
+                pass
             conn.execute("DELETE FROM data_points WHERE id = ?", (dp_id,))
             stats["profiles_deleted"] += 1
 
@@ -950,7 +953,10 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
                     conn.execute(
                         "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
                     )
-                    fts_delete(conn, dp_id)
+                    try:
+                        fts_delete(conn, dp_id)
+                    except sqlite3.OperationalError:
+                        pass
                     stats["duplicates_soft_deleted"] += 1
                 consumed.add(id_a)
 
@@ -972,7 +978,10 @@ def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
             conn.execute(
                 "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
             )
-            fts_delete(conn, dp_id)
+            try:
+                fts_delete(conn, dp_id)
+            except sqlite3.OperationalError:
+                pass
             stats["stale_soft_deleted"] += 1
 
     conn.commit()
