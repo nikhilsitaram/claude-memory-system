@@ -146,6 +146,7 @@ __all__ = [
     "fts_search",
     # Maintenance
     "prune_session_contexts",
+    "cleanup_stale_data",
 ]
 
 
@@ -318,6 +319,12 @@ def ensure_db() -> sqlite3.Connection:
     except sqlite3.OperationalError as e:
         if "no such module: vec0" not in str(e):
             raise
+    # Drop legacy tables only when DB is already v3+ (safe) or fresh (no data to lose).
+    # On a v2 DB, chunks/nodes may contain the only copy of data — do not drop.
+    current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current_version >= 3 or current_version == 0:
+        conn.execute("DROP TABLE IF EXISTS chunks")
+        conn.execute("DROP TABLE IF EXISTS nodes")
     assert isinstance(SCHEMA_VERSION, int), 'SCHEMA_VERSION must be int'
     conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     conn.commit()
@@ -864,4 +871,133 @@ def query_provenance_chain(
     """, (data_point_id,)).fetchall()
     return [{"source_id": r[0], "target_id": r[1], "type": r[2],
              "reason": r[3], "depth": r[4]} for r in rows]
+
+
+def cleanup_stale_data(conn: sqlite3.Connection) -> dict:
+    """One-time cleanup of stale, wasteful, and duplicate data.
+
+    Removes:
+    1. Profile data_points with HTML comment placeholders or bare tags
+    2. Near-duplicate memory clusters (keeps highest evidence_count)
+    3. Stale project memories matching known completed-work patterns
+
+    Args:
+        conn: Open SQLite connection (v3 schema).
+
+    Returns:
+        Dict with counts: {profiles_deleted, duplicates_soft_deleted, stale_soft_deleted}
+    """
+    from simhash import DEFAULT_HAMMING_THRESHOLD, compute_simhash, hamming_distance
+
+    stats = {"profiles_deleted": 0, "duplicates_soft_deleted": 0, "stale_soft_deleted": 0}
+
+    # 1. Delete profile waste: HTML comments and bare tags
+    profiles = conn.execute(
+        "SELECT id, content FROM data_points WHERE scope='user' AND type='profile' AND salience > 0"
+    ).fetchall()
+
+    for dp_id, content in profiles:
+        should_delete = False
+        if not content:
+            should_delete = True
+        else:
+            content_stripped = content.strip()
+            if content_stripped.startswith("<!--"):
+                should_delete = True
+            elif len(content_stripped.split()) <= 2:
+                should_delete = True
+        if should_delete:
+            try:
+                fts_delete(conn, dp_id)
+            except sqlite3.OperationalError:
+                pass
+            conn.execute("DELETE FROM data_points WHERE id = ?", (dp_id,))
+            stats["profiles_deleted"] += 1
+
+    # 2. Near-duplicate cluster cleanup
+    scopes = conn.execute(
+        "SELECT DISTINCT scope FROM data_points WHERE type='memory' AND salience > 0"
+    ).fetchall()
+
+    for (scope,) in scopes:
+        memories = conn.execute(
+            "SELECT id, content, simhash, evidence_count, created_at "
+            "FROM data_points WHERE type='memory' AND scope=? AND salience > 0",
+            (scope,),
+        ).fetchall()
+
+        mem_list = []
+        for dp_id, content, sh, ev_count, created_at in memories:
+            if sh is None and content:
+                sh = compute_simhash(content)
+            mem_list.append((dp_id, content, sh or 0, ev_count or 1, created_at))
+
+        consumed = set()
+        for i, (id_a, _, sh_a, ev_a, ca_a) in enumerate(mem_list):
+            if id_a in consumed:
+                continue
+            cluster = [(id_a, ev_a, ca_a)]
+            for j in range(i + 1, len(mem_list)):
+                id_b, _, sh_b, ev_b, ca_b = mem_list[j]
+                if id_b in consumed:
+                    continue
+                unsigned_a = sh_a & 0xFFFFFFFFFFFFFFFF
+                unsigned_b = sh_b & 0xFFFFFFFFFFFFFFFF
+                if hamming_distance(unsigned_a, unsigned_b) <= DEFAULT_HAMMING_THRESHOLD:
+                    cluster.append((id_b, ev_b, ca_b))
+                    consumed.add(id_b)
+
+            if len(cluster) > 1:
+                cluster.sort(key=lambda x: (-x[1], x[2]))
+                for dp_id, _, _ in cluster[1:]:
+                    conn.execute(
+                        "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+                    )
+                    try:
+                        fts_delete(conn, dp_id)
+                    except sqlite3.OperationalError:
+                        pass
+                    stats["duplicates_soft_deleted"] += 1
+                consumed.add(id_a)
+
+    # 3. Stale project memory patterns
+    stale_patterns = [
+        "%resume backfill%",
+        "%Phase A%vector search%",
+        "%Phase A%SimHash%",
+        "%Phase A%PR #66%",
+        "%Phase B%PR review%",
+    ]
+    for pattern in stale_patterns:
+        rows = conn.execute(
+            "SELECT id FROM data_points WHERE type='memory' AND salience > 0 "
+            "AND content LIKE ? COLLATE NOCASE",
+            (pattern,),
+        ).fetchall()
+        for (dp_id,) in rows:
+            conn.execute(
+                "UPDATE data_points SET salience = 0.0 WHERE id = ?", (dp_id,)
+            )
+            try:
+                fts_delete(conn, dp_id)
+            except sqlite3.OperationalError:
+                pass
+            stats["stale_soft_deleted"] += 1
+
+    conn.commit()
+    return stats
+
+
+if __name__ == "__main__":
+    import argparse as _argparse
+    _parser = _argparse.ArgumentParser(description="Storage utilities")
+    _parser.add_argument("--cleanup", action="store_true", help="Run one-time data cleanup")
+    _args = _parser.parse_args()
+    if _args.cleanup:
+        _conn = get_db()
+        try:
+            _stats = cleanup_stale_data(_conn)
+            print(f"Cleanup complete: {_stats}")
+        finally:
+            close_db(_conn)
 

@@ -960,6 +960,69 @@ class TestV3SessionContextScope:
         assert written_scopes[0] == "myproject"
 
 
+# =============================================================================
+# TestPreRetrievalEnhancement — A4: Scope-filtered memory injection
+# =============================================================================
+
+
+class TestPreRetrievalEnhancement:
+    """Tests for _inject_scope_memories: top-N salience-ranked memory injection."""
+
+    def test_scope_memories_injected_into_prompt(self, tmp_path):
+        """Memories for the target scope appear under '## Existing Memories for scope:' before '## Transcripts'."""
+        from synthesis_cron import _inject_scope_memories
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        conn.execute(
+            "INSERT INTO data_points (id, type, content, scope, salience, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("mem-1", "memory", "Use pytest fixtures for test isolation", "my-project", 0.9, now),
+        )
+        conn.execute(
+            "INSERT INTO data_points (id, type, content, scope, salience, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("mem-2", "memory", "SQLite WAL mode improves concurrency", "my-project", 0.7, now),
+        )
+        conn.execute(
+            "INSERT INTO data_points (id, type, content, scope, salience, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("mem-3", "memory", "Always close DB connections in finally blocks", "my-project", 0.5, now),
+        )
+        conn.commit()
+
+        prompt = "Some preamble.\n\n## Transcripts\n\nSome transcript content."
+        result = _inject_scope_memories(conn, prompt, "my-project")
+
+        assert "## Existing Memories for scope: my-project" in result
+        assert "[mem-1]" in result
+        assert "[mem-2]" in result
+        assert "[mem-3]" in result
+        memories_pos = result.index("## Existing Memories for scope: my-project")
+        transcripts_pos = result.index("## Transcripts")
+        assert memories_pos < transcripts_pos
+
+    def test_scope_memories_limited_to_10(self, tmp_path):
+        """When more than 10 memories exist, only the top 10 by salience are injected."""
+        from synthesis_cron import _inject_scope_memories
+
+        conn = _make_v3_db_for_cron(tmp_path)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for i in range(15):
+            conn.execute(
+                "INSERT INTO data_points (id, type, content, scope, salience, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"mem-{i:03d}", "memory", f"Memory fact number {i}", "my-project", 1.0 - i * 0.05, now),
+            )
+        conn.commit()
+
+        prompt = "Preamble.\n\n## Transcripts\n\nTranscript content."
+        result = _inject_scope_memories(conn, prompt, "my-project", limit=10)
+
+        injected_ids = [f"mem-{i:03d}" for i in range(15) if f"[mem-{i:03d}]" in result]
+        assert len(injected_ids) == 10
+        for i in range(10):
+            assert f"[mem-{i:03d}]" in result
+        for i in range(10, 15):
+            assert f"[mem-{i:03d}]" not in result
+
+
 # ---------------------------------------------------------------------------
 # Consolidation gate tests
 # ---------------------------------------------------------------------------

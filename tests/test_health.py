@@ -273,3 +273,71 @@ class TestExtendedHealthReport:
         report = HealthReport(total_chunks=10, cold_chunks=0, hot_chunks=10, last_synthesis=old_ts)
         alerts = health_alerts(report)
         assert any("no synthesis" in a.lower() for a in alerts)
+
+
+# =============================================================================
+# A1: Fix false health alert for v3 DBs with legacy tables
+# =============================================================================
+
+
+class TestHealthV3LegacyTableBug:
+    """Regression tests: v3 DBs with leftover chunks/nodes tables should
+    query data_points, not the empty legacy tables."""
+
+    def _make_v3_db(self, tmp_path):
+        from unittest.mock import patch
+
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with patch("storage.get_db_path", return_value=db_path),              patch("storage.get_memory_dir", return_value=tmp_path),              patch("health.get_db_path", return_value=db_path):
+            conn = ensure_db()
+        return conn
+
+    def test_v3_db_with_empty_chunks_table_not_empty_alert(self, tmp_path):
+        """A v3 DB with an empty legacy chunks table should report total_chunks
+        from data_points and NOT trigger a 'DB empty' alert."""
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_v3_db(tmp_path)
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS chunks "
+            "(id TEXT, salience REAL, source_type TEXT)"
+        )
+
+        for i in range(5):
+            insert_data_point(conn, DataPointRow(
+                type="memory", content=f"mem {i}",
+                scope="global", salience=0.5,
+            ))
+        conn.commit()
+
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+            alerts = health_alerts(report)
+
+        assert report.total_chunks == 5
+        assert not any("empty" in a.lower() for a in alerts)
+        conn.close()
+
+    def test_v3_db_with_legacy_nodes_table_uses_data_points(self, tmp_path):
+        """A v3 DB with an empty legacy nodes table should count entity
+        data_points for graph_nodes, not the empty nodes table."""
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_v3_db(tmp_path)
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS nodes (id TEXT, name TEXT)"
+        )
+
+        for i in range(2):
+            insert_data_point(conn, DataPointRow(
+                type="entity", name=f"entity_{i}",
+                content=f"entity {i}", scope="global", salience=0.5,
+            ))
+        conn.commit()
+
+        with mock.patch("health.get_db_path", return_value=tmp_path / "memory.db"):
+            report = health_report(conn)
+
+        assert report.graph_nodes == 2
+        conn.close()

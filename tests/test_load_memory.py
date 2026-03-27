@@ -13,6 +13,7 @@ from unittest import mock
 
 import pytest
 from load_memory import (
+    _batch_update_data_point_access,
     _build_embedded_files,
     _build_preextracted_prompt,
     _build_synthesis_instructions_v3,
@@ -1403,6 +1404,87 @@ class TestSalienceReinforcement:
 
         new_salience = conn.execute("SELECT salience FROM data_points WHERE id = ?", (entity_id,)).fetchone()[0]
         assert new_salience == original_salience, "Invalidated edge should not cause boost"
+        conn.close()
+
+
+# =============================================================================
+# Passive vs Active Reinforcement Tests (A5)
+# =============================================================================
+
+
+class TestPassiveReinforcement:
+    """Tests for passive parameter in _batch_update_data_point_access."""
+
+    def _make_v3_db(self, tmp_path):
+        """Create a v3 DB for testing passive reinforcement."""
+        with mock.patch("storage.get_db_path", return_value=tmp_path / "memory.db"), \
+             mock.patch("storage.get_memory_dir", return_value=tmp_path):
+            conn = ensure_db()
+        return conn
+
+    def test_passive_load_skips_salience_reinforcement(self, tmp_path):
+        """Passive access updates access_count but does not change salience."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.7)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        _batch_update_data_point_access(conn, [dp_id], passive=True)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT salience, access_count FROM data_points WHERE id = ?", (dp_id,)
+        ).fetchone()
+        assert row[0] == 0.7, "Salience should remain unchanged for passive access"
+        assert row[1] == 1, "access_count should still be incremented"
+        conn.close()
+
+    def test_active_load_applies_salience_reinforcement(self, tmp_path):
+        """Active access (passive=False) increases salience via reinforcement."""
+        conn = self._make_v3_db(tmp_path)
+        dp = DataPointRow(type="memory", content="test fact", scope="global", salience=0.7)
+        dp_id = insert_data_point(conn, dp)
+        conn.commit()
+
+        _batch_update_data_point_access(conn, [dp_id], passive=False)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT salience, access_count FROM data_points WHERE id = ?", (dp_id,)
+        ).fetchone()
+        assert row[0] > 0.7, "Salience should increase for active access"
+        assert row[1] == 1, "access_count should be incremented"
+        conn.close()
+
+    def test_passive_load_skips_neighbor_boosting(self, tmp_path):
+        """Passive access does not boost salience of connected entity data_points."""
+        conn = self._make_v3_db(tmp_path)
+        memory_dp = DataPointRow(
+            type="memory", content="Use Redis for caching", scope="global", salience=0.6
+        )
+        memory_id = insert_data_point(conn, memory_dp)
+        entity_dp = DataPointRow(
+            type="entity", name="Redis", content="Redis", scope="global", salience=0.4
+        )
+        entity_id = insert_data_point(conn, entity_dp)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        insert_edge(
+            conn,
+            EdgeRow(source=memory_id, target=entity_id, type="mentions", weight=1.0, created_at=now),
+        )
+        conn.commit()
+
+        original_salience = conn.execute(
+            "SELECT salience FROM data_points WHERE id = ?", (entity_id,)
+        ).fetchone()[0]
+
+        _batch_update_data_point_access(conn, [memory_id], passive=True)
+        conn.commit()
+
+        new_salience = conn.execute(
+            "SELECT salience FROM data_points WHERE id = ?", (entity_id,)
+        ).fetchone()[0]
+        assert new_salience == original_salience, "Entity salience should not change for passive access"
         conn.close()
 
 

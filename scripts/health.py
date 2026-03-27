@@ -84,7 +84,20 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     }
 
     # Chunk/memory statistics
-    if 'chunks' in tables:
+    if report.schema_version >= 3 and 'data_points' in tables:
+        # v3+ schema: query data_points table with type filter
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COALESCE(ROUND(AVG(salience), 3), 0) as avg_sal,
+                SUM(CASE WHEN salience > 0.7 THEN 1 ELSE 0 END) as hot,
+                SUM(CASE WHEN salience BETWEEN 0.1 AND 0.7 THEN 1 ELSE 0 END) as warm,
+                SUM(CASE WHEN salience < 0.1 THEN 1 ELSE 0 END) as cold,
+                SUM(CASE WHEN source_type = 'ltm' THEN 1 ELSE 0 END) as ltm,
+                SUM(CASE WHEN source_type = 'daily' THEN 1 ELSE 0 END) as daily
+            FROM data_points WHERE type = 'memory'
+        """).fetchone()
+    elif 'chunks' in tables:
         # v2 schema: query chunks table
         row = conn.execute("""
             SELECT
@@ -98,7 +111,7 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
             FROM chunks
         """).fetchone()
     elif 'data_points' in tables:
-        # v3+ schema: query data_points table with type filter
+        # Fallback for v3 without version pragma (shouldn't happen)
         row = conn.execute("""
             SELECT
                 COUNT(*) as total,
@@ -123,12 +136,19 @@ def health_report(conn: sqlite3.Connection) -> HealthReport:
     report.daily_chunks = row[6] or 0
 
     # Graph statistics
-    if 'nodes' in tables:
+    if report.schema_version >= 3 and 'data_points' in tables:
+        # v3+: nodes are data_points with type='entity'
+        report.graph_nodes = (
+            conn.execute(
+                "SELECT COUNT(*) FROM data_points WHERE type = 'entity'"
+            ).fetchone()[0] or 0
+        )
+    elif 'nodes' in tables:
         report.graph_nodes = (
             conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] or 0
         )
     elif 'data_points' in tables:
-        # v3+: nodes are data_points with type='entity'
+        # Fallback for v3 without version pragma
         report.graph_nodes = (
             conn.execute(
                 "SELECT COUNT(*) FROM data_points WHERE type = 'entity'"

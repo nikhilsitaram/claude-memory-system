@@ -15,10 +15,13 @@ import pytest
 
 from storage import (
     SCHEMA_VERSION,
+    DataPointRow,
     EdgeRow,
     close_db,
+    cleanup_stale_data,
     ensure_db,
     get_db,
+    insert_data_point,
     insert_edge,
     invalidate_edge,
     query_current_edges,
@@ -1285,3 +1288,198 @@ class TestDBFixtureIsolation:
             f"db fixture created database at {db_path}, under ~/.claude/memory/ -- "
             "test data would corrupt the production database!"
         )
+
+
+# ============================================================================
+# Legacy table cleanup
+# ============================================================================
+
+
+class TestLegacyTableCleanup:
+    """Tests that ensure_db() drops legacy chunks and nodes tables."""
+
+    def test_ensure_db_drops_chunks_table(self, db_dir):
+        """Pre-existing chunks table should be dropped by ensure_db()."""
+        db_path = db_dir / "memory.db"
+        pre_conn = sqlite3.connect(str(db_path))
+        pre_conn.execute("CREATE TABLE chunks (id TEXT, salience REAL, source_type TEXT)")
+        pre_conn.execute("INSERT INTO chunks VALUES ('c1', 1.0, 'test')")
+        pre_conn.commit()
+        pre_conn.close()
+
+        conn = ensure_db()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "chunks" not in tables
+        close_db(conn)
+
+    def test_ensure_db_drops_nodes_table(self, db_dir):
+        """Pre-existing nodes table should be dropped by ensure_db()."""
+        db_path = db_dir / "memory.db"
+        pre_conn = sqlite3.connect(str(db_path))
+        pre_conn.execute("CREATE TABLE nodes (id TEXT, name TEXT)")
+        pre_conn.execute("INSERT INTO nodes VALUES ('n1', 'test_node')")
+        pre_conn.commit()
+        pre_conn.close()
+
+        conn = ensure_db()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "nodes" not in tables
+        close_db(conn)
+
+
+# ============================================================================
+# Stale data cleanup
+# ============================================================================
+
+
+class TestCleanupStaleData:
+    """Tests for cleanup_stale_data() one-time cleanup function."""
+
+    def test_deletes_profile_html_comments(self, shared_db):
+        """HTML comment placeholders in profile data_points should be hard-deleted."""
+        now = "2026-03-26T00:00:00Z"
+        ids = []
+        for content in [
+            "<!-- Add your preferred programming languages here -->",
+            "<!-- Communication style notes -->",
+        ]:
+            dp_id = insert_data_point(shared_db, DataPointRow(
+                type="profile", scope="user", content=content,
+                created_at=now, source_type="system",
+            ))
+            ids.append(dp_id)
+        real_id = insert_data_point(shared_db, DataPointRow(
+            type="profile", scope="user",
+            content="Prefers concise, direct communication",
+            created_at=now, source_type="system",
+        ))
+        shared_db.commit()
+
+        stats = cleanup_stale_data(shared_db)
+
+        assert stats["profiles_deleted"] >= 2
+        for dp_id in ids:
+            row = shared_db.execute(
+                "SELECT id FROM data_points WHERE id = ?", (dp_id,)
+            ).fetchone()
+            assert row is None, f"HTML comment entry {dp_id} should be hard-deleted"
+        real_row = shared_db.execute(
+            "SELECT id FROM data_points WHERE id = ?", (real_id,)
+        ).fetchone()
+        assert real_row is not None, "Real content entry should survive"
+
+    def test_deletes_profile_bare_tags(self, shared_db):
+        """Bare tag entries (<= 2 words) in profile should be hard-deleted."""
+        now = "2026-03-26T00:00:00Z"
+        bare_ids = []
+        for content in ["Python-3.13", "claude-code", "macOS ARM"]:
+            dp_id = insert_data_point(shared_db, DataPointRow(
+                type="profile", scope="user", content=content,
+                created_at=now, source_type="system",
+            ))
+            bare_ids.append(dp_id)
+        real_id = insert_data_point(shared_db, DataPointRow(
+            type="profile", scope="user",
+            content="Uses Python 3.13 with pyenv for version management",
+            created_at=now, source_type="system",
+        ))
+        shared_db.commit()
+
+        stats = cleanup_stale_data(shared_db)
+
+        assert stats["profiles_deleted"] >= 3
+        for dp_id in bare_ids:
+            row = shared_db.execute(
+                "SELECT id FROM data_points WHERE id = ?", (dp_id,)
+            ).fetchone()
+            assert row is None, f"Bare tag entry {dp_id} should be hard-deleted"
+        real_row = shared_db.execute(
+            "SELECT id FROM data_points WHERE id = ?", (real_id,)
+        ).fetchone()
+        assert real_row is not None, "Descriptive entry should survive"
+
+    def test_soft_deletes_near_duplicate_clusters(self, shared_db):
+        """Near-duplicate cluster should keep highest evidence_count, soft-delete rest.
+
+        SimHash values are not pre-computed; cleanup_stale_data computes them
+        on-the-fly when simhash IS NULL, which avoids the SQLite signed-int
+        overflow that would occur if we stored unsigned 64-bit values directly.
+
+        Uses long texts with minimal suffix variation to ensure simhash
+        distances stay within DEFAULT_HAMMING_THRESHOLD (3).
+        """
+        now = "2026-03-26T00:00:00Z"
+        base = ("Always configure the git init command to set the default branch "
+                "name to main when creating new repositories on any machine or "
+                "platform that you work on regularly and consistently across "
+                "all environments")
+        variations = [
+            base,
+            base + " today",
+            base + " now",
+            base + ".",
+            base + " yes",
+        ]
+        evidence_counts = [3, 1, 1, 2, 1]
+        ids = []
+        for text, ev in zip(variations, evidence_counts):
+            dp_id = insert_data_point(shared_db, DataPointRow(
+                type="memory", scope="global", content=text,
+                created_at=now, source_type="synthesis",
+                evidence_count=ev,
+            ))
+            ids.append(dp_id)
+        shared_db.commit()
+
+        stats = cleanup_stale_data(shared_db)
+
+        survivor = shared_db.execute(
+            "SELECT id, salience FROM data_points WHERE id = ?", (ids[0],)
+        ).fetchone()
+        assert survivor is not None
+        assert survivor[1] > 0, "Highest evidence_count entry should survive"
+
+        assert stats["duplicates_soft_deleted"] >= 4
+        for dp_id in ids[1:]:
+            row = shared_db.execute(
+                "SELECT salience FROM data_points WHERE id = ?", (dp_id,)
+            ).fetchone()
+            assert row is not None, "Near-duplicate should still exist (soft-deleted)"
+            assert row[0] == 0.0, f"Near-duplicate {dp_id} should have salience=0.0"
+
+    def test_soft_deletes_stale_project_memories(self, shared_db):
+        """Known stale project memory patterns should be soft-deleted."""
+        now = "2026-03-26T00:00:00Z"
+        stale_contents = [
+            "Resume backfill from session abc123",
+            "Phase A: vector search integration (PR #66)",
+            "Phase A: SimHash near-duplicate detection implemented",
+        ]
+        ids = []
+        for content in stale_contents:
+            dp_id = insert_data_point(shared_db, DataPointRow(
+                type="memory", scope="project-test", content=content,
+                created_at=now, source_type="synthesis",
+            ))
+            ids.append(dp_id)
+        shared_db.commit()
+
+        stats = cleanup_stale_data(shared_db)
+
+        assert stats["stale_soft_deleted"] >= 3
+        for dp_id in ids:
+            row = shared_db.execute(
+                "SELECT salience FROM data_points WHERE id = ?", (dp_id,)
+            ).fetchone()
+            assert row is not None, "Stale entry should still exist (soft-deleted)"
+            assert row[0] == 0.0, f"Stale entry {dp_id} should have salience=0.0"
