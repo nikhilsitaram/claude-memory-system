@@ -184,3 +184,105 @@ class TestMain:
                 main()
         captured = capsys.readouterr()
         assert captured.out == ""
+
+
+class TestInjectionLogging:
+    """Tests for injection logging integration in main()."""
+
+    def _make_mock_dp(self, dp_id="dp-test-1", content="Redis requires explicit TTL settings", scope="global"):
+        mock_dp = MagicMock()
+        mock_dp.id = dp_id
+        mock_dp.content = content
+        mock_dp.scope = scope
+        mock_dp.salience = 0.8
+        mock_dp.certainty = 4
+        mock_scored = MagicMock()
+        mock_scored.data_point = mock_dp
+        return mock_scored
+
+    def test_main_calls_log_prompt_recall(self, tmp_path, capsys):
+        """main() calls log_prompt_recall with correct arguments after search loop."""
+        from prompt_recall import main
+
+        mock_scored = self._make_mock_dp()
+        mock_log = MagicMock()
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_scored]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x), \
+             patch.dict("sys.modules", {"injection_log": MagicMock(log_prompt_recall=mock_log)}):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-log-session",
+            })
+            main()
+
+        mock_log.assert_called_once()
+        call_kwargs = mock_log.call_args
+        assert call_kwargs[1]["session_id"] == "test-log-session"
+        assert call_kwargs[1]["prompt_preview"] == "How should I configure Redis caching for this project?"[:80]
+        assert call_kwargs[1]["candidates"] == 1
+        assert len(call_kwargs[1]["injected"]) == 1
+        assert call_kwargs[1]["injected"][0]["id"] == "dp-test-1"
+        assert call_kwargs[1]["injected"][0]["scope"] == "global"
+        assert isinstance(call_kwargs[1]["filtered"], list)
+        assert call_kwargs[1]["latency_ms"] >= 0
+
+    def test_main_tracks_filtered_deduped_candidates(self, tmp_path, capsys):
+        """Deduped memories appear in the filtered list with reason='deduped'."""
+        from prompt_recall import main, record_injection
+
+        state_file = tmp_path / ".prompt-recall-state-test-dedup"
+        record_injection("dp-dedup-1", state_file, prompt_index=0)
+
+        mock_fresh = self._make_mock_dp(dp_id="dp-fresh-1", content="Fresh memory content", scope="project")
+        mock_dedup = self._make_mock_dp(dp_id="dp-dedup-1", content="Already injected memory", scope="global")
+        mock_log = MagicMock()
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_dedup, mock_fresh]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x), \
+             patch.dict("sys.modules", {"injection_log": MagicMock(log_prompt_recall=mock_log)}):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-dedup",
+            })
+            main()
+
+        mock_log.assert_called_once()
+        call_kwargs = mock_log.call_args[1]
+        assert len(call_kwargs["filtered"]) == 1
+        assert call_kwargs["filtered"][0]["id"] == "dp-dedup-1"
+        assert call_kwargs["filtered"][0]["reason"] == "deduped"
+        assert call_kwargs["filtered"][0]["content_preview"] == "Already injected memory"[:80]
+        assert len(call_kwargs["injected"]) == 1
+        assert call_kwargs["injected"][0]["id"] == "dp-fresh-1"
+
+    def test_main_still_works_when_injection_log_missing(self, tmp_path, capsys):
+        """main() still injects memories even when injection_log is not importable."""
+        from prompt_recall import main
+
+        mock_scored = self._make_mock_dp()
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_scored]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x), \
+             patch.dict("sys.modules", {"injection_log": None}):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-no-log",
+            })
+            main()
+
+        captured = capsys.readouterr()
+        assert "[memory]" in captured.out
+        assert "Redis" in captured.out
