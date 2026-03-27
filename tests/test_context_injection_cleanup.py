@@ -11,6 +11,11 @@ from unittest import mock
 
 import pytest
 from simhash import compute_simhash
+
+def _to_signed(val):
+    """Convert unsigned 64-bit SimHash to signed for SQLite storage."""
+    return val - (1 << 64) if val >= (1 << 63) else val
+
 from storage import (
     DataPointRow,
     cleanup_stale_data,
@@ -79,20 +84,17 @@ class TestNearDuplicateCleanup:
         conn = _make_db(tmp_path)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        variants = [
-            "Always use git config --global init.defaultBranch main",
-            "Use git config --global init.defaultBranch main for new repos",
-            "Configure git init default branch to main globally",
-            "Set git default branch to main: git config --global init.defaultBranch main",
-            "git config --global init.defaultBranch main avoids master/main confusion",
-        ]
+        base = ("Always configure the git init command to set the default branch "
+                "name to main when creating new repositories on any machine or "
+                "platform that you work on regularly and consistently across "
+                "all environments")
+        variants = [base, base + " today", base + " now", base + ".", base + " yes"]
         ids = []
         evidence_counts = [3, 1, 1, 2, 1]
         for content, ev in zip(variants, evidence_counts):
             dp_id = insert_data_point(conn, DataPointRow(
                 type="memory", content=content, scope="global",
-                salience=0.7, simhash=compute_simhash(content),
-                evidence_count=ev, created_at=now,
+                salience=0.7, evidence_count=ev, created_at=now,
             ))
             ids.append(dp_id)
         conn.commit()
