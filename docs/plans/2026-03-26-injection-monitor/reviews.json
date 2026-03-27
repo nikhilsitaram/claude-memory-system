@@ -1,4 +1,5 @@
 [
   {"type":"design-review","scope":"design","iteration":1,"issues_found":6,"severity":{"critical":0,"high":0,"medium":4,"low":2},"actionable":6,"dismissed":0,"dismissals":[],"fixed":6,"remaining":0,"verdict":"fail","timestamp":"2026-03-27T04:55:09Z"},
-  {"type":"design-review","scope":"design","iteration":2,"issues_found":3,"severity":{"critical":0,"high":0,"medium":2,"low":1},"actionable":3,"dismissed":0,"dismissals":[],"fixed":3,"remaining":0,"verdict":"pass","timestamp":"2026-03-27T05:00:00Z"}
+  {"type":"design-review","scope":"design","iteration":2,"issues_found":3,"severity":{"critical":0,"high":0,"medium":2,"low":1},"actionable":3,"dismissed":0,"dismissals":[],"fixed":3,"remaining":0,"verdict":"pass","timestamp":"2026-03-27T05:00:00Z"},
+  {"type":"plan-review","scope":"plan","iteration":1,"issues_found":7,"severity":{"critical":0,"high":1,"medium":4,"low":2},"actionable":7,"dismissed":0,"dismissals":[],"fixed":7,"remaining":0,"verdict":"fail","timestamp":"2026-03-27T05:15:00Z"}
 ]
