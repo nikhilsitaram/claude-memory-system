@@ -17,7 +17,7 @@
         {
           "id": "A1",
           "name": "Create injection_log.py logging module with rotation",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [
@@ -37,7 +37,7 @@
         {
           "id": "A2",
           "name": "Register injection_log.py in install.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
