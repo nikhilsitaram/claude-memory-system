@@ -4,7 +4,12 @@
     "scope": "design",
     "iteration": 1,
     "issues_found": 7,
-    "severity": { "critical": 1, "high": 3, "medium": 2, "low": 1 },
+    "severity": {
+      "critical": 1,
+      "high": 3,
+      "medium": 2,
+      "low": 1
+    },
     "actionable": 7,
     "dismissed": 0,
     "dismissals": [],
@@ -18,7 +23,12 @@
     "scope": "design",
     "iteration": 2,
     "issues_found": 2,
-    "severity": { "critical": 0, "high": 0, "medium": 0, "low": 2 },
+    "severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 2
+    },
     "actionable": 2,
     "dismissed": 0,
     "dismissals": [],
@@ -26,5 +36,30 @@
     "remaining": 0,
     "verdict": "pass",
     "timestamp": "2026-03-26T21:45:00Z"
+  },
+  {
+    "type": "plan-review",
+    "scope": "plan",
+    "iteration": 1,
+    "issues_found": 7,
+    "severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 5
+    },
+    "actionable": 2,
+    "dismissed": 5,
+    "dismissals": [
+      "__import__ hack (low, style)",
+      "consumed-set ordering (low, correct as-is)",
+      "line number drift (low, function names sufficient)",
+      "injection point landmark (low, executor can find)",
+      "source_sessions merge scope (low, noted in task)"
+    ],
+    "fixed": 2,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-26T22:00:00Z"
   }
 ]
