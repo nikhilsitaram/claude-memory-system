@@ -57,7 +57,9 @@
       "letter": "B",
       "name": "Hook Integrations and Web UI",
       "status": "Not Started",
-      "depends_on": ["A"],
+      "depends_on": [
+        "A"
+      ],
       "rationale": "Hooks import injection_log.py from Phase A. load_memory, prompt_recall, web_app, and index.html are all independent file sets that can be developed in parallel within this phase.",
       "tasks": [
         {
@@ -75,7 +77,7 @@
             ]
           },
           "verification": "python3 -m pytest tests/test_load_memory.py -v",
-          "done_when": "_load_from_db returns tuple (formatted_text, tiers_metadata, health_alerts) instead of plain string. tiers_metadata is a list of dicts with name, count, tokens_est, ids. health_alerts is a list of alert strings from health_report(). main() captures stdin JSON payload to extract sessionId (fallback: session-{int(time.time())}). main() uses top-level import time (no inline import). main() calls log_session_start() with health_alerts after _load_from_db returns. main() calls rotate_log() at the start. All existing tests updated for new return type (grep for _load_from_db in test file; update TestSmartLoading and TestWorkingDayLoading — all methods that assign result = _load_from_db(...) and assert on it as a string). 4+ new tests pass."
+          "done_when": "_load_from_db returns tuple (formatted_text, tiers_metadata, health_alerts) instead of plain string. tiers_metadata is a list of dicts with name, count, tokens_est, ids. health_alerts is a list of alert strings from health_report(). main() captures stdin JSON payload to extract sessionId (fallback: session-{int(time.time())}). main() uses top-level import time (no inline import). main() calls log_session_start() with health_alerts after _load_from_db returns. main() calls rotate_log() at the start. All existing tests updated for new return type (grep for _load_from_db in test file; update TestSmartLoading and TestWorkingDayLoading \u2014 all methods that assign result = _load_from_db(...) and assert on it as a string). 4+ new tests pass."
         },
         {
           "id": "B2",
