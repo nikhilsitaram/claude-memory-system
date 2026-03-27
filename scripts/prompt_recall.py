@@ -172,10 +172,10 @@ def main():
         from injection_log import log_prompt_recall
         log_prompt_recall(
             session_id=session_id,
-            prompt_preview=prompt[:80],
+            prompt_preview=sanitize_secrets(prompt[:80]),
             candidates=len(results) if 'results' in locals() else 0,
-            injected=injected_log if 'injected_log' in locals() else [],
-            filtered=filtered_log if 'filtered_log' in locals() else [],
+            injected=injected_log,
+            filtered=filtered_log,
             latency_ms=elapsed * 1000,
         )
     except Exception:

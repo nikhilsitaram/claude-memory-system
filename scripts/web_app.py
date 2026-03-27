@@ -277,6 +277,8 @@ def _get_injection_log(since=None, session_id=None):
     if since:
         try:
             since_dt = datetime.fromisoformat(since)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
         except ValueError:
             pass
     return read_log(since=since_dt, session_id=session_id)

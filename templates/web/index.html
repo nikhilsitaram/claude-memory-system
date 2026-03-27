@@ -527,7 +527,7 @@
                 Auto-scroll
             </label>
         </div>
-        <div id="monitor-timeline"></div>
+        <div id="monitor-timeline" style="max-height:70vh;overflow-y:auto"></div>
         <div id="monitor-empty" class="empty-state">No injection log entries yet. Start a Claude session to see activity.</div>
     </section>
 </div>
@@ -1013,7 +1013,7 @@
         if (isSession && entry.tiers) {
             var maxTokens = 1;
             for (var t = 0; t < entry.tiers.length; t++) {
-                if ((entry.tiers[t].tokens || 0) > maxTokens) maxTokens = entry.tiers[t].tokens;
+                if ((entry.tiers[t].tokens_est || 0) > maxTokens) maxTokens = entry.tiers[t].tokens_est;
             }
             for (var t = 0; t < entry.tiers.length; t++) {
                 var tier = entry.tiers[t];

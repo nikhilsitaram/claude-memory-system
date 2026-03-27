@@ -21,7 +21,7 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
-from memory_utils import get_memory_dir, load_settings  # noqa: E402
+from memory_utils import FileLock, get_memory_dir, load_settings  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -152,11 +152,16 @@ def rotate_log(
         if not log_path.exists():
             return
 
-        lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
-        if len(lines) <= max_lines:
+        lock = FileLock(log_path.parent / ".injection-log.lock", timeout=2)
+        if not lock.acquire():
             return
-
-        log_path.write_text("".join(lines[-keep_lines:]), encoding="utf-8")
+        try:
+            lines = log_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            if len(lines) <= max_lines:
+                return
+            log_path.write_text("".join(lines[-keep_lines:]), encoding="utf-8")
+        finally:
+            lock.release()
     except Exception:
         pass
 
@@ -202,16 +207,14 @@ def read_log(
             except (ValueError, TypeError):
                 continue
 
-            if ts < since:
+            if ts <= since:
                 continue
 
             if session_id is not None and entry.get("session_id") != session_id:
                 continue
 
             results.append(entry)
-            if len(results) >= max_entries:
-                break
 
-        return results
+        return results[-max_entries:]
     except Exception:
         return []
