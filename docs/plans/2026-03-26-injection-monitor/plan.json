@@ -65,7 +65,7 @@
         {
           "id": "B1",
           "name": "Integrate injection logging into load_memory.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
@@ -99,7 +99,7 @@
         {
           "id": "B3",
           "name": "Add /api/injection-log endpoint to web_app.py",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
