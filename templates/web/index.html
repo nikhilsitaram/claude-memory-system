@@ -194,6 +194,106 @@
         .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a0a8c0; }
         .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
 
+        /* ---- Monitor ---- */
+        .monitor-entry {
+            background: #1a1d2e;
+            border: 1px solid #2d3052;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+        }
+        .entry-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: #6b7494;
+        }
+        .hook-badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+        .hook-badge-session { background: #1e2d6e; color: #7c8cff; }
+        .hook-badge-recall  { background: #1a3d2a; color: #4ade80; }
+
+        .monitor-tier {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        .tier-name {
+            width: 130px;
+            color: #a0a8c0;
+            text-align: right;
+            flex-shrink: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tier-bar {
+            flex: 1;
+            background: #252840;
+            border-radius: 4px;
+            height: 12px;
+            overflow: hidden;
+        }
+        .tier-fill {
+            height: 12px;
+            border-radius: 4px;
+            background: #7c8cff;
+            transition: width 0.3s;
+        }
+        .tier-count {
+            width: 70px;
+            color: #6b7494;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+
+        .monitor-ids {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        .monitor-id-chip {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: monospace;
+            transition: opacity 0.15s;
+        }
+        .monitor-id-chip:hover { opacity: 0.8; }
+        .monitor-injected { background: #1a3d2a; color: #4ade80; }
+        .monitor-filtered  { background: #252840; color: #6b7494; }
+
+        .monitor-prompt-preview {
+            font-size: 12px;
+            color: #a0a8c0;
+            background: #13162a;
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .monitor-latency {
+            font-size: 11px;
+            color: #6b7494;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
         /* ---- Modal ---- */
         #modal-overlay {
             display: none;
@@ -327,6 +427,7 @@
     <button onclick="showSection('browse')">Browse</button>
     <button onclick="showSection('search')">Search</button>
     <button onclick="showSection('graph')">Graph</button>
+    <button onclick="showSection('monitor')">Monitor</button>
 </div>
 
 <div id="main">
@@ -412,6 +513,23 @@
             <div class="legend-item"><div class="legend-dot" style="background:#facc15"></div>profile</div>
         </div>
     </section>
+
+    <!-- Monitor -->
+    <section id="section-monitor">
+        <div class="filter-row">
+            <label>Session
+                <select id="monitor-session" onchange="onMonitorSessionChange()">
+                    <option value="">All sessions</option>
+                </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="monitor-autoscroll" checked>
+                Auto-scroll
+            </label>
+        </div>
+        <div id="monitor-timeline"></div>
+        <div id="monitor-empty" class="empty-state">No injection log entries yet. Start a Claude session to see activity.</div>
+    </section>
 </div>
 
 <!-- Detail Modal -->
@@ -435,6 +553,7 @@
     let _currentSection = 'dashboard';
 
     function showSection(name) {
+        if (_currentSection === 'monitor' && name !== 'monitor') stopMonitorPolling();
         _currentSection = name;
         document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
         document.getElementById('section-' + name).classList.add('active');
@@ -443,6 +562,7 @@
         if (name === 'dashboard') loadDashboard();
         if (name === 'browse') loadBrowse(0);
         if (name === 'graph') loadGraph();
+        if (name === 'monitor') startMonitorPolling();
     }
 
     function _refreshCurrentView() {
@@ -794,6 +914,158 @@
     // Close modal on overlay click
     document.getElementById('modal-overlay').addEventListener('click', function(e) {
         if (e.target === this) closeModal();
+    });
+
+    // -----------------------------------------------------------------------
+    // Monitor
+    // -----------------------------------------------------------------------
+    let _monitorInterval = null;
+    let _monitorLastTs = null;
+    let _monitorSessions = new Set();
+
+    function startMonitorPolling() {
+        if (_monitorInterval) return;
+        _monitorLastTs = null;
+        _monitorSessions = new Set();
+        document.getElementById('monitor-timeline').innerHTML = '';
+        document.getElementById('monitor-empty').style.display = '';
+        var sel = document.getElementById('monitor-session');
+        sel.innerHTML = '<option value="">All sessions</option>';
+        loadMonitor();
+        _monitorInterval = setInterval(loadMonitor, 2000);
+    }
+
+    function stopMonitorPolling() {
+        if (_monitorInterval) {
+            clearInterval(_monitorInterval);
+            _monitorInterval = null;
+        }
+    }
+
+    function onMonitorSessionChange() {
+        document.getElementById('monitor-timeline').innerHTML = '';
+        _monitorLastTs = null;
+        loadMonitor();
+    }
+
+    async function loadMonitor() {
+        var url = '/api/injection-log';
+        var params = [];
+        if (_monitorLastTs) params.push('since=' + encodeURIComponent(_monitorLastTs));
+        var sessionFilter = document.getElementById('monitor-session').value;
+        if (sessionFilter) params.push('session_id=' + encodeURIComponent(sessionFilter));
+        if (params.length) url += '?' + params.join('&');
+
+        try {
+            var entries = await fetch(url).then(function(r) { return r.json(); });
+            if (!Array.isArray(entries) || entries.length === 0) return;
+
+            document.getElementById('monitor-empty').style.display = 'none';
+            var timeline = document.getElementById('monitor-timeline');
+            var sel = document.getElementById('monitor-session');
+
+            for (var i = 0; i < entries.length; i++) {
+                var entry = entries[i];
+                if (entry.session_id && !_monitorSessions.has(entry.session_id)) {
+                    _monitorSessions.add(entry.session_id);
+                    var opt = document.createElement('option');
+                    opt.value = entry.session_id;
+                    opt.textContent = entry.session_id.substring(0, 12) + '...';
+                    sel.appendChild(opt);
+                }
+                timeline.appendChild(renderMonitorEntry(entry));
+                if (entry.timestamp && (!_monitorLastTs || entry.timestamp > _monitorLastTs)) {
+                    _monitorLastTs = entry.timestamp;
+                }
+            }
+
+            if (document.getElementById('monitor-autoscroll').checked) {
+                timeline.scrollTop = timeline.scrollHeight;
+            }
+        } catch(e) {
+            // silently retry on next poll
+        }
+    }
+
+    function renderMonitorEntry(entry) {
+        var el = document.createElement('div');
+        el.className = 'monitor-entry';
+
+        var hook = entry.hook || '';
+        var isSession = (hook === 'SessionStart');
+        var badgeClass = isSession ? 'hook-badge-session' : 'hook-badge-recall';
+        var badgeLabel = isSession ? 'SessionStart' : 'PromptRecall';
+
+        var latencyHtml = '';
+        if (entry.latency_ms != null) {
+            latencyHtml = '<span class="monitor-latency">' + entry.latency_ms + 'ms</span>';
+        }
+
+        var headerHtml = '<div class="entry-header">' +
+            '<span class="hook-badge ' + badgeClass + '">' + badgeLabel + '</span>' +
+            '<span>' + escHtml((entry.session_id || '').substring(0, 12)) + '</span>' +
+            '<span>' + escHtml(entry.timestamp || '') + '</span>' +
+            latencyHtml +
+            '</div>';
+
+        var bodyHtml = '';
+
+        if (isSession && entry.tiers) {
+            var maxTokens = 1;
+            for (var t = 0; t < entry.tiers.length; t++) {
+                if ((entry.tiers[t].tokens || 0) > maxTokens) maxTokens = entry.tiers[t].tokens;
+            }
+            for (var t = 0; t < entry.tiers.length; t++) {
+                var tier = entry.tiers[t];
+                var pct = maxTokens > 0 ? Math.round((tier.tokens || 0) / maxTokens * 100) : 0;
+                var count = (tier.count || 0) + ' items, ~' + (tier.tokens || 0) + ' tok';
+                bodyHtml += '<div class="monitor-tier">' +
+                    '<span class="tier-name">' + escHtml(tier.name || '') + '</span>' +
+                    '<div class="tier-bar"><div class="tier-fill" style="width:' + pct + '%"></div></div>' +
+                    '<span class="tier-count">' + escHtml(count) + '</span>' +
+                    '</div>';
+            }
+            if (entry.ids && entry.ids.length) {
+                bodyHtml += '<div class="monitor-ids">';
+                for (var j = 0; j < entry.ids.length; j++) {
+                    var chipId = entry.ids[j];
+                    bodyHtml += '<span class="monitor-id-chip monitor-injected" onclick="openDetail(\'' + escHtml(chipId) + '\')">' + escHtml(chipId.substring(0, 8)) + '</span>';
+                }
+                bodyHtml += '</div>';
+            }
+        } else {
+            if (entry.prompt) {
+                bodyHtml += '<div class="monitor-prompt-preview">' + escHtml((entry.prompt || '').substring(0, 200)) + '</div>';
+            }
+            if (entry.injected && entry.injected.length) {
+                bodyHtml += '<div class="monitor-ids">';
+                for (var j = 0; j < entry.injected.length; j++) {
+                    var iid = entry.injected[j];
+                    bodyHtml += '<span class="monitor-id-chip monitor-injected" onclick="openDetail(\'' + escHtml(iid) + '\')">' + escHtml(iid.substring(0, 8)) + '</span>';
+                }
+                bodyHtml += '</div>';
+            }
+            if (entry.filtered && entry.filtered.length) {
+                bodyHtml += '<div class="monitor-ids">';
+                for (var j = 0; j < entry.filtered.length; j++) {
+                    var fid = entry.filtered[j];
+                    bodyHtml += '<span class="monitor-id-chip monitor-filtered" onclick="openDetail(\'' + escHtml(fid) + '\')">' + escHtml(fid.substring(0, 8)) + '</span>';
+                }
+                bodyHtml += '</div>';
+            }
+        }
+
+        el.innerHTML = headerHtml + bodyHtml;
+        return el;
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (_currentSection !== 'monitor') return;
+        if (document.hidden) {
+            stopMonitorPolling();
+        } else {
+            startMonitorPolling();
+        }
     });
 
     // -----------------------------------------------------------------------
