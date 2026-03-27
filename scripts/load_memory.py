@@ -19,6 +19,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -58,7 +59,7 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # Entry points:
 #   main()                                  SessionStart hook (stdout -> context)
 # DB-first loading (v3):
-#   _load_from_db(project_scope) -> str | None
+#   _load_from_db(project_scope) -> tuple[str, list, list] | None
 # Scheduling:
 #   should_synthesize(settings) -> bool
 # =============================================================================
@@ -538,7 +539,7 @@ def _batch_update_data_point_access(
             )
 
 
-def _load_from_db(project_scope: str) -> str | None:
+def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | None:
     """Load memory context via SQL queries against data_points.
 
     Executes 5 query tiers in priority order with dedup:
@@ -548,8 +549,10 @@ def _load_from_db(project_scope: str) -> str | None:
     4. Global knowledge (type='memory', scope='global', salience>0.6, top 10)
     5. Recent activity (created_at > 3 days ago, top 15)
 
-    Returns formatted context string, empty string if DB is empty, or None to
-    signal that the DB is not at v3 (caller should use legacy markdown loading).
+    Returns:
+        (formatted_text, tiers_metadata, health_alerts) for v3 DBs,
+        ("", [], []) if DB is empty/missing,
+        None to signal that the DB is not at v3 (caller should use legacy loading).
     """
     try:
         from storage import close_db, get_db
@@ -559,7 +562,7 @@ def _load_from_db(project_scope: str) -> str | None:
     try:
         conn = get_db()
     except FileNotFoundError:
-        return ""
+        return ("", [], [])
 
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -568,12 +571,17 @@ def _load_from_db(project_scope: str) -> str | None:
 
         seen_ids: set[str] = set()
         sections: list[str] = []
+        tiers_metadata: list[dict] = []
+        alerts: list[str] = []
 
         # Tier 1: User profile
         profiles = conn.execute(
             "SELECT id, content FROM data_points WHERE scope='user' AND salience > 0.5 "
             "ORDER BY salience DESC"
         ).fetchall()
+        tier_ids = [row[0] for row in profiles]
+        tier_tokens = sum(len(row[1] or "") // 4 for row in profiles)
+        tiers_metadata.append({"name": "Profile", "count": len(tier_ids), "tokens_est": tier_tokens, "ids": tier_ids})
         if profiles:
             profile_text = "\n".join(row[1] for row in profiles if row[1])
             if profile_text.strip():
@@ -597,6 +605,9 @@ def _load_from_db(project_scope: str) -> str | None:
                 "ORDER BY created_at DESC LIMIT 1",
                 (project_scope, continuity_cutoff),
             ).fetchone()
+            session_tier_ids = [context_row[0]] if context_row else []
+            session_tier_tokens = sum(len(context_row[1] or "") // 4 for _ in [1]) if context_row else 0
+            tiers_metadata.append({"name": "Session", "count": len(session_tier_ids), "tokens_est": session_tier_tokens, "ids": session_tier_ids})
             if context_row:
                 ctx_id, ctx_content, ctx_props = context_row
                 seen_ids.add(ctx_id)
@@ -624,6 +635,8 @@ def _load_from_db(project_scope: str) -> str | None:
                 if status:
                     section += f"\nStatus: {status}"
                 sections.append(section)
+        else:
+            tiers_metadata.append({"name": "Session", "count": 0, "tokens_est": 0, "ids": []})
 
         # Tier 3: Project memories
         if project_scope:
@@ -634,11 +647,16 @@ def _load_from_db(project_scope: str) -> str | None:
                 (project_scope,),
             ).fetchall()
             new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+            project_tier_ids = [r[0] for r in new_rows]
+            project_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
+            tiers_metadata.append({"name": "Project", "count": len(project_tier_ids), "tokens_est": project_tier_tokens, "ids": project_tier_ids})
             if new_rows:
                 mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
                 if mem_text.strip():
                     sections.append(f"## Project Memory: {project_scope}\n{mem_text}")
                 seen_ids.update(r[0] for r in new_rows)
+        else:
+            tiers_metadata.append({"name": "Project", "count": 0, "tokens_est": 0, "ids": []})
 
         # Tier 4: Global knowledge
         rows = conn.execute(
@@ -647,6 +665,9 @@ def _load_from_db(project_scope: str) -> str | None:
             "ORDER BY salience DESC, last_accessed DESC LIMIT 10",
         ).fetchall()
         new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        global_tier_ids = [r[0] for r in new_rows]
+        global_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
+        tiers_metadata.append({"name": "Global", "count": len(global_tier_ids), "tokens_est": global_tier_tokens, "ids": global_tier_ids})
         if new_rows:
             mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
             if mem_text.strip():
@@ -672,6 +693,9 @@ def _load_from_db(project_scope: str) -> str | None:
             (scope_param, three_days_ago),
         ).fetchall()
         new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        recent_tier_ids = [r[0] for r in new_rows]
+        recent_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
+        tiers_metadata.append({"name": "Recent", "count": len(recent_tier_ids), "tokens_est": recent_tier_tokens, "ids": recent_tier_ids})
         if new_rows:
             mem_text = "\n".join(f"- {r[1]}" for r in new_rows if r[1])
             if mem_text.strip():
@@ -687,9 +711,9 @@ def _load_from_db(project_scope: str) -> str | None:
                 print(f"Warning: Access tracking failed: {e}", file=sys.stderr)
 
         try:
-            from health import health_alerts, health_report
+            from health import health_alerts as _health_alerts, health_report
             hr = health_report(conn)
-            alerts = health_alerts(hr)
+            alerts = _health_alerts(hr)
             if alerts:
                 sections.append("\n## Health Alerts")
                 for alert in alerts:
@@ -698,7 +722,7 @@ def _load_from_db(project_scope: str) -> str | None:
             pass
 
         from memory_utils import sanitize_secrets
-        return sanitize_secrets("\n\n".join(sections))
+        return (sanitize_secrets("\n\n".join(sections)), tiers_metadata, alerts)
 
     finally:
         close_db(conn)
@@ -713,10 +737,19 @@ def main() -> None:
         return
 
     # Consume stdin JSON from SessionStart hook (prevents broken pipe)
+    stdin_payload = {}
     try:
         if not sys.stdin.isatty():
-            json.load(sys.stdin)
+            stdin_payload = json.load(sys.stdin)
     except (json.JSONDecodeError, IOError):
+        pass
+    session_id = stdin_payload.get("sessionId", f"session-{int(time.time())}")
+
+    # Rotate injection log
+    try:
+        from injection_log import rotate_log
+        rotate_log()
+    except Exception:
         pass
 
     # Clean up stale prompt-recall state files
@@ -749,11 +782,32 @@ def main() -> None:
     project_scope = current_project.get("name", "") if current_project else ""
 
     # DB-first loading (v3 schema); falls back to empty context if no v3 DB
-    db_content = _load_from_db(project_scope)
+    _t0 = time.monotonic()
+    db_result = _load_from_db(project_scope)
+    _latency_ms = (time.monotonic() - _t0) * 1000
+
+    if db_result is None:
+        db_content, tiers_meta, health_alerts = None, [], []
+    else:
+        db_content, tiers_meta, health_alerts = db_result
+
     if db_content is not None and db_content.strip():
         print(db_content)
         print()
     print("</memory>")
+
+    # Fire-and-forget injection logging
+    try:
+        from injection_log import log_session_start
+        log_session_start(
+            session_id=session_id,
+            project_scope=project_scope,
+            tiers=tiers_meta,
+            latency_ms=_latency_ms,
+            health_alerts=health_alerts,
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

@@ -237,7 +237,7 @@ class TestLoadMemoryUsesResolveSessionPath:
              patch("load_memory.load_json_file", return_value=fake_index), \
              patch("load_memory.get_recent_days", return_value=[]), \
              patch("load_memory.check_synthesis_errors", return_value=None), \
-             patch("load_memory._load_from_db", return_value=""), \
+             patch("load_memory._load_from_db", return_value=("", [], [])), \
              patch("load_memory.resolve_session_path") as mock_rsp, \
              patch("os.getcwd", return_value="/some/project/subdir"), \
              patch("sys.stdin") as mock_stdin:

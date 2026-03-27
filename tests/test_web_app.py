@@ -1,4 +1,6 @@
 """Tests for web_app.py — HTTP server, read-only API, and write/delete API."""
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +21,7 @@ from web_app import (
     _get_data_point_detail,
     _get_data_points,
     _get_graph,
+    _get_injection_log,
     _get_stats,
     _search,
     generate_csrf_token,
@@ -387,3 +390,74 @@ class TestDBIsolation:
             f"DB fixture created database at {db_path}, which is under ~/.claude/memory/. "
             "This would corrupt the production database!"
         )
+
+
+# ---------------------------------------------------------------------------
+# B3: Injection log API
+# ---------------------------------------------------------------------------
+
+class TestInjectionLogAPI:
+    def test_returns_empty_when_no_log_file(self, tmp_path):
+        """_get_injection_log returns [] when the log file does not exist."""
+        with patch("injection_log.get_log_path", return_value=tmp_path / "nonexistent.jsonl"):
+            result = _get_injection_log()
+        assert result == []
+
+    def test_returns_recent_entries(self, tmp_path):
+        """_get_injection_log returns entries from the last hour by default."""
+        log_path = tmp_path / ".injection-log.jsonl"
+        now = datetime.now(timezone.utc)
+        recent_ts = (now - timedelta(minutes=10)).isoformat()
+        old_ts = (now - timedelta(hours=2)).isoformat()
+        log_path.write_text(
+            json.dumps({"ts": old_ts, "session_id": "s1", "hook": "SessionStart"}) + "\n"
+            + json.dumps({"ts": recent_ts, "session_id": "s2", "hook": "SessionStart"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("injection_log.get_log_path", return_value=log_path):
+            result = _get_injection_log()
+
+        assert len(result) == 1
+        assert result[0]["session_id"] == "s2"
+
+    def test_filters_by_session(self, tmp_path):
+        """_get_injection_log filters entries by session_id when provided."""
+        log_path = tmp_path / ".injection-log.jsonl"
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(minutes=5)).isoformat()
+        log_path.write_text(
+            json.dumps({"ts": ts, "session_id": "sess-A", "hook": "SessionStart"}) + "\n"
+            + json.dumps({"ts": ts, "session_id": "sess-B", "hook": "SessionStart"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with patch("injection_log.get_log_path", return_value=log_path):
+            result = _get_injection_log(session_id="sess-A")
+
+        assert len(result) == 1
+        assert result[0]["session_id"] == "sess-A"
+
+    def test_filters_by_since_timestamp(self, tmp_path):
+        """_get_injection_log filters by explicit since ISO timestamp."""
+        log_path = tmp_path / ".injection-log.jsonl"
+        now = datetime.now(timezone.utc)
+        ts_old = (now - timedelta(hours=3)).isoformat()
+        ts_mid = (now - timedelta(hours=1, minutes=30)).isoformat()
+        ts_new = (now - timedelta(minutes=10)).isoformat()
+        log_path.write_text(
+            json.dumps({"ts": ts_old, "session_id": "s1", "hook": "SessionStart"}) + "\n"
+            + json.dumps({"ts": ts_mid, "session_id": "s2", "hook": "SessionStart"}) + "\n"
+            + json.dumps({"ts": ts_new, "session_id": "s3", "hook": "SessionStart"}) + "\n",
+            encoding="utf-8",
+        )
+
+        since = (now - timedelta(hours=2)).isoformat()
+        with patch("injection_log.get_log_path", return_value=log_path):
+            result = _get_injection_log(since=since)
+
+        assert len(result) == 2
+        session_ids = [e["session_id"] for e in result]
+        assert "s2" in session_ids
+        assert "s3" in session_ids
+        assert "s1" not in session_ids

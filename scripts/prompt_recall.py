@@ -121,6 +121,9 @@ def main():
 
     state_file = get_memory_dir() / f".prompt-recall-state-{session_id}"
 
+    injected_log = []
+    filtered_log = []
+
     conn = None
     try:
         conn = get_db()
@@ -138,12 +141,14 @@ def main():
         for r in results:
             dp = r.data_point
             if is_recently_injected(dp.id, state_file, current_prompt_index=prompt_index):
+                filtered_log.append({"id": dp.id, "content_preview": (dp.content or "")[:80], "reason": "deduped"})
                 continue
             memories.append({
                 "content": dp.content,
                 "certainty": getattr(dp, "certainty", None),
                 "scope": dp.scope,
             })
+            injected_log.append({"id": dp.id, "content_preview": (dp.content or "")[:80], "scope": dp.scope})
             record_injection(dp.id, state_file, prompt_index)
             if len(memories) >= MAX_INJECTIONS:
                 break
@@ -162,6 +167,19 @@ def main():
     elapsed = time.monotonic() - start
     if elapsed > 0.8:
         print(f"Warning: prompt_recall took {elapsed:.2f}s (target <0.8s)", file=sys.stderr)
+
+    try:
+        from injection_log import log_prompt_recall
+        log_prompt_recall(
+            session_id=session_id,
+            prompt_preview=sanitize_secrets(prompt[:80]),
+            candidates=len(results) if 'results' in locals() else 0,
+            injected=injected_log,
+            filtered=filtered_log,
+            latency_ms=elapsed * 1000,
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

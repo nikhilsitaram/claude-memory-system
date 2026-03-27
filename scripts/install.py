@@ -157,6 +157,7 @@ def link_scripts(script_dir: Path) -> None:
         "embeddings.py",  # Vector embedding and semantic search
         "backfill.py",  # One-time entity re-extraction for existing chunks
         "web_app.py",  # Web frontend for browsing and managing memory
+        "injection_log.py",  # Injection monitor logging for SessionStart/PromptRecall hooks
         "memory_server.py",  # MCP server - search/write/delete/traverse tools
         "prompt_recall.py",  # UserPromptSubmit hook - proactive memory injection
         "consolidation.py",  # Memory consolidation and deduplication
