@@ -267,6 +267,21 @@ def _get_data_point_detail(conn: sqlite3.Connection, dp_id: str) -> dict:
     }
 
 
+def _get_injection_log(since=None, session_id=None):
+    """Read recent injection log entries with optional filters."""
+    try:
+        from injection_log import read_log
+    except ImportError:
+        return []
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except ValueError:
+            pass
+    return read_log(since=since_dt, session_id=session_id)
+
+
 # ---------------------------------------------------------------------------
 # Write helpers (D2)
 # ---------------------------------------------------------------------------
@@ -427,6 +442,11 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             result = _get_data_point_detail(_db_conn, dp_id)
             status = 404 if "error" in result else 200
             self._send_json(result, status)
+
+        elif path == "/api/injection-log":
+            since = qp("since")
+            session = qp("session")
+            self._send_json(_get_injection_log(since=since, session_id=session))
 
         else:
             self._send_json({"error": "Not found"}, 404)
