@@ -116,7 +116,7 @@
         {
           "id": "B4",
           "name": "Add Monitor tab to web frontend",
-          "status": "pending",
+          "status": "complete",
           "depends_on": [],
           "files": {
             "create": [],
