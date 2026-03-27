@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "In Development",
+  "status": "Complete",
   "workflow": "pr-create",
   "execution_mode": "subagents",
   "goal": "Add a live injection monitor to the web UI that shows what context the memory system injects into Claude Code sessions, with per-tier breakdown, prompt recall timeline, and auto-polling.",
@@ -10,7 +10,7 @@
     {
       "letter": "A",
       "name": "Injection Logging Module",
-      "status": "Not Started",
+      "status": "Complete (2026-03-27)",
       "depends_on": [],
       "rationale": "The logging module must exist before hooks can import it. install.py registration must happen in the same phase to keep the file set disjoint from Phase B hook modifications.",
       "tasks": [
@@ -56,7 +56,7 @@
     {
       "letter": "B",
       "name": "Hook Integrations and Web UI",
-      "status": "Not Started",
+      "status": "Complete (2026-03-27)",
       "depends_on": [
         "A"
       ],
