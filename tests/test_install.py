@@ -826,3 +826,22 @@ class TestConsolidateSkill:
             str(Path(__file__).parent.parent / "scripts" / "install.py"), encoding="utf-8"
         ).read()
         assert "consolidate" in source
+
+
+# ---------------------------------------------------------------------------
+# Injection log registration
+# ---------------------------------------------------------------------------
+
+
+class TestInjectionLogRegistration:
+    """Verify injection_log.py is in the scripts_to_link list."""
+
+    def test_injection_log_in_scripts_to_link(self):
+        """injection_log.py must be registered for symlinking."""
+        import inspect
+        from install import link_scripts
+        source = inspect.getsource(link_scripts)
+        assert "injection_log.py" in source, (
+            "injection_log.py not found in link_scripts(). "
+            "Add it to the scripts_to_link list."
+        )
