@@ -77,7 +77,7 @@ Both are fire-and-forget: exceptions are caught and silently ignored (logging mu
 {
   "ts": "2026-03-26T14:31:15-05:00",
   "session_id": "abc123",
-  "hook": "PromptRecall",
+  "hook": "UserPromptSubmit",
   "prompt_preview": "how do I configure the...",
   "candidates": 8,
   "injected": [
@@ -110,7 +110,7 @@ New "Monitor" tab alongside Dashboard, Browse, Search, Graph.
 - Chronological timeline grouped by session
 - SessionStart entries: expandable tier breakdown with item counts and token estimates
 - PromptRecall entries: prompt preview, injected (green) vs filtered (gray) memories
-- Click any memory ID → opens existing detail modal
+- Click any memory ID → calls existing `openModal(dpId)` with the `id` string from the log entry's `ids` array or `injected[].id` field
 - Polls every 2s via `setInterval`, pauses when tab not visible (Page Visibility API)
 - Stops polling when navigating away from Monitor tab
 
@@ -143,7 +143,7 @@ The web UI was chosen because it provides structured tier breakdowns, clickable 
 1. New `scripts/injection_log.py` — logging helpers + rotation. Add `injection_log.py` to the `scripts_to_link` list in `scripts/install.py` `link_scripts()`.
 2. Modify `scripts/load_memory.py`:
    - **Return type change:** `_load_from_db()` currently returns a formatted string. Refactor to build a `tiers` list alongside `sections`, tracking `(name, ids, content_text)` per tier. Return a tuple `(formatted_text, tiers_metadata)` instead of a plain string. Token estimates computed as `sum(len(content) // 4 for each item in tier)`.
-   - **Session ID capture:** `main()` currently discards the stdin JSON payload. Capture it and extract `sessionId` for passing to `log_session_start()`. Fall back to a timestamp-based ID if `sessionId` is not present.
+   - **Session ID capture:** `main()` currently discards the stdin JSON payload. Capture it and extract `payload["sessionId"]` (string) for passing to `log_session_start()`. Fall back to `f"session-{int(time.time())}"` if the key is absent.
    - Call `log_session_start()` after `_load_from_db()` returns.
 3. Modify `scripts/prompt_recall.py`:
    - **Candidate tracking:** Refactor the recall loop to track filtered candidates. Before the loop, record `candidates = len(results)`. Inside the loop, when `is_recently_injected()` returns True, append `{"id": dp.id, "content_preview": dp.content[:80], "reason": "deduped"}` to a `filtered` list.
