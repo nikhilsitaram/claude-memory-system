@@ -61,5 +61,28 @@
     "remaining": 0,
     "verdict": "pass",
     "timestamp": "2026-03-26T22:00:00Z"
+  },
+  {
+    "type": "impl-review",
+    "scope": "phase-a",
+    "iteration": 1,
+    "issues_found": 5,
+    "severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 3
+    },
+    "actionable": 2,
+    "dismissed": 3,
+    "dismissals": [
+      "MCP search missing access tracking (pre-existing gap, not regression — file follow-up)",
+      "Pre-retrieval injection inert in main path (acknowledged, SimHash gate provides coverage)",
+      "consumed.add ordering correct as-is"
+    ],
+    "fixed": 2,
+    "remaining": 0,
+    "verdict": "pass",
+    "timestamp": "2026-03-27T03:15:00Z"
   }
 ]
