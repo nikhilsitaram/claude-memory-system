@@ -231,6 +231,9 @@ DEFAULT_SETTINGS = {
         "maxInjectionsPerPrompt": 3,
         "maxTokenBudget": 500,
     },
+    "injectionLog": {
+        "enabled": True,
+    },
     # totalTokenBudget calculated as globalLongTerm + projectLongTerm
 }
 
