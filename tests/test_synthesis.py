@@ -912,3 +912,136 @@ class TestEntityDedupIdempotency:
         edge_sources = {e[0] for e in mention_edges}
         memory_ids = {r[0] for r in memory_rows}
         assert edge_sources == memory_ids
+
+
+# =============================================================================
+# A3: SimHash dedup gate in _apply_add_v3
+# =============================================================================
+
+
+class TestApplyAddV3SimhashDedup:
+    """Tests for SimHash-based deduplication in _apply_add_v3."""
+
+    def test_near_duplicate_deduped(self, shared_db):
+        """Near-duplicate ADD is deduped: bumps evidence_count, no new row."""
+        from datetime import datetime, timezone
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        content = "Always use git config global init defaultBranch main for setting up new repositories in any project that needs version control"
+        dp_id = insert_data_point(shared_db, DataPointRow(
+            type="memory", content=content, scope="global",
+            salience=0.7, simhash=_simhash_to_sqlite(compute_simhash(content)),
+            source_sessions='["sess-1"]',
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        op = MemoryOp(
+            action="ADD",
+            fact="Always use git config global init defaultBranch main for setting up new repositories in any project that needs versions control",
+            scope="global",
+        )
+        result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "deduped"
+
+        # evidence_count should be incremented
+        row = shared_db.execute(
+            "SELECT evidence_count FROM data_points WHERE id=?", (dp_id,)
+        ).fetchone()
+        assert row[0] == 2
+
+        # No new data_point inserted
+        count = shared_db.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='memory' AND scope='global'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_no_duplicate_inserts_normally(self, shared_db):
+        """Non-duplicate ADD inserts normally with status='inserted'."""
+        from synthesis import MemoryOp, _apply_add_v3
+
+        op = MemoryOp(
+            action="ADD",
+            fact="pytest -x stops on first failure",
+            scope="global",
+        )
+        result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "inserted"
+
+        count = shared_db.execute(
+            "SELECT COUNT(*) FROM data_points WHERE type='memory' AND scope='global'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_dedup_preserves_source_sessions(self, shared_db):
+        """Dedup preserves existing source_sessions on the original data_point."""
+        from datetime import datetime, timezone
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        content = "Always use git config global init defaultBranch main for setting up new repositories in anys project that needs version control"
+        dp_id = insert_data_point(shared_db, DataPointRow(
+            type="memory", content=content, scope="global",
+            salience=0.7, simhash=_simhash_to_sqlite(compute_simhash(content)),
+            source_sessions='["sess-1"]',
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        op = MemoryOp(
+            action="ADD",
+            fact="Always use git config global init defaultBranch main for setting up new repositories in any project that needs version control",
+            scope="global",
+        )
+        _apply_add_v3(shared_db, op)
+
+        row = shared_db.execute(
+            "SELECT source_sessions FROM data_points WHERE id=?", (dp_id,)
+        ).fetchone()
+        import json
+        sessions = json.loads(row[0])
+        assert "sess-1" in sessions
+
+    def test_dedup_replaces_content_when_new_is_longer(self, shared_db):
+        """Dedup replaces content when new content is >2x longer."""
+        from datetime import datetime, timezone
+
+        from simhash import compute_simhash
+        from storage import DataPointRow, insert_data_point
+        from synthesis import MemoryOp, _apply_add_v3, _simhash_to_sqlite
+
+        long_fact = (
+            "Always use git config global init defaultBranch main for setting "
+            "up new repositories in any project that needs version control"
+        )
+        long_simhash = _simhash_to_sqlite(compute_simhash(long_fact))
+
+        short_content = "git config defaultBranch"
+        dp_id = insert_data_point(shared_db, DataPointRow(
+            type="memory", content=short_content, scope="global",
+            salience=0.7, simhash=long_simhash,
+            source_sessions="[]",
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ))
+        shared_db.commit()
+
+        op = MemoryOp(
+            action="ADD",
+            fact=long_fact,
+            scope="global",
+        )
+        result = _apply_add_v3(shared_db, op)
+
+        assert result["status"] == "deduped"
+
+        row = shared_db.execute(
+            "SELECT content FROM data_points WHERE id=?", (dp_id,)
+        ).fetchone()
+        assert row[0] == long_fact

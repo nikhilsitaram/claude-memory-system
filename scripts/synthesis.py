@@ -49,6 +49,7 @@ __all__ = [
     "_apply_delete_v3",
     "_apply_noop_v3",
     "_get_or_create_entity",
+    "_simhash_to_sqlite",
 ]
 
 # Delimiter patterns (legacy format headers retained for parse_synthesis_output backward compat)
@@ -355,16 +356,78 @@ def _get_or_create_entity(conn, entity_name: str, scope: str | None) -> str:
     return get_or_create_entity(conn, entity_name, scope)
 
 
+def _simhash_to_sqlite(val: int) -> int:
+    """Convert unsigned 64-bit SimHash to signed for SQLite storage."""
+    return val - (1 << 64) if val >= (1 << 63) else val
+
+
 def _apply_add_v3(conn, op: "MemoryOp") -> dict:
-    """Apply an ADD operation — inserts a new data_point."""
+    """Apply an ADD operation — inserts a new data_point (with SimHash dedup gate)."""
     from datetime import datetime, timezone
 
     from memory_utils import sanitize_secrets
+    from simhash import DEFAULT_HAMMING_THRESHOLD, compute_simhash, hamming_distance
     from storage import DataPointRow, EdgeRow, create_provenance_edge, insert_data_point, insert_edge
 
     fact = sanitize_secrets(op.fact)
     salience = op.salience if op.salience is not None else 0.5
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # --- SimHash dedup gate ---
+    new_simhash = compute_simhash(fact)
+    new_simhash_db = _simhash_to_sqlite(new_simhash)
+
+    if new_simhash != 0:  # Skip dedup for empty/whitespace-only content
+        from datetime import timedelta
+
+        ninety_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=90)
+        ).isoformat().replace("+00:00", "Z")
+
+        candidates = conn.execute(
+            "SELECT id, content, simhash, evidence_count, source_sessions, salience "
+            "FROM data_points "
+            "WHERE type='memory' AND scope=? AND salience > 0 AND created_at > ? "
+            "AND simhash IS NOT NULL",
+            (op.scope, ninety_days_ago),
+        ).fetchall()
+
+        for cand_id, cand_content, cand_simhash, cand_evidence, cand_sessions, cand_salience in candidates:
+            unsigned_cand = cand_simhash & 0xFFFFFFFFFFFFFFFF if cand_simhash else 0
+            unsigned_new = new_simhash & 0xFFFFFFFFFFFFFFFF
+
+            if hamming_distance(unsigned_cand, unsigned_new) <= DEFAULT_HAMMING_THRESHOLD:
+                import json as _json
+
+                new_evidence = (cand_evidence or 1) + 1
+
+                existing_sessions = []
+                if cand_sessions:
+                    try:
+                        existing_sessions = _json.loads(cand_sessions)
+                    except (ValueError, TypeError):
+                        existing_sessions = []
+                merged_sessions = _json.dumps(existing_sessions)
+
+                new_salience = min(1.0, (cand_salience or 0.5) + 0.05)
+
+                update_kwargs = {
+                    "evidence_count": new_evidence,
+                    "salience": new_salience,
+                    "source_sessions": merged_sessions,
+                }
+                if len(fact) > 2 * len(cand_content or ""):
+                    update_kwargs["content"] = fact
+                    update_kwargs["content_hash"] = __import__("hashlib").sha256(
+                        fact.encode("utf-8")
+                    ).hexdigest()[:16]
+                    update_kwargs["simhash"] = new_simhash_db
+
+                from storage import update_data_point
+                update_data_point(conn, cand_id, **update_kwargs)
+
+                return {"action": "ADD", "status": "deduped", "id": cand_id}
+    # --- End SimHash dedup gate ---
 
     dp = DataPointRow(
         type="memory",
@@ -374,6 +437,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
         source_type="synthesis_v3",
         salience=salience,
         certainty=op.certainty if op.certainty is not None else 2,
+        simhash=new_simhash_db,
     )
     dp_id = insert_data_point(conn, dp)
 
