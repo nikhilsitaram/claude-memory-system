@@ -193,7 +193,10 @@ def run_post_processing(
     extract_paths: list[str],
     offsets_json: str | None = None,
 ) -> None:
-    """Run state pruning, cleanup, decay, validation, and timestamp update."""
+    """Run state pruning, cleanup, reindex, and timestamp update.
+
+    Decay is handled separately by synthesis_cron._run_decay_v3().
+    """
     from datetime import datetime, timezone
 
     # Prune stale state entries

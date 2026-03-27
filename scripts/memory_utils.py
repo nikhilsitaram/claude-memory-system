@@ -79,7 +79,7 @@ __all__ = [
 ]
 
 # Minimum Python version required
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 10)
 
 # Lock configuration
 LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered stale

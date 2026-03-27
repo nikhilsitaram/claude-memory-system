@@ -743,9 +743,11 @@ def main() -> None:
     # Include current local time for context
     now = datetime.now(timezone.utc).astimezone()
     utc_offset = now.utcoffset() or timedelta(0)
-    utc_offset_hours = utc_offset.total_seconds() / 3600
-    offset_sign = "+" if utc_offset_hours >= 0 else ""
-    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
+    total_minutes = int(utc_offset.total_seconds() // 60)
+    offset_sign = "+" if total_minutes >= 0 else "-"
+    offset_hours, offset_mins = divmod(abs(total_minutes), 60)
+    tz_str = f"UTC{offset_sign}{offset_hours}" + (f":{offset_mins:02d}" if offset_mins else "")
+    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} ({tz_str})")
     print()
 
     # Surface synthesis errors from deferred runs

@@ -174,7 +174,7 @@ def main():
         log_prompt_recall(
             session_id=session_id,
             prompt_preview=sanitize_secrets(prompt[:80]),
-            candidates=len(results) if 'results' in locals() else 0,
+            candidates=len(results),
             injected=injected_log,
             filtered=filtered_log,
             latency_ms=elapsed * 1000,
