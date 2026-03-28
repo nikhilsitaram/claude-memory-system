@@ -81,22 +81,30 @@ class TestDetectPythonCommand:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_fallback_to_executable(self):
-        """When no python3/python found, falls back to sys.executable."""
-        with mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
+    def _no_venv(self, tmp_path):
+        """Patch __file__ so detect_python_command looks in a dir with no venv."""
+        fake_install = tmp_path / "norepo" / "scripts" / "install.py"
+        fake_install.parent.mkdir(parents=True)
+        return mock.patch("install.__file__", str(fake_install))
+
+    def test_fallback_to_executable(self, tmp_path):
+        """When no venv and no python3/python found, falls back to sys.executable."""
+        with self._no_venv(tmp_path), \
+             mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
             result = install.detect_python_command()
             assert result == sys.executable
 
-    def test_returns_absolute_path_from_which(self):
-        """When subprocess succeeds with valid version, returns absolute path from shutil.which."""
+    def test_returns_absolute_path_from_which(self, tmp_path):
+        """When no venv, subprocess succeeds with valid version, returns absolute path."""
         mock_result = mock.Mock(returncode=0, stdout="3.11\n")
-        with mock.patch("install.subprocess.run", return_value=mock_result), \
+        with self._no_venv(tmp_path), \
+             mock.patch("install.subprocess.run", return_value=mock_result), \
              mock.patch("install.shutil.which", return_value="/usr/local/bin/python3"):
             result = install.detect_python_command()
         assert result == "/usr/local/bin/python3"
 
-    def test_skips_old_python_version(self):
-        """python3 returns 3.8 (too old), falls back to python which returns 3.11."""
+    def test_skips_old_python_version(self, tmp_path):
+        """No venv; python3 returns 3.8 (too old), falls back to python which returns 3.11."""
         old_result = mock.Mock(returncode=0, stdout="3.8\n")
         new_result = mock.Mock(returncode=0, stdout="3.11\n")
 
@@ -105,18 +113,31 @@ class TestDetectPythonCommand:
                 return old_result
             return new_result
 
-        with mock.patch("install.subprocess.run", side_effect=run_side_effect), \
+        with self._no_venv(tmp_path), \
+             mock.patch("install.subprocess.run", side_effect=run_side_effect), \
              mock.patch("install.shutil.which", return_value="/usr/bin/python"):
             result = install.detect_python_command()
         assert result == "/usr/bin/python"
 
-    def test_returns_cmd_when_which_returns_none(self):
-        """When subprocess succeeds but shutil.which returns None, returns bare command name."""
+    def test_returns_cmd_when_which_returns_none(self, tmp_path):
+        """No venv; subprocess succeeds but shutil.which returns None, returns bare command."""
         mock_result = mock.Mock(returncode=0, stdout="3.11\n")
-        with mock.patch("install.subprocess.run", return_value=mock_result), \
+        with self._no_venv(tmp_path), \
+             mock.patch("install.subprocess.run", return_value=mock_result), \
              mock.patch("install.shutil.which", return_value=None):
             result = install.detect_python_command()
         assert result == "python3"
+
+    def test_prefers_venv_python(self, tmp_path):
+        """When project venv exists, returns venv path without checking system Python."""
+        venv_python = tmp_path / ".venv" / "bin" / "python3"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.touch()
+        fake_install = tmp_path / "scripts" / "install.py"
+        fake_install.parent.mkdir(parents=True)
+        with mock.patch("install.__file__", str(fake_install)):
+            result = install.detect_python_command()
+        assert result == str(venv_python)
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +860,7 @@ class TestInjectionLogRegistration:
     def test_injection_log_in_scripts_to_link(self):
         """injection_log.py must be registered for symlinking."""
         import inspect
+
         from install import link_scripts
         source = inspect.getsource(link_scripts)
         assert "injection_log.py" in source, (

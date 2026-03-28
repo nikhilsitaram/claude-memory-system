@@ -55,9 +55,13 @@ def detect_python_command() -> str:
     """
     Detect which Python command to use in hooks.
 
-    Checks python3 first (preferred on Unix), then python.
+    Prefers the project venv (has fastembed + sqlite-vec for embeddings),
+    then falls back to python3/python on PATH.
     Returns the absolute path to a Python 3.9+ interpreter.
     """
+    venv_python = Path(__file__).parent.parent / ".venv" / "bin" / "python3"
+    if venv_python.exists():
+        return str(venv_python)
     for cmd in ["python3", "python"]:
         try:
             result = subprocess.run(
@@ -496,28 +500,24 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
     if "hooks" not in settings:
         settings["hooks"] = {}
 
-    # Remove existing synthesis SessionEnd hooks (handles platform migration)
-    # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
-    if "SessionEnd" in settings.get("hooks", {}):
-        settings["hooks"]["SessionEnd"] = [
-            entry for entry in settings["hooks"]["SessionEnd"]
+    # Remove ALL existing memory-system hooks (by script name, regardless of Python path)
+    # This prevents duplicate entries when the Python interpreter changes between installs
+    memory_scripts = {"load_memory.py", "prompt_recall.py", "pretooluse-allow-memory.sh", "memory-synthesis"}
+    for event in list(settings["hooks"].keys()):
+        settings["hooks"][event] = [
+            entry for entry in settings["hooks"][event]
             if not any(
-                "memory-synthesis" in h.get("command", "")
+                any(ms in h.get("command", "") for ms in memory_scripts)
                 for h in entry.get("hooks", [])
             )
         ]
-        if not settings["hooks"]["SessionEnd"]:
-            del settings["hooks"]["SessionEnd"]
+        if not settings["hooks"][event]:
+            del settings["hooks"][event]
 
     for event, new_entries in hooks_to_add.items():
         if event not in settings["hooks"]:
-            settings["hooks"][event] = new_entries
-        else:
-            # Only add entries that don't already exist (by matcher + commands)
-            existing_keys = {hook_entry_key(e) for e in settings["hooks"][event]}
-            for entry in new_entries:
-                if hook_entry_key(entry) not in existing_keys:
-                    settings["hooks"][event].append(entry)
+            settings["hooks"][event] = []
+        settings["hooks"][event].extend(new_entries)
 
     return settings
 

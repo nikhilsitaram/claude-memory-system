@@ -224,6 +224,15 @@ def _write_session_context(
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     props = _json.dumps({"session_id": session_id, "status": "completed"})
 
+    # Content dedup: skip if an active session_context with identical content exists for this scope
+    content_dupe = conn.execute(
+        "SELECT id FROM data_points "
+        "WHERE type='session_context' AND scope=? AND salience > 0 AND content=?",
+        (project_name, content),
+    ).fetchone()
+    if content_dupe:
+        return content_dupe[0]
+
     dp = DataPointRow(
         type="session_context", content=content, scope=project_name,
         salience=0.8, source_type="session_end", created_at=now,
