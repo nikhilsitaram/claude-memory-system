@@ -319,12 +319,17 @@ def _simhash_to_sqlite(val: int) -> int:
 
 
 def _merge_into_duplicate(conn, cand_id, cand_content, cand_evidence, cand_salience,
-                          new_fact, new_simhash_db, scope, status):
+                          new_fact, new_simhash_db, scope, status,
+                          content_replace_factor=2):
     """Merge a new fact into an existing duplicate data_point.
 
-    Bumps evidence_count/salience. Replaces content if new fact is longer.
+    Bumps evidence_count/salience. Replaces content if new fact exceeds
+    existing content length by ``content_replace_factor`` (default 2x for
+    SimHash, 1x for cosine dedup).
     Re-syncs FTS and embeddings when content changes.
     """
+    import hashlib
+
     from storage import update_data_point
 
     new_evidence = (cand_evidence or 1) + 1
@@ -333,9 +338,9 @@ def _merge_into_duplicate(conn, cand_id, cand_content, cand_evidence, cand_salie
         "evidence_count": new_evidence,
         "salience": new_salience,
     }
-    if len(new_fact) > len(cand_content or ""):
+    if len(new_fact) > content_replace_factor * len(cand_content or ""):
         update_kwargs["content"] = new_fact
-        update_kwargs["content_hash"] = __import__("hashlib").sha256(
+        update_kwargs["content_hash"] = hashlib.sha256(
             new_fact.encode("utf-8")
         ).hexdigest()[:16]
         update_kwargs["simhash"] = new_simhash_db
@@ -437,6 +442,7 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
             return _merge_into_duplicate(
                 conn, cand_id, cand_content, cand_evidence, cand_salience,
                 fact, new_simhash_db, op.scope, "deduped_cosine",
+                content_replace_factor=1,
             )
 
     dp = DataPointRow(

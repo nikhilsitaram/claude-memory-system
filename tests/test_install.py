@@ -81,15 +81,6 @@ class TestDetectPythonCommand:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def _patch_no_venv(self):
-        """Context manager to make detect_python_command skip the venv check."""
-        no_venv = mock.MagicMock()
-        no_venv.exists.return_value = False
-        return mock.patch.object(
-            Path, "__truediv__",
-            side_effect=lambda self, other: no_venv if other == ".venv" else Path.__truediv__(self, other),
-        )
-
     def _no_venv(self, tmp_path):
         """Patch __file__ so detect_python_command looks in a dir with no venv."""
         fake_install = tmp_path / "norepo" / "scripts" / "install.py"
