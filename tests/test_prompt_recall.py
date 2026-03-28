@@ -215,7 +215,7 @@ class TestMain:
 
     def test_relevant_prompt_searches_and_injects(self, tmp_path, capsys):
         """A relevant prompt triggers search and injects matching memories."""
-        from prompt_recall import main
+        from prompt_recall import MIN_RELEVANCE_SCORE, main
 
         mock_dp = MagicMock()
         mock_dp.id = "dp-test-1"
@@ -225,7 +225,7 @@ class TestMain:
         mock_dp.certainty = 4
         mock_scored = MagicMock()
         mock_scored.data_point = mock_dp
-        mock_scored.score = 0.8
+        mock_scored.score = MIN_RELEVANCE_SCORE + 0.1
 
         with patch("sys.stdin") as mock_stdin, \
              patch("memory_utils.get_memory_dir", return_value=tmp_path), \
@@ -260,7 +260,8 @@ class TestMain:
 class TestInjectionLogging:
     """Tests for injection logging integration in main()."""
 
-    def _make_mock_dp(self, dp_id="dp-test-1", content="Redis requires explicit TTL settings", scope="global", score=0.8):
+    def _make_mock_dp(self, dp_id="dp-test-1", content="Redis requires explicit TTL settings", scope="global", score=None):
+        from prompt_recall import MIN_RELEVANCE_SCORE
         mock_dp = MagicMock()
         mock_dp.id = dp_id
         mock_dp.content = content
@@ -269,7 +270,7 @@ class TestInjectionLogging:
         mock_dp.certainty = 4
         mock_scored = MagicMock()
         mock_scored.data_point = mock_dp
-        mock_scored.score = score
+        mock_scored.score = score if score is not None else MIN_RELEVANCE_SCORE + 0.1
         return mock_scored
 
     def test_main_calls_log_prompt_recall(self, tmp_path, capsys):

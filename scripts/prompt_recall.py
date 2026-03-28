@@ -142,7 +142,7 @@ def main():
         memories = []
         for r in results:
             dp = r.data_point
-            if hasattr(r, "score") and r.score < MIN_RELEVANCE_SCORE:
+            if r.score < MIN_RELEVANCE_SCORE:
                 filtered_log.append({"id": dp.id, "content_preview": (dp.content or "")[:80], "reason": "low_relevance"})
                 continue
             if is_recently_injected(dp.id, state_file, current_prompt_index=prompt_index):

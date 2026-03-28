@@ -98,7 +98,7 @@ def extract_topics(text: str, max_topics: int = MAX_TOPICS) -> list:
     if not text or not text.strip():
         return []
     tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_.-]*", text)
-    meaningful = [t for t in tokens if t.lower() not in _STOPWORDS and len(t) > 2]
+    meaningful = [t.lower() for t in tokens if t.lower() not in _STOPWORDS and len(t) > 2]
     counts = Counter(meaningful)
     min_freq = 2 if len(tokens) >= 50 else 1
     return [term for term, freq in counts.most_common(max_topics * 2)

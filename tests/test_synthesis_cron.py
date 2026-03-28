@@ -479,42 +479,38 @@ class TestTopicExtraction:
         """Extracts meaningful keywords/phrases from transcript text."""
         transcript = "We migrated the API from REST to gRPC for performance and latency"
         topics = extract_topics(transcript)
-        lower_topics = [t.lower() for t in topics]
-        assert "grpc" in lower_topics or "gRPC" in topics
-        assert "rest" in lower_topics or "REST" in topics
+        assert "grpc" in topics
+        assert "rest" in topics
 
     def test_filters_stopwords(self):
         """Common words (the, is, a, we, etc.) are excluded."""
         topics = extract_topics("The user is a developer who writes code")
-        lower_topics = [t.lower() for t in topics]
-        assert "the" not in lower_topics
-        assert "is" not in lower_topics
+        assert "the" not in topics
+        assert "is" not in topics
 
     def test_filters_conversational_stopwords(self):
         """Conversational words (let, now, check, yes, right) are excluded."""
         topics = extract_topics("Let me check now if the file looks right yes")
-        lower_topics = [t.lower() for t in topics]
-        assert "let" not in lower_topics
-        assert "now" not in lower_topics
-        assert "check" not in lower_topics
-        assert "yes" not in lower_topics
-        assert "right" not in lower_topics
+        assert "let" not in topics
+        assert "now" not in topics
+        assert "check" not in topics
+        assert "yes" not in topics
+        assert "right" not in topics
 
     def test_min_frequency_filter_long_text(self):
         """In long texts (>=50 tokens), single-occurrence words are excluded."""
-        filler = " ".join(f"padding_{i}" for i in range(50))
+        filler = " ".join(["the"] * 50)
         text = f"gRPC gRPC gRPC REST REST {filler} orphan_word"
         topics = extract_topics(text)
-        lower_topics = [t.lower() for t in topics]
-        assert "grpc" in lower_topics
-        assert "rest" in lower_topics
-        assert "orphan_word" not in lower_topics
+        assert "grpc" in topics
+        assert "rest" in topics
+        assert "orphan_word" not in topics
 
     def test_min_frequency_not_applied_short_text(self):
         """In short texts (<50 tokens), single-occurrence words are kept."""
         topics = extract_topics("Migrated the API from REST to gRPC")
-        lower_topics = [t.lower() for t in topics]
-        assert "grpc" in lower_topics or "rest" in lower_topics
+        assert "grpc" in topics
+        assert "rest" in topics
 
     def test_empty_transcript_returns_empty(self):
         """Empty or whitespace input returns empty list."""
