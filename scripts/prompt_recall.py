@@ -28,6 +28,7 @@ _RECALL_DEFAULTS = DEFAULT_SETTINGS["recall"]
 MIN_PROMPT_LENGTH = _RECALL_DEFAULTS["minPromptLength"]
 MAX_PROMPT_LENGTH = _RECALL_DEFAULTS["maxPromptLength"]
 MAX_INJECTIONS = _RECALL_DEFAULTS["maxInjectionsPerPrompt"]
+MIN_RELEVANCE_SCORE = _RECALL_DEFAULTS.get("minRelevanceScore", 0.45)
 DEDUP_WINDOW = 3  # Not user-configurable — internal dedup window
 
 
@@ -141,6 +142,9 @@ def main():
         memories = []
         for r in results:
             dp = r.data_point
+            if r.score < MIN_RELEVANCE_SCORE:
+                filtered_log.append({"id": dp.id, "content_preview": (dp.content or "")[:80], "reason": "low_relevance"})
+                continue
             if is_recently_injected(dp.id, state_file, current_prompt_index=prompt_index):
                 filtered_log.append({"id": dp.id, "content_preview": (dp.content or "")[:80], "reason": "deduped"})
                 continue
