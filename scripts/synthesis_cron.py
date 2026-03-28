@@ -39,17 +39,43 @@ SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
 
 # Common English stopwords for topic extraction
 _STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    # Articles, determiners
+    "a", "an", "the", "this", "that", "these", "those",
+    # Be verbs
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    # Auxiliary / modal verbs
     "have", "has", "had", "do", "does", "did", "will", "would", "could",
     "should", "may", "might", "shall", "can", "need", "dare", "ought",
-    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
-    "they", "them", "their", "this", "that", "these", "those",
+    # Common verbs (high-frequency, low-information in transcripts)
+    "let", "get", "got", "set", "put", "run", "ran", "use", "used",
+    "make", "made", "take", "took", "see", "saw", "try", "tried",
+    "want", "know", "knew", "think", "look", "give", "gave", "tell",
+    "told", "find", "found", "keep", "kept", "going", "come", "came",
+    "show", "call", "called", "work", "add", "added", "move", "moved",
+    "check", "change", "changed", "start", "started", "say", "said",
+    # Pronouns
+    "i", "me", "my", "mine", "we", "us", "our", "ours",
+    "you", "your", "yours", "he", "him", "his", "she", "her", "hers",
+    "it", "its", "they", "them", "their", "theirs",
+    # Conjunctions, prepositions
     "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
     "for", "of", "to", "from", "in", "on", "at", "by", "with", "about",
     "into", "through", "during", "before", "after", "above", "below",
+    "between", "without", "against", "along", "across", "around",
+    # Interrogatives, relatives
     "if", "then", "else", "when", "where", "how", "what", "which", "who",
+    "whom", "whose", "why", "whether",
+    # Quantifiers, adverbs
     "all", "each", "every", "some", "any", "no", "more", "most", "other",
     "just", "also", "very", "too", "quite", "really", "still", "already",
+    "now", "here", "there", "only", "even", "much", "well", "back",
+    # Conversational fillers / common transcript noise
+    "yes", "yeah", "yep", "okay", "sure", "right", "like", "don",
+    "didn", "doesn", "won", "wasn", "weren", "isn", "aren", "couldn",
+    "wouldn", "shouldn", "hasn", "hadn", "haven",
+    # Generic coding/tool terms (too common to be meaningful topics)
+    "file", "code", "line", "new", "one", "two", "first", "last",
+    "using", "thing", "things", "way", "something", "everything",
 })
 
 MAX_TOPICS = 20
@@ -59,7 +85,8 @@ def extract_topics(text: str, max_topics: int = MAX_TOPICS) -> list:
     """Extract key topics from transcript text using term frequency.
 
     Algorithmic extraction (no LLM call). Tokenizes text, removes stopwords,
-    and returns the most frequent meaningful terms.
+    and returns the most frequent meaningful terms. Single-occurrence words
+    are excluded unless the text is very short (< 50 tokens).
 
     Args:
         text: Raw transcript text.
@@ -73,7 +100,9 @@ def extract_topics(text: str, max_topics: int = MAX_TOPICS) -> list:
     tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_.-]*", text)
     meaningful = [t for t in tokens if t.lower() not in _STOPWORDS and len(t) > 2]
     counts = Counter(meaningful)
-    return [term for term, _ in counts.most_common(max_topics)]
+    min_freq = 2 if len(tokens) >= 50 else 1
+    return [term for term, freq in counts.most_common(max_topics * 2)
+            if freq >= min_freq][:max_topics]
 
 
 def retrieve_existing_memories(

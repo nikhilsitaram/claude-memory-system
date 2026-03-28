@@ -230,6 +230,7 @@ DEFAULT_SETTINGS = {
         "minPromptLength": 15,
         "maxInjectionsPerPrompt": 3,
         "maxTokenBudget": 500,
+        "minRelevanceScore": 0.45,
     },
     "injectionLog": {
         "enabled": True,

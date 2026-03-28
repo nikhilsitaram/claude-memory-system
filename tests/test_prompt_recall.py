@@ -115,6 +115,76 @@ class TestOutputFormat:
         assert output.count("- (") == MAX_INJECTIONS
 
 
+class TestRelevanceFloor:
+    """Tests for the minimum relevance score filter."""
+
+    def test_low_score_filtered(self, tmp_path, capsys):
+        """Memories below MIN_RELEVANCE_SCORE are filtered out."""
+        from prompt_recall import MIN_RELEVANCE_SCORE, main
+
+        mock_dp = MagicMock()
+        mock_dp.id = "dp-low-1"
+        mock_dp.content = "Some irrelevant memory"
+        mock_dp.scope = "global"
+        mock_dp.salience = 0.3
+        mock_dp.certainty = 2
+        mock_scored = MagicMock()
+        mock_scored.data_point = mock_dp
+        mock_scored.score = MIN_RELEVANCE_SCORE - 0.1
+
+        mock_log = MagicMock()
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_scored]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x), \
+             patch.dict("sys.modules", {"injection_log": MagicMock(log_prompt_recall=mock_log)}):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-relevance",
+            })
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        mock_log.assert_called_once()
+        call_kwargs = mock_log.call_args[1]
+        assert len(call_kwargs["filtered"]) == 1
+        assert call_kwargs["filtered"][0]["reason"] == "low_relevance"
+
+    def test_high_score_injected(self, tmp_path, capsys):
+        """Memories above MIN_RELEVANCE_SCORE are injected normally."""
+        from prompt_recall import MIN_RELEVANCE_SCORE, main
+
+        mock_dp = MagicMock()
+        mock_dp.id = "dp-high-1"
+        mock_dp.content = "Redis requires explicit TTL settings"
+        mock_dp.scope = "global"
+        mock_dp.salience = 0.9
+        mock_dp.certainty = 4
+        mock_scored = MagicMock()
+        mock_scored.data_point = mock_dp
+        mock_scored.score = MIN_RELEVANCE_SCORE + 0.1
+
+        with patch("sys.stdin") as mock_stdin, \
+             patch("memory_utils.get_memory_dir", return_value=tmp_path), \
+             patch("embeddings.search_hybrid", return_value=[mock_scored]), \
+             patch("storage.get_db", return_value=MagicMock()), \
+             patch("storage.close_db"), \
+             patch("memory_utils.sanitize_secrets", side_effect=lambda x: x):
+            mock_stdin.read.return_value = json.dumps({
+                "prompt": "How should I configure Redis caching for this project?",
+                "sessionId": "test-relevance-pass",
+            })
+            main()
+
+        captured = capsys.readouterr()
+        assert "[memory]" in captured.out
+        assert "Redis" in captured.out
+
+
 class TestStaleStateCleanup:
     """Tests for stale state file cleanup."""
 
@@ -155,6 +225,7 @@ class TestMain:
         mock_dp.certainty = 4
         mock_scored = MagicMock()
         mock_scored.data_point = mock_dp
+        mock_scored.score = 0.8
 
         with patch("sys.stdin") as mock_stdin, \
              patch("memory_utils.get_memory_dir", return_value=tmp_path), \
@@ -189,7 +260,7 @@ class TestMain:
 class TestInjectionLogging:
     """Tests for injection logging integration in main()."""
 
-    def _make_mock_dp(self, dp_id="dp-test-1", content="Redis requires explicit TTL settings", scope="global"):
+    def _make_mock_dp(self, dp_id="dp-test-1", content="Redis requires explicit TTL settings", scope="global", score=0.8):
         mock_dp = MagicMock()
         mock_dp.id = dp_id
         mock_dp.content = content
@@ -198,6 +269,7 @@ class TestInjectionLogging:
         mock_dp.certainty = 4
         mock_scored = MagicMock()
         mock_scored.data_point = mock_dp
+        mock_scored.score = score
         return mock_scored
 
     def test_main_calls_log_prompt_recall(self, tmp_path, capsys):
