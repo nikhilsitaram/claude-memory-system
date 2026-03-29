@@ -10,6 +10,7 @@ Exposes 4 tools via the Model Context Protocol:
 
 Runs as a persistent process managed by Claude Code (stdio transport).
 """
+import hashlib
 import json
 import sys
 import threading
@@ -28,7 +29,7 @@ try:
 except ImportError:
     HAS_MCP = False
 
-from embeddings import _serialize_vector, embed_text, search_hybrid
+from embeddings import _serialize_vector, embed_text, ensure_vec_table, search_hybrid
 from storage import (
     PROVENANCE_TYPES,
     DataPointRow,
@@ -56,17 +57,19 @@ def _safe_json_loads(value):
         return []
 
 _db_conn = None
+_vec_available = False
 _model_ready = threading.Event()
 
 
 def init_db():
     """Open a DB connection at startup and load sqlite-vec extension."""
-    global _db_conn
+    global _db_conn, _vec_available
     _db_conn = ensure_db()
     try:
-        from embeddings import ensure_vec_table
-        ensure_vec_table(_db_conn)
-    except Exception as exc:
+        _vec_available = ensure_vec_table(_db_conn)
+        if not _vec_available:
+            print("[memory_server] sqlite-vec not available: ensure_vec_table returned False", file=sys.stderr)
+    except ImportError as exc:
         print(f"[memory_server] sqlite-vec not available: {exc}", file=sys.stderr)
     return _db_conn
 
@@ -329,12 +332,16 @@ async def _write_memory(fact, scope, salience=None, entities=None,
         except Exception as e:
             print(f"Warning: FTS5 sync failed for write: {e}", file=sys.stderr)
 
-        vec = embed_text(fact)
-        if vec:
-            conn.execute(
-                "INSERT INTO vec_data (embedding, data_point_id, type) VALUES (?, ?, ?)",
-                (_serialize_vector(vec), dp_id, "memory"),
-            )
+        if _vec_available:
+            vec = embed_text(fact)
+            if vec:
+                try:
+                    conn.execute(
+                        "INSERT INTO vec_data (embedding, data_point_id, type) VALUES (?, ?, ?)",
+                        (_serialize_vector(vec), dp_id, "memory"),
+                    )
+                except Exception as e:
+                    print(f"Warning: vec_data insert failed for {dp_id}: {e}", file=sys.stderr)
 
         if entities:
             for entity_name in entities:
@@ -379,11 +386,6 @@ async def _delete_memory(dp_id, reason=None):
         now = datetime.now(timezone.utc).isoformat()
 
         soft_delete_data_point(conn, dp_id)
-
-        try:
-            conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
-        except Exception:
-            pass
 
         edges = query_edges_for_data_point(conn, dp_id, direction="both")
         for edge in edges:
@@ -433,11 +435,13 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
 
     # Try as data_point ID first, then resolve as entity name
     entity_id = entity
-    row = conn.execute("SELECT id FROM data_points WHERE id = ?", (entity,)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM data_points WHERE id = ? AND salience > 0", (entity,)
+    ).fetchone()
     if not row:
         name_row = conn.execute(
-            "SELECT id FROM data_points WHERE type = 'entity' AND name = ? AND salience > 0 LIMIT 1",
-            (entity,),
+            "SELECT id FROM data_points WHERE type = 'entity' AND content_hash = ? AND salience > 0 LIMIT 1",
+            (hashlib.sha256(f"entity:{entity.lower()}".encode('utf-8')).hexdigest()[:16],),
         ).fetchone()
         if not name_row:
             return []

@@ -703,6 +703,11 @@ def soft_delete_data_point(conn: sqlite3.Connection, dp_id: str) -> int:
     except Exception as e:
         import sys as _sys
         print(f"Warning: FTS5 delete failed for {dp_id}: {e}", file=_sys.stderr)
+    try:
+        conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
+    except Exception as e:
+        import sys as _sys
+        print(f"Warning: vec_data delete failed for {dp_id}: {e}", file=_sys.stderr)
     return cursor.rowcount
 
 
