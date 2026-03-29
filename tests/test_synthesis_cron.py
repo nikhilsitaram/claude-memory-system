@@ -530,9 +530,26 @@ class TestTopicExtraction:
         assert len(topics) <= 5
 
     def test_short_words_filtered(self):
-        """Words of length <= 2 are excluded."""
-        topics = extract_topics("go to it in my at")
-        assert all(len(t) > 2 for t in topics)
+        """Words of length < 4 are excluded."""
+        topics = extract_topics("go to it in my at git api")
+        assert all(len(t) >= 4 for t in topics)
+
+    def test_claude_excluded_from_topics(self):
+        """The word 'claude' is filtered as a stopword."""
+        text = "claude claude claude testing testing testing memory memory memory"
+        topics = extract_topics(text)
+        assert "claude" not in topics
+        assert "testing" in topics
+        assert "memory" in topics
+
+    def test_three_char_tokens_excluded(self):
+        """Tokens of exactly 3 characters are excluded (min length >= 4)."""
+        text = "git git git api api api pytest pytest pytest deploy deploy deploy"
+        topics = extract_topics(text)
+        assert "git" not in topics
+        assert "api" not in topics
+        assert "pytest" in topics
+        assert "deploy" in topics
 
 
 class TestPreRetrievalContext:
