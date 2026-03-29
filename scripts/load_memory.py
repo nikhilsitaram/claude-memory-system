@@ -455,7 +455,9 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
 # Constants for access tracking
 REINFORCEMENT_ETA = 0.18  # Reinforcement rate (diminishing returns formula)
 
-# Cosine dedup threshold for injection-time filtering (Tiers 3-5)
+# Cosine dedup threshold for injection-time filtering (Tiers 3-5).
+# Lower than synthesis threshold (0.88 in synthesis.py) since injection-time
+# filtering is non-destructive — it only skips display, never deletes data.
 COSINE_DEDUP_THRESHOLD = 0.85
 
 
