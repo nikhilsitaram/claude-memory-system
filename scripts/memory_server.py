@@ -10,11 +10,13 @@ Exposes 4 tools via the Model Context Protocol:
 
 Runs as a persistent process managed by Claude Code (stdio transport).
 """
+import hashlib
 import json
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
@@ -22,13 +24,15 @@ if str(script_dir) not in sys.path:
 
 try:
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
     from mcp.types import TextContent, Tool
     HAS_MCP = True
 except ImportError:
+    Server: Any = None
+    TextContent: Any = None
+    Tool: Any = None
     HAS_MCP = False
 
-from embeddings import _serialize_vector, embed_text, search_hybrid
+from embeddings import _serialize_vector, embed_text, ensure_vec_table, search_hybrid
 from storage import (
     PROVENANCE_TYPES,
     DataPointRow,
@@ -56,13 +60,17 @@ def _safe_json_loads(value):
         return []
 
 _db_conn = None
+_vec_available = False
 _model_ready = threading.Event()
 
 
 def init_db():
-    """Open a DB connection at startup and return it."""
-    global _db_conn
+    """Open a DB connection at startup and load sqlite-vec extension."""
+    global _db_conn, _vec_available
     _db_conn = ensure_db()
+    _vec_available = ensure_vec_table(_db_conn)
+    if not _vec_available:
+        print("[memory_server] sqlite-vec not available", file=sys.stderr)
     return _db_conn
 
 
@@ -140,7 +148,7 @@ if HAS_MCP:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "entity": {"type": "string", "description": "ID of the starting data_point"},
+                        "entity": {"type": "string", "description": "Data point ID or entity name to start traversal from"},
                         "depth": {"type": "integer", "default": 2, "description": "Max traversal depth"},
                         "relationship_type": {
                             "type": "string",
@@ -324,12 +332,16 @@ async def _write_memory(fact, scope, salience=None, entities=None,
         except Exception as e:
             print(f"Warning: FTS5 sync failed for write: {e}", file=sys.stderr)
 
-        vec = embed_text(fact)
-        if vec:
-            conn.execute(
-                "INSERT INTO vec_data (embedding, data_point_id, type) VALUES (?, ?, ?)",
-                (_serialize_vector(vec), dp_id, "memory"),
-            )
+        if _vec_available:
+            vec = embed_text(fact)
+            if vec:
+                try:
+                    conn.execute(
+                        "INSERT INTO vec_data (embedding, data_point_id, type) VALUES (?, ?, ?)",
+                        (_serialize_vector(vec), dp_id, "memory"),
+                    )
+                except Exception as e:
+                    print(f"Warning: vec_data insert failed for {dp_id}: {e}", file=sys.stderr)
 
         if entities:
             for entity_name in entities:
@@ -377,7 +389,7 @@ async def _delete_memory(dp_id, reason=None):
 
         edges = query_edges_for_data_point(conn, dp_id, direction="both")
         for edge in edges:
-            if edge.valid_to is None:
+            if edge.valid_to is None and edge.id is not None:
                 invalidate_edge(conn, edge.id, now, now)
 
         marker_content = reason or f"Deleted: {(target.content or '')[:100]}"
@@ -412,10 +424,28 @@ async def _delete_memory(dp_id, reason=None):
 
 
 async def _traverse_graph(entity, depth=2, relationship_type=None):
-    """Walk the knowledge graph using a recursive CTE. Returns nodes within depth hops."""
+    """Walk the knowledge graph using a recursive CTE. Returns nodes within depth hops.
+
+    The 'entity' parameter can be a data_point ID or an entity name.
+    If it doesn't match any data_point ID, it's resolved as an entity name.
+    """
     conn = _db_conn
     if conn is None:
         return {"error": "Database not initialized"}
+
+    # Try as data_point ID first, then resolve as entity name
+    entity_id = entity
+    row = conn.execute(
+        "SELECT id FROM data_points WHERE id = ? AND salience > 0", (entity,)
+    ).fetchone()
+    if not row:
+        name_row = conn.execute(
+            "SELECT id FROM data_points WHERE type = 'entity' AND content_hash = ? AND salience > 0 LIMIT 1",
+            (hashlib.sha256(f"entity:{entity.lower()}".encode('utf-8')).hexdigest()[:16],),
+        ).fetchone()
+        if not name_row:
+            return {"error": f"Entity not found: {entity}"}
+        entity_id = name_row[0]
 
     type_clause = "AND e.type = ?" if relationship_type else ""
 
@@ -449,20 +479,20 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
            MIN(gw.edge_reason) AS edge_reason,
            dp.content, dp.type, dp.name, dp.scope
     FROM graph_walk gw
-    JOIN data_points dp ON dp.id = gw.dp_id
+    JOIN data_points dp ON dp.id = gw.dp_id AND dp.salience > 0
     WHERE gw.dp_id != ?
     GROUP BY gw.dp_id, dp.content, dp.type, dp.name, dp.scope
     ORDER BY min_depth, dp.salience DESC
     """
 
-    params = [entity, entity, entity]
+    params = [entity_id, entity_id, entity_id]
     if relationship_type:
         params.append(relationship_type)
     params.append(depth)
     if relationship_type:
         params.append(relationship_type)
-    params.append(entity)
-    params.append(entity)
+    params.append(entity_id)
+    params.append(entity_id)
 
     rows = conn.execute(query, params).fetchall()
     return [
@@ -485,9 +515,11 @@ async def main():
         print("Error: mcp SDK not installed. Run: pip install mcp", file=sys.stderr)
         sys.exit(1)
 
+    from mcp.server.stdio import stdio_server as _stdio_server
+
     init_db()
     _warm_model_async()
-    async with stdio_server() as (read_stream, write_stream):
+    async with _stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 

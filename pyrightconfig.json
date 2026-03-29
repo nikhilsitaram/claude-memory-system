@@ -1,4 +1,4 @@
 {
   "extraPaths": ["scripts"],
-  "reportMissingImports": "warning"
+  "reportMissingImports": "none"
 }
