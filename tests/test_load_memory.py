@@ -18,7 +18,11 @@ from load_memory import (
     _build_preextracted_prompt,
     _build_synthesis_instructions_v3,
     _build_synthesis_prompt,
+    _cosine_similarity,
+    _deserialize_vector,
+    _filter_by_cosine_dedup,
     _load_from_db,
+    COSINE_DEDUP_THRESHOLD,
     pre_extract_transcripts_incremental,
     should_synthesize,
     write_synthesis_prompt,
@@ -1667,6 +1671,141 @@ class TestWorkingDayLoading:
             from memory_utils import get_global_working_days
 
             assert get_global_working_days(3) == []
+
+
+class TestEntityCompaction:
+    """Tests for entity tag compaction in Profile tier."""
+
+    def test_entity_rows_rendered_as_tags_line(self, tmp_path):
+        """Entity-type data_points in Profile tier render as a single Tags: line."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(
+            type="entity", name="Python-3.13", content="Python-3.13",
+            scope="user", salience=1.0,
+        ))
+        insert_data_point(conn, DataPointRow(
+            type="entity", name="claude-code", content="claude-code",
+            scope="user", salience=0.9,
+        ))
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch("storage.close_db"):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        text, tiers, alerts = result
+        assert "Tags:" in text
+        assert "Python-3.13" in text
+        assert "claude-code" in text
+        lines = text.strip().splitlines()
+        tag_lines = [l for l in lines if "Tags:" in l]
+        assert len(tag_lines) == 1
+        assert "Python-3.13" in tag_lines[0] and "claude-code" in tag_lines[0]
+
+    def test_memory_rows_still_render_normally(self, tmp_path):
+        """Memory-type data_points in Profile tier still render as separate lines."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(
+            type="profile", content="Senior Python developer",
+            scope="user", salience=1.0,
+        ))
+        insert_data_point(conn, DataPointRow(
+            type="entity", name="Python", content="Python",
+            scope="user", salience=0.8,
+        ))
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch("storage.close_db"):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        text, tiers, alerts = result
+        assert "Senior Python developer" in text
+        assert "Tags:" in text
+        assert "Python" in text
+
+    def test_no_tags_line_when_no_entities(self, tmp_path):
+        """When no entity rows exist, no Tags: line appears."""
+        from storage import DataPointRow, insert_data_point
+
+        conn = _make_v3_db(tmp_path)
+        insert_data_point(conn, DataPointRow(
+            type="profile", content="Uses vim", scope="user", salience=1.0,
+        ))
+        conn.commit()
+        conn.close()
+
+        with mock.patch("storage.get_db") as mock_get_db, mock.patch("storage.close_db"):
+            mock_conn = sqlite3.connect(str(tmp_path / "test.db"))
+            mock_conn.execute("PRAGMA user_version=3")
+            mock_get_db.return_value = mock_conn
+            result = _load_from_db("myproject")
+            mock_conn.close()
+
+        text, tiers, alerts = result
+        assert "Uses vim" in text
+        assert "Tags:" not in text
+
+
+class TestCosineDedup:
+    """Tests for injection-time cosine dedup in Tiers 3-5."""
+
+    def test_deserialize_vector_roundtrip(self):
+        """Deserialize a packed float32 vector and get back the original values."""
+        import struct
+        from embeddings import EMBEDDING_DIM
+        original = [0.1, 0.2, 0.3] + [0.0] * (EMBEDDING_DIM - 1 - 2)
+        blob = struct.pack(f"{len(original)}f", *original)
+        result = _deserialize_vector(blob)
+        assert len(result) == EMBEDDING_DIM
+        assert abs(result[0] - 0.1) < 1e-6
+        assert abs(result[1] - 0.2) < 1e-6
+
+    def test_cosine_similarity_identical_vectors(self):
+        """Identical vectors have cosine similarity of 1.0."""
+        from embeddings import EMBEDDING_DIM
+        vec = [1.0, 0.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+        assert abs(_cosine_similarity(vec, vec) - 1.0) < 1e-6
+
+    def test_cosine_similarity_orthogonal_vectors(self):
+        """Orthogonal vectors have cosine similarity of 0.0."""
+        from embeddings import EMBEDDING_DIM
+        a = [1.0, 0.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+        b = [0.0, 1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
+        assert abs(_cosine_similarity(a, b)) < 1e-6
+
+    def test_filter_removes_similar_candidates(self):
+        """Candidates similar to seen embeddings are filtered out."""
+        from embeddings import EMBEDDING_DIM
+
+        vec_a = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+        vec_b = [0.99] + [0.01] * (EMBEDDING_DIM - 1)  # very similar to vec_a
+        vec_c = [0.0] * (EMBEDDING_DIM - 1) + [1.0]     # orthogonal to vec_a
+
+        seen_embeddings = [vec_a]
+        candidates = [("id_b", "similar content"), ("id_c", "different content")]
+        embeddings_map = {"id_b": vec_b, "id_c": vec_c}
+
+        accepted, new_seen = _filter_by_cosine_dedup(
+            candidates, embeddings_map, seen_embeddings
+        )
+
+        accepted_ids = [r[0] for r in accepted]
+        assert "id_b" not in accepted_ids
+        assert "id_c" in accepted_ids
+        assert len(new_seen) == 2  # original vec_a + new vec_c
 
 
 if __name__ == "__main__":
