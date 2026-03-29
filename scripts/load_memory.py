@@ -469,6 +469,8 @@ def _deserialize_vector(blob: bytes) -> list[float]:
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors. Pure Python."""
+    if len(a) != len(b):
+        return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
@@ -513,24 +515,24 @@ def _fetch_embeddings_for_ids(
 ) -> dict[str, list[float]]:
     """Batch-fetch pre-computed embeddings from vec_data for given data_point IDs.
 
-    Uses a separate query (not JOIN) because vec_data is a virtual table.
-
     Returns:
         Dict mapping data_point ID -> embedding vector. Missing IDs are omitted.
     """
     if not dp_ids:
         return {}
     result = {}
-    for dp_id in dp_ids:
-        try:
-            row = conn.execute(
-                "SELECT embedding FROM vec_data WHERE data_point_id = ?",
-                (dp_id,),
-            ).fetchone()
-            if row and row[0]:
-                result[dp_id] = _deserialize_vector(row[0])
-        except Exception:
-            pass  # vec_data may not exist or sqlite-vec not loaded
+    try:
+        placeholders = ",".join("?" for _ in dp_ids)
+        rows = conn.execute(
+            f"SELECT data_point_id, embedding FROM vec_data "
+            f"WHERE data_point_id IN ({placeholders})",
+            dp_ids,
+        ).fetchall()
+        for row in rows:
+            if row[1]:
+                result[row[0]] = _deserialize_vector(row[1])
+    except sqlite3.OperationalError:
+        pass  # vec_data may not exist or sqlite-vec not loaded
     return result
 
 
@@ -703,6 +705,13 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
                 sections.append(section)
         else:
             tiers_metadata.append({"name": "Session", "count": 0, "tokens_est": 0, "ids": []})
+
+        # Seed seen_embeddings from Tier 1/2 so cosine dedup in Tiers 3-5
+        # can suppress items that paraphrase profile or session content.
+        seed_ids = list(seen_ids)
+        if seed_ids:
+            seed_emb = _fetch_embeddings_for_ids(conn, seed_ids)
+            seen_embeddings.extend(seed_emb.values())
 
         # Tier 3: Project memories
         if project_scope:

@@ -1766,7 +1766,7 @@ class TestCosineDedup:
         """Deserialize a packed float32 vector and get back the original values."""
         import struct
         from embeddings import EMBEDDING_DIM
-        original = [0.1, 0.2, 0.3] + [0.0] * (EMBEDDING_DIM - 1 - 2)
+        original = [0.1, 0.2, 0.3] + [0.0] * (EMBEDDING_DIM - 3)
         blob = struct.pack(f"{len(original)}f", *original)
         result = _deserialize_vector(blob)
         assert len(result) == EMBEDDING_DIM
@@ -1785,6 +1785,12 @@ class TestCosineDedup:
         a = [1.0, 0.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
         b = [0.0, 1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 3)
         assert abs(_cosine_similarity(a, b)) < 1e-6
+
+    def test_cosine_similarity_mismatched_lengths(self):
+        """Mismatched vector lengths return 0.0 instead of silently truncating."""
+        a = [1.0, 0.0, 0.0]
+        b = [1.0, 0.0]
+        assert _cosine_similarity(a, b) == 0.0
 
     def test_filter_removes_similar_candidates(self):
         """Candidates similar to seen embeddings are filtered out."""
