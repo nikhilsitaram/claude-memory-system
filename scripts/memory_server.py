@@ -68,12 +68,9 @@ def init_db():
     """Open a DB connection at startup and load sqlite-vec extension."""
     global _db_conn, _vec_available
     _db_conn = ensure_db()
-    try:
-        _vec_available = ensure_vec_table(_db_conn)
-        if not _vec_available:
-            print("[memory_server] sqlite-vec not available: ensure_vec_table returned False", file=sys.stderr)
-    except ImportError as exc:
-        print(f"[memory_server] sqlite-vec not available: {exc}", file=sys.stderr)
+    _vec_available = ensure_vec_table(_db_conn)
+    if not _vec_available:
+        print("[memory_server] sqlite-vec not available", file=sys.stderr)
     return _db_conn
 
 
@@ -447,7 +444,7 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
             (hashlib.sha256(f"entity:{entity.lower()}".encode('utf-8')).hexdigest()[:16],),
         ).fetchone()
         if not name_row:
-            return []
+            return {"error": f"Entity not found: {entity}"}
         entity_id = name_row[0]
 
     type_clause = "AND e.type = ?" if relationship_type else ""
@@ -482,7 +479,7 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
            MIN(gw.edge_reason) AS edge_reason,
            dp.content, dp.type, dp.name, dp.scope
     FROM graph_walk gw
-    JOIN data_points dp ON dp.id = gw.dp_id
+    JOIN data_points dp ON dp.id = gw.dp_id AND dp.salience > 0
     WHERE gw.dp_id != ?
     GROUP BY gw.dp_id, dp.content, dp.type, dp.name, dp.scope
     ORDER BY min_depth, dp.salience DESC
