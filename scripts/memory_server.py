@@ -16,6 +16,7 @@ import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
@@ -23,10 +24,12 @@ if str(script_dir) not in sys.path:
 
 try:
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
     from mcp.types import TextContent, Tool
     HAS_MCP = True
 except ImportError:
+    Server: Any = None
+    TextContent: Any = None
+    Tool: Any = None
     HAS_MCP = False
 
 from embeddings import _serialize_vector, embed_text, ensure_vec_table, search_hybrid
@@ -389,7 +392,7 @@ async def _delete_memory(dp_id, reason=None):
 
         edges = query_edges_for_data_point(conn, dp_id, direction="both")
         for edge in edges:
-            if edge.valid_to is None:
+            if edge.valid_to is None and edge.id is not None:
                 invalidate_edge(conn, edge.id, now, now)
 
         marker_content = reason or f"Deleted: {(target.content or '')[:100]}"
@@ -515,9 +518,11 @@ async def main():
         print("Error: mcp SDK not installed. Run: pip install mcp", file=sys.stderr)
         sys.exit(1)
 
+    from mcp.server.stdio import stdio_server as _stdio_server
+
     init_db()
     _warm_model_async()
-    async with stdio_server() as (read_stream, write_stream):
+    async with _stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 

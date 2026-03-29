@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
@@ -34,12 +34,14 @@ try:
     from fastembed import TextEmbedding
     HAS_FASTEMBED = True
 except ImportError:
+    TextEmbedding: Any = None
     HAS_FASTEMBED = False
 
 try:
     import sqlite_vec
     HAS_SQLITE_VEC = True
 except ImportError:
+    sqlite_vec: Any = None
     HAS_SQLITE_VEC = False
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
