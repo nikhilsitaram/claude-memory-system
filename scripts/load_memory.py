@@ -18,6 +18,7 @@ Requirements: Python 3.9+
 import json
 import os
 import sqlite3
+import struct
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -454,6 +455,86 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
 # Constants for access tracking
 REINFORCEMENT_ETA = 0.18  # Reinforcement rate (diminishing returns formula)
 
+# Cosine dedup threshold for injection-time filtering (Tiers 3-5).
+# Lower than synthesis threshold (0.88 in synthesis.py) since injection-time
+# filtering is non-destructive — it only skips display, never deletes data.
+COSINE_DEDUP_THRESHOLD = 0.85
+
+
+def _deserialize_vector(blob: bytes) -> list[float]:
+    """Unpack a binary blob from vec_data into a list of floats."""
+    n = len(blob) // 4  # 4 bytes per float32
+    return list(struct.unpack(f"{n}f", blob))
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors. Pure Python."""
+    if len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _filter_by_cosine_dedup(
+    candidates: list[tuple],
+    embeddings_map: dict[str, list[float]],
+    seen_embeddings: list[list[float]],
+) -> tuple[list[tuple], list[list[float]]]:
+    """Filter candidates by cosine similarity against already-accepted items.
+
+    For each candidate, if its embedding has cosine similarity >= COSINE_DEDUP_THRESHOLD
+    with any item in seen_embeddings, it is skipped (semantic duplicate).
+
+    Returns:
+        (accepted_candidates, updated_seen_embeddings)
+    """
+    accepted = []
+    updated_seen = list(seen_embeddings)
+    for row in candidates:
+        dp_id = row[0]
+        vec = embeddings_map.get(dp_id)
+        if vec is None:
+            accepted.append(row)
+            continue
+        is_dup = any(
+            _cosine_similarity(vec, seen_vec) >= COSINE_DEDUP_THRESHOLD
+            for seen_vec in updated_seen
+        )
+        if not is_dup:
+            accepted.append(row)
+            updated_seen.append(vec)
+    return accepted, updated_seen
+
+
+def _fetch_embeddings_for_ids(
+    conn, dp_ids: list[str]
+) -> dict[str, list[float]]:
+    """Batch-fetch pre-computed embeddings from vec_data for given data_point IDs.
+
+    Returns:
+        Dict mapping data_point ID -> embedding vector. Missing IDs are omitted.
+    """
+    if not dp_ids:
+        return {}
+    result = {}
+    try:
+        placeholders = ",".join("?" for _ in dp_ids)
+        rows = conn.execute(
+            f"SELECT data_point_id, embedding FROM vec_data "
+            f"WHERE data_point_id IN ({placeholders})",
+            dp_ids,
+        ).fetchall()
+        for row in rows:
+            if row[1]:
+                result[row[0]] = _deserialize_vector(row[1])
+    except sqlite3.OperationalError:
+        pass  # vec_data may not exist or sqlite-vec not loaded
+    return result
+
 
 def _batch_update_data_point_access(
     conn: sqlite3.Connection, dp_ids: list[str], passive: bool = False
@@ -548,20 +629,29 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
             return None  # Signal: use legacy loading
 
         seen_ids: set[str] = set()
+        seen_embeddings: list[list[float]] = []
         sections: list[str] = []
         tiers_metadata: list[dict] = []
         alerts: list[str] = []
 
         # Tier 1: User profile
         profiles = conn.execute(
-            "SELECT id, content FROM data_points WHERE scope='user' AND salience > 0.5 "
+            "SELECT id, content, type FROM data_points WHERE scope='user' AND salience > 0.5 "
             "ORDER BY salience DESC"
         ).fetchall()
         tier_ids = [row[0] for row in profiles]
         tier_tokens = sum(len(row[1] or "") // 4 for row in profiles)
         tiers_metadata.append({"name": "Profile", "count": len(tier_ids), "tokens_est": tier_tokens, "ids": tier_ids})
         if profiles:
-            profile_text = "\n".join(row[1] for row in profiles if row[1])
+            # Partition by type: entity rows as compact tags line, others as separate lines
+            entity_names = [row[1] for row in profiles if row[2] == "entity" and row[1]]
+            memory_rows = [row[1] for row in profiles if row[2] != "entity" and row[1]]
+            parts = []
+            if memory_rows:
+                parts.append("\n".join(memory_rows))
+            if entity_names:
+                parts.append(f"Tags: {', '.join(entity_names)}")
+            profile_text = "\n".join(parts)
             if profile_text.strip():
                 sections.append(f"## Your Profile\n{profile_text}")
             seen_ids.update(row[0] for row in profiles)
@@ -616,6 +706,13 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
         else:
             tiers_metadata.append({"name": "Session", "count": 0, "tokens_est": 0, "ids": []})
 
+        # Seed seen_embeddings from Tier 1/2 so cosine dedup in Tiers 3-5
+        # can suppress items that paraphrase profile or session content.
+        seed_ids = list(seen_ids)
+        if seed_ids:
+            seed_emb = _fetch_embeddings_for_ids(conn, seed_ids)
+            seen_embeddings.extend(seed_emb.values())
+
         # Tier 3: Project memories
         if project_scope:
             rows = conn.execute(
@@ -625,6 +722,12 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
                 (project_scope,),
             ).fetchall()
             new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+            # Cosine dedup: filter semantically similar candidates
+            emb_map = _fetch_embeddings_for_ids(conn, [r[0] for r in new_rows])
+            if emb_map:
+                new_rows, seen_embeddings = _filter_by_cosine_dedup(
+                    new_rows, emb_map, seen_embeddings
+                )
             project_tier_ids = [r[0] for r in new_rows]
             project_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
             tiers_metadata.append({"name": "Project", "count": len(project_tier_ids), "tokens_est": project_tier_tokens, "ids": project_tier_ids})
@@ -643,6 +746,12 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
             "ORDER BY salience DESC, last_accessed DESC LIMIT 10",
         ).fetchall()
         new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        # Cosine dedup
+        emb_map = _fetch_embeddings_for_ids(conn, [r[0] for r in new_rows])
+        if emb_map:
+            new_rows, seen_embeddings = _filter_by_cosine_dedup(
+                new_rows, emb_map, seen_embeddings
+            )
         global_tier_ids = [r[0] for r in new_rows]
         global_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
         tiers_metadata.append({"name": "Global", "count": len(global_tier_ids), "tokens_est": global_tier_tokens, "ids": global_tier_ids})
@@ -671,6 +780,12 @@ def _load_from_db(project_scope: str) -> tuple[str, list[dict], list[str]] | Non
             (scope_param, three_days_ago),
         ).fetchall()
         new_rows = [(r[0], r[1]) for r in rows if r[0] not in seen_ids]
+        # Cosine dedup
+        emb_map = _fetch_embeddings_for_ids(conn, [r[0] for r in new_rows])
+        if emb_map:
+            new_rows, seen_embeddings = _filter_by_cosine_dedup(
+                new_rows, emb_map, seen_embeddings
+            )
         recent_tier_ids = [r[0] for r in new_rows]
         recent_tier_tokens = sum(len(r[1] or "") // 4 for r in new_rows)
         tiers_metadata.append({"name": "Recent", "count": len(recent_tier_ids), "tokens_est": recent_tier_tokens, "ids": recent_tier_ids})
