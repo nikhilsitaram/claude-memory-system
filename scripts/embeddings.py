@@ -301,7 +301,7 @@ def search_similar(conn, query: str, top_k: int = DEFAULT_TOP_K, scope: Optional
     dist_map = {r[1]: r[0] for r in knn_rows}
     placeholders = ",".join("?" * len(dp_ids))
     dp_rows = conn.execute(
-        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id IN ({placeholders})",
+        f"SELECT {_DP_COLUMNS} FROM data_points WHERE id IN ({placeholders}) AND salience > 0",
         dp_ids,
     ).fetchall()
 

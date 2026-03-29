@@ -60,9 +60,14 @@ _model_ready = threading.Event()
 
 
 def init_db():
-    """Open a DB connection at startup and return it."""
+    """Open a DB connection at startup and load sqlite-vec extension."""
     global _db_conn
     _db_conn = ensure_db()
+    try:
+        from embeddings import ensure_vec_table
+        ensure_vec_table(_db_conn)
+    except Exception as exc:
+        print(f"[memory_server] sqlite-vec not available: {exc}", file=sys.stderr)
     return _db_conn
 
 
@@ -140,7 +145,7 @@ if HAS_MCP:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "entity": {"type": "string", "description": "ID of the starting data_point"},
+                        "entity": {"type": "string", "description": "Data point ID or entity name to start traversal from"},
                         "depth": {"type": "integer", "default": 2, "description": "Max traversal depth"},
                         "relationship_type": {
                             "type": "string",
@@ -375,6 +380,11 @@ async def _delete_memory(dp_id, reason=None):
 
         soft_delete_data_point(conn, dp_id)
 
+        try:
+            conn.execute("DELETE FROM vec_data WHERE data_point_id = ?", (dp_id,))
+        except Exception:
+            pass
+
         edges = query_edges_for_data_point(conn, dp_id, direction="both")
         for edge in edges:
             if edge.valid_to is None:
@@ -412,10 +422,26 @@ async def _delete_memory(dp_id, reason=None):
 
 
 async def _traverse_graph(entity, depth=2, relationship_type=None):
-    """Walk the knowledge graph using a recursive CTE. Returns nodes within depth hops."""
+    """Walk the knowledge graph using a recursive CTE. Returns nodes within depth hops.
+
+    The 'entity' parameter can be a data_point ID or an entity name.
+    If it doesn't match any data_point ID, it's resolved as an entity name.
+    """
     conn = _db_conn
     if conn is None:
         return {"error": "Database not initialized"}
+
+    # Try as data_point ID first, then resolve as entity name
+    entity_id = entity
+    row = conn.execute("SELECT id FROM data_points WHERE id = ?", (entity,)).fetchone()
+    if not row:
+        name_row = conn.execute(
+            "SELECT id FROM data_points WHERE type = 'entity' AND name = ? AND salience > 0 LIMIT 1",
+            (entity,),
+        ).fetchone()
+        if not name_row:
+            return []
+        entity_id = name_row[0]
 
     type_clause = "AND e.type = ?" if relationship_type else ""
 
@@ -455,14 +481,14 @@ async def _traverse_graph(entity, depth=2, relationship_type=None):
     ORDER BY min_depth, dp.salience DESC
     """
 
-    params = [entity, entity, entity]
+    params = [entity_id, entity_id, entity_id]
     if relationship_type:
         params.append(relationship_type)
     params.append(depth)
     if relationship_type:
         params.append(relationship_type)
-    params.append(entity)
-    params.append(entity)
+    params.append(entity_id)
+    params.append(entity_id)
 
     rows = conn.execute(query, params).fetchall()
     return [
