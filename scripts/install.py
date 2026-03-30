@@ -587,29 +587,39 @@ def build_project_index(python_cmd: str) -> None:
 
 
 def merge_mcp_servers(settings: dict, python_cmd: str) -> dict:
-    """Add memory MCP server configuration to settings.
+    """Register memory MCP server in ~/.claude.json (user-level config).
 
-    Adds the memory MCP server under mcpServers.memory.
-    Preserves any existing mcpServers entries.
-    Idempotent — safe to call multiple times.
+    Claude Code reads MCP servers from ~/.claude.json, not settings.json.
+    Also removes any stale mcpServers entry from settings.json.
 
     Args:
-        settings: Current settings dict.
+        settings: Current settings.json dict (for cleanup only).
         python_cmd: Python executable command (e.g., 'python3').
 
     Returns:
-        Updated settings dict.
+        Updated settings dict (with mcpServers removed if present).
     """
     scripts_dir = str(Path.home() / ".claude" / "scripts")
 
-    if "mcpServers" not in settings:
-        settings["mcpServers"] = {}
+    # Write to ~/.claude.json (where Claude Code actually reads MCP servers)
+    claude_json = Path.home() / ".claude.json"
+    config = load_json_file(claude_json, default={})
 
-    settings["mcpServers"]["memory"] = {
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    config["mcpServers"]["memory"] = {
+        "type": "stdio",
         "command": python_cmd,
         "args": [f"{scripts_dir}/memory_server.py"],
         "env": {},
     }
+
+    save_json_file(claude_json, config)
+    print(f"Registered MCP server in {claude_json}")
+
+    # Clean up stale mcpServers from settings.json
+    settings.pop("mcpServers", None)
 
     return settings
 
