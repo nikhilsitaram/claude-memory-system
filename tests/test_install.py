@@ -759,28 +759,48 @@ class TestCreateDatabase:
 
 
 class TestMCPInstall:
-    def test_mcp_server_added_to_settings(self):
-        """install.py adds mcpServers.memory to settings.json."""
-        settings = {}
-        updated = install.merge_mcp_servers(settings, "python3")
-        assert "mcpServers" in updated
-        assert "memory" in updated["mcpServers"]
-        assert updated["mcpServers"]["memory"]["command"] == "python3"
-        assert "memory_server.py" in updated["mcpServers"]["memory"]["args"][0]
+    def test_mcp_server_written_to_claude_json(self, tmp_path):
+        """install.py writes mcpServers.memory to ~/.claude.json."""
+        claude_json = tmp_path / ".claude.json"
+        with mock.patch("install.Path") as mock_path:
+            mock_path.home.return_value = tmp_path
+            settings = {}
+            install.merge_mcp_servers(settings, "python3")
+        config = json.loads(claude_json.read_text())
+        assert "memory" in config["mcpServers"]
+        assert config["mcpServers"]["memory"]["command"] == "python3"
+        assert config["mcpServers"]["memory"]["type"] == "stdio"
+        assert "memory_server.py" in config["mcpServers"]["memory"]["args"][0]
 
-    def test_mcp_idempotent(self):
+    def test_mcp_removes_stale_settings_json_entry(self, tmp_path):
+        """merge_mcp_servers removes mcpServers from settings.json dict."""
+        with mock.patch("install.Path") as mock_path:
+            mock_path.home.return_value = tmp_path
+            settings = {"mcpServers": {"memory": {"command": "old"}}}
+            updated = install.merge_mcp_servers(settings, "python3")
+        assert "mcpServers" not in updated
+
+    def test_mcp_idempotent(self, tmp_path):
         """Running merge_mcp_servers twice doesn't duplicate."""
-        settings = {}
-        settings = install.merge_mcp_servers(settings, "python3")
-        settings = install.merge_mcp_servers(settings, "python3")
-        assert len(settings["mcpServers"]) == 1
+        claude_json = tmp_path / ".claude.json"
+        with mock.patch("install.Path") as mock_path:
+            mock_path.home.return_value = tmp_path
+            settings = {}
+            settings = install.merge_mcp_servers(settings, "python3")
+            settings = install.merge_mcp_servers(settings, "python3")
+        config = json.loads(claude_json.read_text())
+        assert len(config["mcpServers"]) == 1
 
-    def test_existing_mcp_servers_preserved(self):
-        """Existing mcpServers entries are not removed."""
-        settings = {"mcpServers": {"other": {"command": "node", "args": ["other.js"]}}}
-        updated = install.merge_mcp_servers(settings, "python3")
-        assert "other" in updated["mcpServers"]
-        assert "memory" in updated["mcpServers"]
+    def test_existing_claude_json_servers_preserved(self, tmp_path):
+        """Existing mcpServers entries in .claude.json are not removed."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(json.dumps({"mcpServers": {"other": {"command": "node"}}}))
+        with mock.patch("install.Path") as mock_path:
+            mock_path.home.return_value = tmp_path
+            install.merge_mcp_servers({}, "python3")
+        config = json.loads(claude_json.read_text())
+        assert "other" in config["mcpServers"]
+        assert "memory" in config["mcpServers"]
 
     def test_memory_server_in_link_scripts(self):
         """memory_server.py is in the scripts_to_link list."""
