@@ -57,18 +57,16 @@ def _load_vec_extension(conn):
 def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
     """Find clusters of similar active memories for potential consolidation.
 
-    Uses two complementary strategies:
-    1. Cosine similarity from vec_data embeddings (catches paraphrases with
-       similar embeddings)
-    2. Entity overlap (catches memories about the same topics that the
-       embedding model scores as dissimilar)
+    Uses three complementary strategies:
+    1. Cosine similarity from vec_data embeddings (requires sqlite-vec + fastembed)
+    2. Entity overlap (catches memories about the same topics)
+    3. Token overlap coefficient (catches paraphrases without entity metadata)
+
+    Caller should load vec extension before calling if cosine similarity
+    is desired. If vec is not loaded, only entity/token strategies are used.
     """
-    vec_loaded = False
-    try:
-        _load_vec_extension(conn)
-        vec_loaded = True
-    except RuntimeError as e:
-        print(f"WARNING: {e}", file=sys.stderr)
+    from embeddings import HAS_FASTEMBED, HAS_SQLITE_VEC
+    vec_loaded = HAS_FASTEMBED and HAS_SQLITE_VEC
 
     rows = conn.execute(
         "SELECT id FROM data_points WHERE type = 'memory' AND salience > 0.1"
@@ -183,14 +181,16 @@ def _get_entity_overlap_pairs(conn, active_ids, min_overlap=0.70):
     Memories sharing >= min_overlap of their entities are candidates.
     """
     id_entities = {}
-    for dp_id in active_ids:
-        row = conn.execute(
-            "SELECT entities FROM data_points WHERE id = ?", (dp_id,)
-        ).fetchone()
-        if not row or not row[0]:
+    placeholders = ",".join("?" for _ in active_ids)
+    rows = conn.execute(
+        f"SELECT id, entities FROM data_points WHERE id IN ({placeholders})",
+        active_ids,
+    ).fetchall()
+    for dp_id, ent_json in rows:
+        if not ent_json:
             continue
         try:
-            ents = json.loads(row[0])
+            ents = json.loads(ent_json)
             if isinstance(ents, list) and len(ents) >= 2:
                 id_entities[dp_id] = set(e.lower() if isinstance(e, str) else str(e).lower() for e in ents)
         except (json.JSONDecodeError, TypeError):
@@ -247,13 +247,15 @@ def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55):
     is largely contained in a more detailed version of the same fact.
     """
     id_tokens = {}
-    for dp_id in active_ids:
-        row = conn.execute(
-            "SELECT content FROM data_points WHERE id = ?", (dp_id,)
-        ).fetchone()
-        if not row or not row[0]:
+    placeholders = ",".join("?" for _ in active_ids)
+    rows = conn.execute(
+        f"SELECT id, content FROM data_points WHERE id IN ({placeholders})",
+        active_ids,
+    ).fetchall()
+    for dp_id, content in rows:
+        if not content:
             continue
-        tokens = _tokenize(row[0])
+        tokens = _tokenize(content)
         if len(tokens) >= 3:
             id_tokens[dp_id] = tokens
 
@@ -504,13 +506,18 @@ def write_merge_result(conn, merged_fact, original_ids, entities=None, certainty
         insert_edge(conn, EdgeRow(source=new_id, target=oid, type="supersedes", created_at=now))
         soft_delete_data_point(conn, oid)
 
-    fts_insert(conn, new_id, safe_fact, scope)
+    try:
+        fts_insert(conn, new_id, safe_fact, scope)
+    except Exception as e:
+        print(f"WARNING: FTS insert failed for merged result {new_id}: {e}", file=sys.stderr)
 
     try:
         from embeddings import index_data_points
         index_data_points(conn, [new_id])
     except ImportError:
         print("WARNING: could not index merged result — embeddings module unavailable", file=sys.stderr)
+    except Exception as e:
+        print(f"WARNING: failed to index merged result {new_id}: {e}", file=sys.stderr)
 
     return new_id
 
@@ -615,9 +622,8 @@ if __name__ == "__main__":
     try:
         _load_vec_extension(conn)
     except RuntimeError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        print("Consolidation requires sqlite-vec. Exiting.", file=sys.stderr)
-        sys.exit(1)
+        print(f"WARNING: {e}", file=sys.stderr)
+        print("Cosine similarity clustering unavailable. Using entity/token overlap only.", file=sys.stderr)
     try:
         stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
         print(json.dumps(stats, indent=2))
