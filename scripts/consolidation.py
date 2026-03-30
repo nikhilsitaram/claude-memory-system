@@ -81,7 +81,7 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
         cosine_pairs = _get_similarity_pairs(conn, active_ids, similarity_threshold)
 
     entity_pairs = _get_entity_overlap_pairs(conn, active_ids, min_overlap=0.70)
-    token_pairs = _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55)
+    token_pairs = _get_token_overlap_pairs(conn, active_ids, min_overlap=0.45)
 
     all_pairs = _merge_pair_sources(cosine_pairs, entity_pairs, token_pairs)
 
@@ -239,7 +239,7 @@ def _tokenize(text):
     return {t for t in tokens if t not in _TOKEN_STOPWORDS and len(t) >= 3}
 
 
-def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55):
+def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.45):
     """Find pairs of memories with high word-token overlap.
 
     Uses overlap coefficient (|A∩B| / min(|A|, |B|)) instead of Jaccard.
@@ -622,8 +622,14 @@ if __name__ == "__main__":
     try:
         _load_vec_extension(conn)
     except RuntimeError as e:
-        print(f"WARNING: {e}", file=sys.stderr)
-        print("Cosine similarity clustering unavailable. Using entity/token overlap only.", file=sys.stderr)
+        print(f"ERROR: {e}", file=sys.stderr)
+        print(
+            "Cosine similarity is required for accurate clustering. "
+            "Run with the project venv Python that has sqlite-vec + fastembed:\n"
+            "  .venv/bin/python3 scripts/consolidation.py --force",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     try:
         stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
         print(json.dumps(stats, indent=2))
