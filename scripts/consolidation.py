@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Memory consolidation pipeline for Claude Code Memory System.
 
-Finds groups of redundant memories via vector similarity clustering,
-uses headless LLM to merge or skip each cluster, writes merged results
-as new data_points with supersedes edges to originals.
+Finds groups of redundant memories via vector similarity clustering
+and entity-overlap analysis, uses headless LLM to merge or skip each
+cluster, writes merged results as new data_points with supersedes edges.
 
 Usage:
     python3 consolidation.py                # Run with settings gate
@@ -33,8 +33,41 @@ from storage import (
 )
 
 
+def _load_vec_extension(conn):
+    """Load sqlite-vec extension onto connection. Raises on failure."""
+    from embeddings import HAS_FASTEMBED, HAS_SQLITE_VEC, ensure_vec_table
+
+    if not HAS_SQLITE_VEC:
+        raise RuntimeError(
+            "sqlite-vec not installed. Install with: pip install sqlite-vec"
+        )
+    if not HAS_FASTEMBED:
+        print(
+            "WARNING: fastembed not installed — cosine similarity clustering "
+            "unavailable, falling back to entity-overlap only. "
+            "Install with: pip install fastembed",
+            file=sys.stderr,
+        )
+    if not ensure_vec_table(conn):
+        raise RuntimeError(
+            "Failed to load sqlite-vec extension on DB connection"
+        )
+
+
 def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
-    """Find clusters of similar active memories for potential consolidation."""
+    """Find clusters of similar active memories for potential consolidation.
+
+    Uses three complementary strategies:
+    1. Cosine similarity from vec_data embeddings (requires sqlite-vec + fastembed)
+    2. Entity overlap (catches memories about the same topics)
+    3. Token overlap coefficient (catches paraphrases without entity metadata)
+
+    Caller should load vec extension before calling if cosine similarity
+    is desired. If vec is not loaded, only entity/token strategies are used.
+    """
+    from embeddings import HAS_FASTEMBED, HAS_SQLITE_VEC
+    vec_loaded = HAS_FASTEMBED and HAS_SQLITE_VEC
+
     rows = conn.execute(
         "SELECT id FROM data_points WHERE type = 'memory' AND salience > 0.1"
     ).fetchall()
@@ -43,12 +76,25 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
     if len(active_ids) < 2:
         return []
 
-    sim_pairs = _get_similarity_pairs(conn, active_ids, similarity_threshold)
+    cosine_pairs = []
+    if vec_loaded:
+        cosine_pairs = _get_similarity_pairs(conn, active_ids, similarity_threshold)
+
+    entity_pairs = _get_entity_overlap_pairs(conn, active_ids, min_overlap=0.70)
+    token_pairs = _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55)
+
+    all_pairs = _merge_pair_sources(cosine_pairs, entity_pairs, token_pairs)
 
     excluded = _get_excluded_pairs(conn, active_ids)
-    sim_pairs = [(a, b, s) for a, b, s in sim_pairs if (a, b) not in excluded and (b, a) not in excluded]
+    all_pairs = [
+        (a, b, s) for a, b, s in all_pairs
+        if (a, b) not in excluded and (b, a) not in excluded
+    ]
 
-    clusters = _connected_components(sim_pairs)
+    if not all_pairs:
+        return []
+
+    clusters = _connected_components(all_pairs)
 
     result = []
     for members, edges in clusters:
@@ -62,7 +108,6 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
         else:
             result.append({"members": members, "similarities": edges})
 
-    # Enrich clusters with metadata for scoring, then sort by importance
     for cluster in result:
         _enrich_cluster_metadata(conn, cluster)
     result.sort(key=score_cluster, reverse=True)
@@ -72,15 +117,18 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
 
 def _get_similarity_pairs(conn, active_ids, threshold):
     """Query vec_data for pairwise similarities above threshold."""
-    try:
-        from embeddings import HAS_FASTEMBED, HAS_SQLITE_VEC
-        if not HAS_FASTEMBED or not HAS_SQLITE_VEC:
-            return []
-    except ImportError:
+    from embeddings import HAS_FASTEMBED, HAS_SQLITE_VEC
+    if not HAS_FASTEMBED or not HAS_SQLITE_VEC:
+        print(
+            "WARNING: cosine similarity clustering skipped — "
+            f"HAS_FASTEMBED={HAS_FASTEMBED}, HAS_SQLITE_VEC={HAS_SQLITE_VEC}",
+            file=sys.stderr,
+        )
         return []
 
     pairs = []
     id_set = set(active_ids)
+    errors = 0
 
     for dp_id in active_ids:
         try:
@@ -94,7 +142,7 @@ def _get_similarity_pairs(conn, active_ids, threshold):
                 "SELECT data_point_id, distance FROM vec_data "
                 "WHERE embedding MATCH ? AND k = 11 "
                 "ORDER BY distance",
-                (row[0],)
+                (row[0],),
             ).fetchall()
 
             for neighbor_id, distance in neighbors:
@@ -104,8 +152,16 @@ def _get_similarity_pairs(conn, active_ids, threshold):
                 if similarity >= threshold:
                     pair = tuple(sorted([dp_id, neighbor_id]))
                     pairs.append((pair[0], pair[1], similarity))
-        except Exception:
-            continue
+        except Exception as e:
+            errors += 1
+            if errors == 1:
+                print(f"WARNING: vec_data query failed: {e}", file=sys.stderr)
+
+    if errors > 1:
+        print(
+            f"WARNING: {errors} vec_data query failures total",
+            file=sys.stderr,
+        )
 
     seen = set()
     unique_pairs = []
@@ -116,6 +172,120 @@ def _get_similarity_pairs(conn, active_ids, threshold):
             unique_pairs.append((a, b, s))
 
     return unique_pairs
+
+
+def _get_entity_overlap_pairs(conn, active_ids, min_overlap=0.70):
+    """Find pairs of memories with high entity overlap.
+
+    Parses the JSON entities column and computes Jaccard similarity.
+    Memories sharing >= min_overlap of their entities are candidates.
+    """
+    id_entities = {}
+    placeholders = ",".join("?" for _ in active_ids)
+    rows = conn.execute(
+        f"SELECT id, entities FROM data_points WHERE id IN ({placeholders})",
+        active_ids,
+    ).fetchall()
+    for dp_id, ent_json in rows:
+        if not ent_json:
+            continue
+        try:
+            ents = json.loads(ent_json)
+            if isinstance(ents, list) and len(ents) >= 2:
+                id_entities[dp_id] = set(e.lower() if isinstance(e, str) else str(e).lower() for e in ents)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    entity_ids = list(id_entities.keys())
+    pairs = []
+
+    for i in range(len(entity_ids)):
+        for j in range(i + 1, len(entity_ids)):
+            a, b = entity_ids[i], entity_ids[j]
+            set_a, set_b = id_entities[a], id_entities[b]
+            intersection = set_a & set_b
+            union = set_a | set_b
+            if not union:
+                continue
+            jaccard = len(intersection) / len(union)
+            if jaccard >= min_overlap:
+                pair = tuple(sorted([a, b]))
+                pairs.append((pair[0], pair[1], jaccard))
+
+    return pairs
+
+
+_TOKEN_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "and", "but", "or",
+    "not", "no", "nor", "so", "yet", "both", "either", "neither", "each",
+    "every", "all", "any", "few", "more", "most", "other", "some", "such",
+    "than", "too", "very", "just", "also", "now", "then", "here", "there",
+    "when", "where", "why", "how", "what", "which", "who", "whom", "this",
+    "that", "these", "those", "it", "its", "i", "me", "my", "we", "our",
+    "you", "your", "he", "him", "his", "she", "her", "they", "them", "their",
+    "if", "up", "out", "about", "over", "under", "again", "further", "once",
+    "user", "uses", "using", "used",
+})
+
+
+def _tokenize(text):
+    """Lowercase, split on non-alphanumeric, remove stopwords and short tokens."""
+    import re
+    tokens = re.findall(r'[a-z0-9][a-z0-9_.\-/]+', text.lower())
+    return {t for t in tokens if t not in _TOKEN_STOPWORDS and len(t) >= 3}
+
+
+def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55):
+    """Find pairs of memories with high word-token overlap.
+
+    Uses overlap coefficient (|A∩B| / min(|A|, |B|)) instead of Jaccard.
+    This catches short-to-long redundancy where a brief memory's vocabulary
+    is largely contained in a more detailed version of the same fact.
+    """
+    id_tokens = {}
+    placeholders = ",".join("?" for _ in active_ids)
+    rows = conn.execute(
+        f"SELECT id, content FROM data_points WHERE id IN ({placeholders})",
+        active_ids,
+    ).fetchall()
+    for dp_id, content in rows:
+        if not content:
+            continue
+        tokens = _tokenize(content)
+        if len(tokens) >= 3:
+            id_tokens[dp_id] = tokens
+
+    token_ids = list(id_tokens.keys())
+    pairs = []
+
+    for i in range(len(token_ids)):
+        for j in range(i + 1, len(token_ids)):
+            a, b = token_ids[i], token_ids[j]
+            set_a, set_b = id_tokens[a], id_tokens[b]
+            intersection = set_a & set_b
+            min_size = min(len(set_a), len(set_b))
+            if min_size == 0:
+                continue
+            overlap = len(intersection) / min_size
+            if overlap >= min_overlap:
+                pair = tuple(sorted([a, b]))
+                pairs.append((pair[0], pair[1], overlap))
+
+    return pairs
+
+
+def _merge_pair_sources(*pair_lists):
+    """Merge pairs from multiple sources, keeping max score per pair."""
+    merged = {}
+    for pair_list in pair_lists:
+        for a, b, s in pair_list:
+            key = tuple(sorted([a, b]))
+            merged[key] = max(merged.get(key, 0.0), s)
+    return [(a, b, s) for (a, b), s in merged.items()]
 
 
 def _get_excluded_pairs(conn, active_ids):
@@ -293,12 +463,10 @@ def _build_merge_prompt(members):
 def _parse_merge_response(text):
     """Parse LLM merge/skip response JSON."""
     import re
-    # Try direct parse first (clean JSON response)
     try:
         return json.loads(text.strip())
     except (json.JSONDecodeError, ValueError):
         pass
-    # Fall back to extracting JSON object from surrounding text
     json_match = re.search(r'\{.*\}', text, re.DOTALL)
     if json_match:
         try:
@@ -340,14 +508,16 @@ def write_merge_result(conn, merged_fact, original_ids, entities=None, certainty
 
     try:
         fts_insert(conn, new_id, safe_fact, scope)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"WARNING: FTS insert failed for merged result {new_id}: {e}", file=sys.stderr)
 
     try:
         from embeddings import index_data_points
         index_data_points(conn, [new_id])
-    except Exception:
-        pass
+    except ImportError:
+        print("WARNING: could not index merged result — embeddings module unavailable", file=sys.stderr)
+    except Exception as e:
+        print(f"WARNING: failed to index merged result {new_id}: {e}", file=sys.stderr)
 
     return new_id
 
@@ -388,7 +558,14 @@ def _run_consolidation_locked(conn, settings, backfill, dry_run):
     if dry_run:
         print(f"Consolidation dry run: {len(clusters)} clusters found", file=sys.stderr)
         for i, cluster in enumerate(clusters):
-            print(f"  Cluster {i+1}: {len(cluster['members'])} members", file=sys.stderr)
+            print(f"\n  Cluster {i+1}: {len(cluster['members'])} members", file=sys.stderr)
+            for dp_id in cluster["members"]:
+                row = conn.execute(
+                    "SELECT substr(content, 1, 100), scope, salience FROM data_points WHERE id = ?",
+                    (dp_id,),
+                ).fetchone()
+                if row:
+                    print(f"    [{dp_id[:8]}] scope={row[1]} sal={row[2]:.2f} | {row[0]}...", file=sys.stderr)
         return stats
 
     for cluster in clusters:
@@ -423,6 +600,11 @@ def _run_consolidation_locked(conn, settings, backfill, dry_run):
             conn.commit()
             stats["clusters_merged"] += 1
             stats["memories_consolidated"] += len(cluster["members"])
+            print(
+                f"Consolidation MERGE: {len(cluster['members'])} memories → "
+                f"\"{merged_fact[:80]}...\"",
+                file=sys.stderr,
+            )
         else:
             stats["clusters_skipped"] += 1
             print(f"Consolidation SKIP: {result.get('reason', 'unknown')}", file=sys.stderr)
@@ -437,6 +619,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     conn = ensure_db()
+    try:
+        _load_vec_extension(conn)
+    except RuntimeError as e:
+        print(f"WARNING: {e}", file=sys.stderr)
+        print("Cosine similarity clustering unavailable. Using entity/token overlap only.", file=sys.stderr)
     try:
         stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
         print(json.dumps(stats, indent=2))

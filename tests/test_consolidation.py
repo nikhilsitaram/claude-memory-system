@@ -588,3 +588,172 @@ class TestGetExcludedPairs:
         from consolidation import _get_excluded_pairs
         excluded = _get_excluded_pairs(shared_db, [])
         assert excluded == set()
+
+
+class TestTokenize:
+    """Tests for _tokenize helper."""
+
+    def test_removes_stopwords(self):
+        from consolidation import _tokenize
+        tokens = _tokenize("the user is using this tool")
+        assert "the" not in tokens
+        assert "user" not in tokens
+        assert "tool" in tokens
+
+    def test_removes_short_tokens(self):
+        from consolidation import _tokenize
+        tokens = _tokenize("a is ok no")
+        assert "ok" not in tokens
+        assert "is" not in tokens
+
+    def test_extracts_hyphenated_names(self):
+        from consolidation import _tokenize
+        tokens = _tokenize("claude-caliper and claude-memory-system are active")
+        assert "claude-caliper" in tokens
+        assert "claude-memory-system" in tokens
+
+    def test_lowercase(self):
+        from consolidation import _tokenize
+        tokens = _tokenize("Claude-Caliper SWYFFT")
+        assert "claude-caliper" in tokens
+        assert "swyfft" in tokens
+
+
+class TestTokenOverlapPairs:
+    """Tests for _get_token_overlap_pairs using overlap coefficient."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch as p
+
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with p("storage.get_db_path", return_value=db_path), \
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_high_overlap_detected(self, tmp_path):
+        from consolidation import _get_token_overlap_pairs
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(
+            type="memory", content="User works on claude-caliper, claude-memory-system, swyfft",
+            scope="user", salience=1.0,
+        ))
+        id2 = insert_data_point(conn, DataPointRow(
+            type="memory", content="User works on claude-caliper, claude-memory-system, swyfft, investing",
+            scope="user", salience=1.0,
+        ))
+        conn.commit()
+        pairs = _get_token_overlap_pairs(conn, [id1, id2], min_overlap=0.55)
+        assert len(pairs) == 1
+        assert pairs[0][2] >= 0.55
+        conn.close()
+
+    def test_low_overlap_excluded(self, tmp_path):
+        from consolidation import _get_token_overlap_pairs
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(
+            type="memory", content="Redis caching layer for production",
+            scope="global", salience=0.5,
+        ))
+        id2 = insert_data_point(conn, DataPointRow(
+            type="memory", content="Python testing with pytest fixtures",
+            scope="global", salience=0.5,
+        ))
+        conn.commit()
+        pairs = _get_token_overlap_pairs(conn, [id1, id2], min_overlap=0.55)
+        assert len(pairs) == 0
+        conn.close()
+
+    def test_uses_overlap_coefficient_not_jaccard(self, tmp_path):
+        """Overlap coefficient = |A∩B|/min(|A|,|B|), not |A∩B|/|A∪B|."""
+        from consolidation import _get_token_overlap_pairs
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(
+            type="memory", content="claude-caliper swyfft investing",
+            scope="user", salience=1.0,
+        ))
+        id2 = insert_data_point(conn, DataPointRow(
+            type="memory",
+            content="claude-caliper swyfft investing claude-memory-system analytics tooling framework orchestration",
+            scope="user", salience=1.0,
+        ))
+        conn.commit()
+        pairs = _get_token_overlap_pairs(conn, [id1, id2], min_overlap=0.55)
+        assert len(pairs) == 1, "Short memory's tokens are largely contained in longer one"
+        conn.close()
+
+
+class TestEntityOverlapPairs:
+    """Tests for _get_entity_overlap_pairs."""
+
+    def _make_db(self, tmp_path):
+        from unittest.mock import patch as p
+
+        from storage import ensure_db
+        db_path = tmp_path / "memory.db"
+        with p("storage.get_db_path", return_value=db_path), \
+             p("memory_utils.get_memory_dir", return_value=tmp_path):
+            return ensure_db()
+
+    def test_high_entity_overlap(self, tmp_path):
+        from consolidation import _get_entity_overlap_pairs
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(
+            type="memory", content="A", scope="global", salience=0.5,
+            entities=json.dumps(["Redis", "caching", "production"]),
+        ))
+        id2 = insert_data_point(conn, DataPointRow(
+            type="memory", content="B", scope="global", salience=0.5,
+            entities=json.dumps(["Redis", "caching", "scaling"]),
+        ))
+        conn.commit()
+        pairs = _get_entity_overlap_pairs(conn, [id1, id2], min_overlap=0.50)
+        assert len(pairs) == 1
+        conn.close()
+
+    def test_no_entities_excluded(self, tmp_path):
+        from consolidation import _get_entity_overlap_pairs
+        from storage import DataPointRow, insert_data_point
+        conn = self._make_db(tmp_path)
+        id1 = insert_data_point(conn, DataPointRow(
+            type="memory", content="A", scope="user", salience=1.0,
+        ))
+        id2 = insert_data_point(conn, DataPointRow(
+            type="memory", content="B", scope="user", salience=1.0,
+        ))
+        conn.commit()
+        pairs = _get_entity_overlap_pairs(conn, [id1, id2], min_overlap=0.50)
+        assert len(pairs) == 0
+        conn.close()
+
+
+class TestMergePairSources:
+    """Tests for _merge_pair_sources combining multiple pair lists."""
+
+    def test_keeps_max_score(self):
+        from consolidation import _merge_pair_sources
+        cosine = [("a", "b", 0.85)]
+        entity = [("a", "b", 0.90)]
+        result = _merge_pair_sources(cosine, entity)
+        assert len(result) == 1
+        assert result[0][2] == 0.90
+
+    def test_combines_unique_pairs(self):
+        from consolidation import _merge_pair_sources
+        cosine = [("a", "b", 0.85)]
+        entity = [("c", "d", 0.70)]
+        token = [("e", "f", 0.60)]
+        result = _merge_pair_sources(cosine, entity, token)
+        assert len(result) == 3
+
+    def test_normalizes_pair_order(self):
+        from consolidation import _merge_pair_sources
+        list1 = [("b", "a", 0.85)]
+        list2 = [("a", "b", 0.90)]
+        result = _merge_pair_sources(list1, list2)
+        assert len(result) == 1
+        assert result[0][2] == 0.90
