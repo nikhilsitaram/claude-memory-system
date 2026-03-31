@@ -966,7 +966,9 @@ def apply_results(
         if offsets:
             update_synthesis_state(offsets)
 
-    # Post-processing
+    # Post-processing: pass session IDs for pending-recall cleanup.
+    # If offsets is empty (state write failed or no sessions found), session_ids
+    # is None — recall files are left for the 24h safety net in load_memory.py.
     session_ids = list(offsets.keys()) if offsets else None
     run_post_processing(extract_paths, offsets_json=offsets_json, session_ids=session_ids)
     print("Post-processing complete")

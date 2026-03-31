@@ -868,19 +868,24 @@ class TestPendingRecallCleanup:
         (tmp_path / "global.md").write_text("", encoding="utf-8")
         (tmp_path / "projects").mkdir(parents=True)
 
+        computed_offsets = {"session-xyz": {"offset": 1000, "lines": 50}}
+
         with patch("synthesis.get_daily_dir", return_value=daily_dir), \
              patch("synthesis.get_global_memory_file", return_value=tmp_path / "global.md"), \
              patch("synthesis.get_project_memory_dir", return_value=tmp_path / "proj"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.get_projects_dir", return_value=tmp_path / "projects"), \
+             patch("synthesis.compute_offsets_from_extracts", return_value=computed_offsets), \
              patch("synthesis.run_post_processing") as mock_post:
             with patch("synthesis.update_synthesis_state"):
                 apply_results(str(output_file), [str(extract_file)])
 
-            # Verify run_post_processing was called with session_ids
+            # Verify run_post_processing was called with the correct session_ids
             mock_post.assert_called_once()
             call_kwargs = mock_post.call_args
-            assert "session_ids" in call_kwargs.kwargs or len(call_kwargs.args) > 2
+            session_ids = call_kwargs.kwargs.get("session_ids")
+            assert session_ids is not None
+            assert "session-xyz" in session_ids
 
 
 class TestApplyResults:

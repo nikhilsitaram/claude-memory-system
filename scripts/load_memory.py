@@ -19,6 +19,7 @@ Requirements: Python 3.9+
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -273,7 +274,6 @@ def load_pending_recall(
     if not recall_dir.exists():
         return "", 0
 
-    import time
     now = time.time()
     cutoff = 24 * 3600  # 24 hours
 
@@ -305,6 +305,7 @@ def load_pending_recall(
         # Simple frontmatter parser
         project = ""
         cwd = ""
+        timestamp = ""
         if file_content.startswith("---"):
             try:
                 end = file_content.index("---", 3)
@@ -315,6 +316,8 @@ def load_pending_recall(
                     project = line.split(":", 1)[1].strip().strip('"').strip("'")
                 elif line.startswith("cwd:"):
                     cwd = line.split(":", 1)[1].strip()
+                elif line.startswith("timestamp:"):
+                    timestamp = line.split(":", 1)[1].strip()
 
         # Two-tier matching
         if current_project_name:
@@ -324,14 +327,14 @@ def load_pending_recall(
             if cwd != resolved_cwd:
                 continue
 
-        candidates.append((mtime, f, file_content))
+        candidates.append((mtime, f, file_content, timestamp))
 
     if not candidates:
         return "", 0
 
     # Sort by mtime descending, take most recent
     candidates.sort(key=lambda x: x[0], reverse=True)
-    _, _, file_content = candidates[0]
+    _, _, file_content, timestamp = candidates[0]
 
     # Strip frontmatter for display
     if file_content.startswith("---"):
@@ -343,7 +346,16 @@ def load_pending_recall(
     else:
         body = file_content.strip()
 
-    section = "## Previous Session Recall\n\n" + body
+    # Format timestamp for display
+    timestamp_line = ""
+    if timestamp:
+        try:
+            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            timestamp_line = f"*From {ts.astimezone().strftime('%Y-%m-%d %H:%M %Z')}:*\n"
+        except (ValueError, OSError):
+            pass
+
+    section = f"## Previous Session Recall\n{timestamp_line}\n{body}"
     return section, len(section.encode("utf-8"))
 
 
