@@ -149,6 +149,7 @@ def link_scripts(script_dir: Path) -> None:
         "devtools.py",  # Dev diagnostics and mark-routed migration
         "synthesis.py",  # Zero-tool background synthesis
         "synthesis_cron.py",  # Deferred synthesis (systemd timer entry point)
+        "session_end_recall.py",  # SessionEnd recall writer
         "token_usage.py",  # Token usage calculation for /settings
     ]
 
@@ -448,16 +449,21 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 ],
             },
         ],
-        # SessionEnd triggers deferred synthesis (platform-aware)
+        # SessionEnd: recall writer first, then deferred synthesis trigger
         "SessionEnd": [
             {
                 "matcher": "",
                 "hooks": [
                     {
                         "type": "command",
+                        "command": f"{python_cmd} {scripts_dir}/session_end_recall.py",
+                        "timeout": 10,
+                    },
+                    {
+                        "type": "command",
                         "command": _session_end_command(),
                         "timeout": 5,
-                    }
+                    },
                 ],
             }
         ],

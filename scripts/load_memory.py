@@ -19,6 +19,7 @@ Requirements: Python 3.9+
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from memory_utils import (
     get_daily_dir,
     get_global_memory_file,
     get_memory_dir,
+    get_pending_recall_dir,
     get_project_memory_dir,
     get_projects_index_file,
     get_synthesis_error_log,
@@ -68,6 +70,7 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 #   load_project_memory(name) -> (str, int)
 #   load_daily_summaries(days, scope) -> (list[(date, content)], int)
 #   load_project_history(project, days) -> (list[(date, content)], int)
+#   load_pending_recall(session_id, project, cwd) -> (str, int)
 # Scheduling:
 #   should_synthesize(settings) -> bool
 # =============================================================================
@@ -247,6 +250,122 @@ def load_project_history(
     summaries.reverse()
 
     return summaries, total_bytes
+
+
+def load_pending_recall(
+    current_session_id: str | None,
+    current_project_name: str,
+    resolved_cwd: str,
+) -> tuple[str, int]:
+    """Load most recent pending recall for current project.
+
+    Two-tier matching:
+    1. If current_project_name is set, match by project field
+    2. Otherwise, match by resolved CWD path
+
+    Deletes files older than 24 hours (safety net for unprocessed sessions).
+    Returns (formatted_section, byte_count).
+    """
+    settings = load_settings()
+    if not settings.get("previousSessionRecall", {}).get("enabled", True):
+        return "", 0
+
+    recall_dir = get_pending_recall_dir()
+    if not recall_dir.exists():
+        return "", 0
+
+    now = time.time()
+    cutoff = 24 * 3600  # 24 hours
+
+    candidates = []
+    for f in recall_dir.glob("*.md"):
+        # Safety net: delete old files
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            continue
+        if now - mtime > cutoff:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+            continue
+
+        # Skip current session
+        session_id = f.stem
+        if session_id == current_session_id:
+            continue
+
+        # Parse frontmatter for matching
+        try:
+            file_content = f.read_text(encoding="utf-8")
+        except IOError:
+            continue
+
+        # Line-by-line frontmatter parser (avoids index("---") substring false matches)
+        project = ""
+        cwd = ""
+        timestamp = ""
+        if file_content.startswith("---"):
+            in_frontmatter = False
+            for line in file_content.splitlines():
+                if line.strip() == "---":
+                    if not in_frontmatter:
+                        in_frontmatter = True
+                        continue
+                    else:
+                        break
+                if in_frontmatter:
+                    if line.startswith("project:"):
+                        project = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    elif line.startswith("cwd:"):
+                        cwd = line.split(":", 1)[1].strip()
+                    elif line.startswith("timestamp:"):
+                        timestamp = line.split(":", 1)[1].strip()
+
+        # Two-tier matching
+        if current_project_name:
+            if project != current_project_name:
+                continue
+        else:
+            if cwd != resolved_cwd:
+                continue
+
+        candidates.append((mtime, f, file_content, timestamp))
+
+    if not candidates:
+        return "", 0
+
+    # Sort by mtime descending, take most recent
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    _, _, file_content, timestamp = candidates[0]
+
+    # Strip frontmatter for display (line-by-line to avoid --- substring false matches)
+    body = file_content.strip()
+    if file_content.startswith("---"):
+        lines = file_content.splitlines()
+        dash_count = 0
+        body_start = 0
+        for i, line in enumerate(lines):
+            if line.strip() == "---":
+                dash_count += 1
+                if dash_count == 2:
+                    body_start = i + 1
+                    break
+        if dash_count == 2:
+            body = "\n".join(lines[body_start:]).strip()
+
+    # Format timestamp for display
+    timestamp_line = ""
+    if timestamp:
+        try:
+            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            timestamp_line = f"*From {ts.astimezone().strftime('%Y-%m-%d %H:%M %Z')}:*\n"
+        except ValueError:
+            pass
+
+    section = f"## Previous Session Recall\n{timestamp_line}\n{body}"
+    return section, len(section.encode("utf-8"))
 
 
 def _get_project_names_str() -> str:
@@ -834,6 +953,18 @@ def main() -> None:
                 print(f"### {date}")
                 print(content)
                 print()
+
+    # Load pending recall for current project
+    project_name = current_project.get("name", "") if current_project else ""
+    recall_section, recall_bytes = load_pending_recall(
+        current_session_id=current_session_id,
+        current_project_name=project_name,
+        resolved_cwd=pwd,
+    )
+    total_bytes += recall_bytes
+    if recall_section:
+        print(recall_section)
+        print()
 
     print("</memory>")
 

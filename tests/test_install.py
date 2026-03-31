@@ -555,6 +555,29 @@ class TestSessionEndHook:
         assert any("echo done" in c for c in commands)
 
 
+class TestSessionEndRecallHook:
+    """Tests for the session_end_recall.py SessionEnd hook."""
+
+    def test_session_end_has_two_hooks(self):
+        """SessionEnd hook has recall script first, then deferred synthesis."""
+        settings = {"hooks": {}}
+        result = install.merge_hooks(settings, "python3")
+        session_end = result["hooks"]["SessionEnd"]
+        assert len(session_end) == 1
+        hooks = session_end[0]["hooks"]
+        assert len(hooks) == 2
+        assert "session_end_recall.py" in hooks[0]["command"]
+        assert hooks[0]["timeout"] == 10
+        assert "memory-synthesis" in hooks[1]["command"]
+        assert hooks[1]["timeout"] == 5
+
+    def test_recall_script_in_link_scripts(self):
+        """session_end_recall.py is in the scripts to link."""
+        import inspect
+        source = inspect.getsource(install.link_scripts)
+        assert "session_end_recall.py" in source
+
+
 # ---------------------------------------------------------------------------
 # install_launchd_agent
 # ---------------------------------------------------------------------------

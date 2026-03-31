@@ -812,6 +812,82 @@ class TestRunPostProcessing:
         assert "T" in content  # ISO format
 
 
+
+class TestPendingRecallCleanup:
+    """Tests for pending-recall file cleanup during post-processing."""
+
+    def test_pending_recall_deletes_matching_files(self, tmp_path):
+        """Deletes recall files for processed session IDs."""
+        recall_dir = tmp_path / "pending-recall"
+        recall_dir.mkdir()
+        (recall_dir / "session-aaa.md").write_text("recall content")
+        (recall_dir / "session-bbb.md").write_text("recall content")
+        (recall_dir / "session-ccc.md").write_text("other recall")
+
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing([], session_ids=["session-aaa", "session-bbb"])
+
+        assert not (recall_dir / "session-aaa.md").exists()
+        assert not (recall_dir / "session-bbb.md").exists()
+        assert (recall_dir / "session-ccc.md").exists()  # Not in processed list
+
+    def test_pending_recall_no_session_ids_skips_cleanup(self, tmp_path):
+        """No cleanup when session_ids is None."""
+        recall_dir = tmp_path / "pending-recall"
+        recall_dir.mkdir()
+        (recall_dir / "session-aaa.md").write_text("recall content")
+
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing([])
+
+        assert (recall_dir / "session-aaa.md").exists()
+
+    def test_pending_recall_missing_dir_no_error(self, tmp_path):
+        """No error when pending-recall directory doesn't exist."""
+        recall_dir = tmp_path / "pending-recall"  # Not created
+
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+            run_post_processing([], session_ids=["session-aaa"])
+        # Should not raise
+
+    def test_pending_recall_apply_results_passes_session_ids(self, tmp_path):
+        """apply_results() passes computed session IDs to run_post_processing()."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text(
+            "===PROJECT:test===\n- [implement] Did something\n===END===\n"
+        )
+
+        extract_file = tmp_path / "memory-extract-2026-03-31-1234.txt"
+        extract_file.write_text(
+            "Session: session-xyz [project: test]\nSome content\n"
+        )
+
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+        (tmp_path / "proj").mkdir(parents=True)
+        (tmp_path / "global.md").write_text("", encoding="utf-8")
+        (tmp_path / "projects").mkdir(parents=True)
+
+        computed_offsets = {"session-xyz": {"offset": 1000, "lines": 50}}
+
+        with patch("synthesis.get_daily_dir", return_value=daily_dir), \
+             patch("synthesis.get_global_memory_file", return_value=tmp_path / "global.md"), \
+             patch("synthesis.get_project_memory_dir", return_value=tmp_path / "proj"), \
+             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+             patch("synthesis.get_projects_dir", return_value=tmp_path / "projects"), \
+             patch("synthesis.compute_offsets_from_extracts", return_value=computed_offsets), \
+             patch("synthesis.run_post_processing") as mock_post:
+            with patch("synthesis.update_synthesis_state"):
+                apply_results(str(output_file), [str(extract_file)])
+
+            # Verify run_post_processing was called with the correct session_ids
+            mock_post.assert_called_once()
+            call_kwargs = mock_post.call_args
+            session_ids = call_kwargs.kwargs.get("session_ids")
+            assert session_ids is not None
+            assert "session-xyz" in session_ids
+
+
 class TestApplyResults:
     def test_full_pipeline(self, tmp_path):
         """Integration test: parse -> mark_routed -> write -> append."""

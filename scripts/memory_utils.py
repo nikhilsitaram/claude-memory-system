@@ -42,6 +42,7 @@ __all__ = [
     "get_settings_file",
     "get_projects_index_file",
     "get_global_memory_file",
+    "get_pending_recall_dir",
     "get_synthesis_error_log",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
@@ -204,6 +205,11 @@ def get_global_memory_file() -> Path:
     return get_memory_dir() / "global-long-term-memory.md"
 
 
+def get_pending_recall_dir() -> Path:
+    """Get the path to the pending-recall directory."""
+    return get_memory_dir() / "pending-recall"
+
+
 def get_synthesis_error_log() -> Path:
     """Get the synthesis error log file path."""
     return get_memory_dir() / ".synthesis-errors.log"
@@ -240,6 +246,10 @@ DEFAULT_SETTINGS = {
         "ageDays": 30,
         "projectWorkingDays": 20,
         "archiveRetentionDays": 365,
+    },
+    "previousSessionRecall": {
+        "enabled": True,
+        "tokenLimit": 1500,
     },
     # totalTokenBudget calculated as sum of 4 components
 }
