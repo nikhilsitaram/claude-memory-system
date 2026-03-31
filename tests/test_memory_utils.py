@@ -36,8 +36,8 @@ from memory_utils import (
     parse_markdown_sections,
     project_name_to_filename,
     prune_stale_state_entries,
-    resolve_project_path_to_name,
     resolve_git_subdir_to_root,
+    resolve_project_path_to_name,
     resolve_session_path,
     resolve_worktree_to_main_repo,
     save_json_file,
@@ -533,6 +533,42 @@ class TestFindCurrentProject:
         result = find_current_project(index, "/home/User/Project")
         assert result is not None
         assert result["name"] == "project"
+
+    def test_case_insensitive_key_stored_uppercase(self):
+        """Keys stored with mixed case still match lowercase PWD."""
+        index = {
+            "projects": {
+                "/Users/nsitaram/personal/project": {
+                    "name": "project",
+                    "originalPath": "/Users/nsitaram/personal/project",
+                }
+            }
+        }
+        result = find_current_project(index, "/users/nsitaram/personal/project")
+        assert result is not None
+        assert result["name"] == "project"
+
+    def test_case_variants_merged(self):
+        """Two entries differing only in case get merged."""
+        index = {
+            "projects": {
+                "/home/user/project": {
+                    "name": "project",
+                    "workDays": ["2026-01-01"],
+                    "encodedPaths": ["enc-a"],
+                },
+                "/Home/User/Project": {
+                    "name": "project",
+                    "workDays": ["2026-01-02"],
+                    "encodedPaths": ["enc-b"],
+                },
+            }
+        }
+        result = find_current_project(index, "/home/user/project")
+        assert result is not None
+        assert result["name"] == "project"
+        assert sorted(result["workDays"]) == ["2026-01-01", "2026-01-02"]
+        assert sorted(result["encodedPaths"]) == ["enc-a", "enc-b"]
 
 
 # =============================================================================

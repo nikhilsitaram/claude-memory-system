@@ -904,18 +904,35 @@ def resolve_session_path(path: str) -> str:
     return path
 
 
+def _normalize_projects_keys(projects: dict) -> dict:
+    """Build a lowercase-keyed lookup dict from projects, merging case variants."""
+    normalized: dict = {}
+    for key, value in projects.items():
+        lower_key = key.lower()
+        if lower_key in normalized:
+            # Merge workDays from case variant
+            existing_days = set(normalized[lower_key].get("workDays", []))
+            existing_days.update(value.get("workDays", []))
+            normalized[lower_key]["workDays"] = sorted(existing_days)
+            for ep in value.get("encodedPaths", []):
+                if ep not in normalized[lower_key].get("encodedPaths", []):
+                    normalized[lower_key].setdefault("encodedPaths", []).append(ep)
+        else:
+            normalized[lower_key] = value
+    return normalized
+
+
 def find_current_project(projects_index: dict, pwd: str) -> dict | None:
     """
     Find the project matching the current working directory.
 
-    Uses exact match only. Subdirectory resolution is handled upstream
-    by resolve_session_path() before this function is called.
+    Case-insensitive: normalizes both keys and pwd to lowercase.
+    Subdirectory resolution is handled upstream by resolve_session_path().
 
     Returns project dict with 'name', 'originalPath', 'workDays' or None.
     """
-    projects = projects_index.get("projects", {})
-    pwd_lower = pwd.lower()
-    return projects.get(pwd_lower)
+    projects = _normalize_projects_keys(projects_index.get("projects", {}))
+    return projects.get(pwd.lower())
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads
@@ -948,11 +965,12 @@ def resolve_project_path_to_name(
     try:
         if _projects_index_cache is None:
             _projects_index_cache = load_json_file(get_projects_index_file(), {})
-        projects = _projects_index_cache.get("projects", {})
+        cache: dict = _projects_index_cache or {}
+        projects = _normalize_projects_keys(cache.get("projects", {}))
 
-        # Primary: direct path lookup
+        # Primary: direct path lookup (case-insensitive)
         if project_path:
-            data = projects.get(project_path)
+            data = projects.get(project_path.lower())
             if data and data.get("name"):
                 return data["name"]
 

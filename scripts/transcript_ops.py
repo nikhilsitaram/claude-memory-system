@@ -107,6 +107,32 @@ def should_skip_message(content: str) -> bool:
     return False
 
 
+def extract_first_user_prompt(filepath: Path) -> str:
+    """Extract the first user message from a JSONL transcript.
+
+    Scans the file for the first ``type: "user"`` entry and returns its
+    text content, or empty string if none found.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if obj.get("type") == "user":
+                        msg = obj.get("message", {})
+                        content = extract_text_content(msg.get("content", ""))
+                        if content and not should_skip_message(content):
+                            return content
+                except json.JSONDecodeError:
+                    continue
+    except IOError:
+        pass
+    return ""
+
+
 def parse_jsonl_file(filepath: Path) -> list[dict]:
     """Parse a JSONL transcript file and extract messages."""
     messages = []
