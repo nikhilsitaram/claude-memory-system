@@ -43,7 +43,6 @@ __all__ = [
     # Parsing
     "extract_text_content",
     "should_skip_message",
-    "extract_first_user_prompt",
     "parse_jsonl_file",
     "parse_jsonl_file_from_line",
     # Extraction
@@ -59,7 +58,6 @@ __all__ = [
 # Parsing:
 #   extract_text_content(content) -> str
 #   should_skip_message(content) -> bool
-#   extract_first_user_prompt(filepath, max_chars=200) -> str
 #   parse_jsonl_file(filepath) -> list[dict]
 # Extraction:
 #   extract_transcripts_incremental(state, exclude_session_id?) -> dict[str, list[dict]]
@@ -107,37 +105,6 @@ def should_skip_message(content: str) -> bool:
     if "## AUTO-SYNTHESIZE REQUIRED" in content:
         return True
     return False
-
-
-def extract_first_user_prompt(filepath: Path, max_chars: int = 200) -> str:
-    """Extract the first substantive user message from a transcript.
-
-    Reads forward through JSONL, finds first type="user" message where
-    content passes should_skip_message() filter. Truncates to max_chars
-    with ellipsis if needed.
-
-    Returns empty string if no substantive user message found.
-    """
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if obj.get("type") == "user":
-                        msg = obj.get("message", {})
-                        content = extract_text_content(msg.get("content", ""))
-                        if content and not should_skip_message(content):
-                            if len(content) > max_chars:
-                                return content[:max_chars] + "..."
-                            return content
-                except json.JSONDecodeError:
-                    continue
-    except IOError:
-        pass
-    return ""
 
 
 def parse_jsonl_file(filepath: Path) -> list[dict]:
@@ -382,12 +349,6 @@ def format_transcripts_incremental(
             if mode == "delta":
                 header += " (continued — new messages only)"
             output.append(header)
-
-            filepath = session.get("filepath")
-            if filepath:
-                first_prompt = extract_first_user_prompt(Path(filepath))
-                if first_prompt:
-                    output.append(f"First prompt: {first_prompt}")
             output.append(f"{'─'*70}")
 
             session_parts: list[str] = []
