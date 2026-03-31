@@ -37,6 +37,7 @@ from memory_utils import (  # noqa: E402
     get_projects_dir,
     is_routed_match,
     parse_markdown_sections,
+    get_pending_recall_dir,
     prune_stale_state_entries,
     rebuild_projects_index_quiet,
     update_synthesis_state,
@@ -781,6 +782,7 @@ def run_decay() -> None:
 def run_post_processing(
     extract_paths: list[str],
     offsets_json: str | None = None,
+    session_ids: list[str] | None = None,
 ) -> None:
     """Run state pruning, cleanup, decay, validation, and timestamp update."""
     from datetime import datetime, timezone
@@ -800,6 +802,17 @@ def run_post_processing(
             Path(path).unlink(missing_ok=True)
         except OSError:
             pass
+
+    # Delete pending-recall files for processed sessions
+    if session_ids:
+        recall_dir = get_pending_recall_dir()
+        if recall_dir.exists():
+            for sid in session_ids:
+                recall_file = recall_dir / f"{sid}.md"
+                try:
+                    recall_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     # Rebuild projects index so decay sees current work days
     rebuild_projects_index_quiet()
@@ -939,6 +952,7 @@ def apply_results(
         print(f"Routed {total_entries} entries to LTM")
 
     # Update synthesis state with new high water marks
+    offsets = {}
     if offsets_json:
         # Legacy path: offsets passed via --offsets-json CLI arg
         try:
@@ -953,7 +967,8 @@ def apply_results(
             update_synthesis_state(offsets)
 
     # Post-processing
-    run_post_processing(extract_paths, offsets_json=offsets_json)
+    session_ids = list(offsets.keys()) if offsets else None
+    run_post_processing(extract_paths, offsets_json=offsets_json, session_ids=session_ids)
     print("Post-processing complete")
 
 

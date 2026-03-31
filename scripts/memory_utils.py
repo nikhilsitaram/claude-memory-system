@@ -42,6 +42,7 @@ __all__ = [
     "get_settings_file",
     "get_projects_index_file",
     "get_global_memory_file",
+    "get_pending_recall_dir",
     "get_synthesis_error_log",
     "get_pending_recall_dir",
     "collect_ltm_files",
@@ -203,6 +204,11 @@ def get_projects_index_file() -> Path:
 def get_global_memory_file() -> Path:
     """Get the global long-term memory file."""
     return get_memory_dir() / "global-long-term-memory.md"
+
+
+def get_pending_recall_dir() -> Path:
+    """Get the path to the pending-recall directory."""
+    return get_memory_dir() / "pending-recall"
 
 
 def get_synthesis_error_log() -> Path:
