@@ -9,6 +9,7 @@ Requirements: Python 3.9+
 """
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -785,15 +786,15 @@ def prune_stale_state_entries(max_age_days: int = 7) -> int:
 
 
 def _worktree_pattern_fallback(path: str) -> str:
-    """Resolve a worktree path using /.worktrees/ directory convention.
+    """Resolve a worktree path using worktree directory conventions.
 
     Fallback for when git is unavailable (directory deleted, git not installed).
-    If path contains /.worktrees/, returns everything before it.
+    Checks for both /.claude/worktrees/ and /.worktrees/ patterns.
     """
-    marker = "/.worktrees/"
-    idx = path.find(marker)
-    if idx != -1:
-        return path[:idx]
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        idx = path.find(marker)
+        if idx != -1:
+            return path[:idx]
     return path
 
 
@@ -918,7 +919,7 @@ def _normalize_projects_keys(projects: dict) -> dict:
                 if ep not in normalized[lower_key].get("encodedPaths", []):
                     normalized[lower_key].setdefault("encodedPaths", []).append(ep)
         else:
-            normalized[lower_key] = value
+            normalized[lower_key] = copy.deepcopy(value)
     return normalized
 
 
