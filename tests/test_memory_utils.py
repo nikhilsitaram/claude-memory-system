@@ -22,6 +22,8 @@ from memory_utils import (
     filter_daily_content,
     find_current_project,
     from_iso_z,
+    get_memory_dir,
+    get_pending_recall_dir,
     get_sessions_original_path,
     get_synthesis_state_file,
     get_working_days,
@@ -1367,6 +1369,41 @@ class TestParseMarkdownSections:
         assert len(sections) == 1
         assert sections[0][0] == ""
         assert sections[0][1] == ["Just plain text", "with no headers"]
+
+
+
+
+class TestGetPendingRecallDir:
+    def test_returns_pending_recall_subdir(self):
+        result = get_pending_recall_dir()
+        assert result == get_memory_dir() / "pending-recall"
+        assert result.name == "pending-recall"
+
+
+class TestPreviousSessionRecallSetting:
+    def test_default_settings_has_previous_session_recall(self):
+        recall_settings = DEFAULT_SETTINGS["previousSessionRecall"]
+        assert recall_settings["enabled"] is True
+        assert recall_settings["tokenLimit"] == 1500
+
+    def test_load_settings_merges_recall_override(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({
+            "previousSessionRecall": {"tokenLimit": 1000}
+        }))
+        with patch("memory_utils.get_settings_file", return_value=settings_file):
+            settings = load_settings()
+        assert settings["previousSessionRecall"]["enabled"] is True
+        assert settings["previousSessionRecall"]["tokenLimit"] == 1000
+
+    def test_load_settings_recall_disabled(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({
+            "previousSessionRecall": {"enabled": False}
+        }))
+        with patch("memory_utils.get_settings_file", return_value=settings_file):
+            settings = load_settings()
+        assert settings["previousSessionRecall"]["enabled"] is False
 
 
 if __name__ == "__main__":
