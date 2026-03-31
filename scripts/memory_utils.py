@@ -43,6 +43,7 @@ __all__ = [
     "get_projects_index_file",
     "get_global_memory_file",
     "get_synthesis_error_log",
+    "get_pending_recall_dir",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     "resolve_git_subdir_to_root",
@@ -209,6 +210,11 @@ def get_synthesis_error_log() -> Path:
     return get_memory_dir() / ".synthesis-errors.log"
 
 
+def get_pending_recall_dir() -> Path:
+    """Get the path to the pending-recall directory."""
+    return get_memory_dir() / "pending-recall"
+
+
 # Token limit formulas
 SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per day
 
@@ -240,6 +246,10 @@ DEFAULT_SETTINGS = {
         "ageDays": 30,
         "projectWorkingDays": 20,
         "archiveRetentionDays": 365,
+    },
+    "previousSessionRecall": {
+        "enabled": True,
+        "tokenLimit": 1500,
     },
     # totalTokenBudget calculated as sum of 4 components
 }
