@@ -42,11 +42,8 @@ def _load_vec_extension(conn):
             "sqlite-vec not installed. Install with: pip install sqlite-vec"
         )
     if not HAS_FASTEMBED:
-        print(
-            "WARNING: fastembed not installed — cosine similarity clustering "
-            "unavailable, falling back to entity-overlap only. "
-            "Install with: pip install fastembed",
-            file=sys.stderr,
+        raise RuntimeError(
+            "fastembed not installed. Install with: pip install fastembed"
         )
     if not ensure_vec_table(conn):
         raise RuntimeError(
@@ -81,7 +78,7 @@ def find_clusters(conn, similarity_threshold=0.80, max_clusters=15):
         cosine_pairs = _get_similarity_pairs(conn, active_ids, similarity_threshold)
 
     entity_pairs = _get_entity_overlap_pairs(conn, active_ids, min_overlap=0.70)
-    token_pairs = _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55)
+    token_pairs = _get_token_overlap_pairs(conn, active_ids, min_overlap=0.45)
 
     all_pairs = _merge_pair_sources(cosine_pairs, entity_pairs, token_pairs)
 
@@ -239,7 +236,7 @@ def _tokenize(text):
     return {t for t in tokens if t not in _TOKEN_STOPWORDS and len(t) >= 3}
 
 
-def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.55):
+def _get_token_overlap_pairs(conn, active_ids, min_overlap=0.45):
     """Find pairs of memories with high word-token overlap.
 
     Uses overlap coefficient (|A∩B| / min(|A|, |B|)) instead of Jaccard.
@@ -543,6 +540,8 @@ def run_consolidation(conn, settings=None, backfill=False, dry_run=False):
 
 def _run_consolidation_locked(conn, settings, backfill, dry_run):
     """Inner consolidation logic, called while holding the lock."""
+    _load_vec_extension(conn)
+
     if settings is None:
         settings = load_settings()
 
@@ -620,12 +619,24 @@ if __name__ == "__main__":
 
     conn = ensure_db()
     try:
-        _load_vec_extension(conn)
-    except RuntimeError as e:
-        print(f"WARNING: {e}", file=sys.stderr)
-        print("Cosine similarity clustering unavailable. Using entity/token overlap only.", file=sys.stderr)
-    try:
         stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
         print(json.dumps(stats, indent=2))
+    except RuntimeError as e:
+        flags = []
+        if args.force:
+            flags.append("--force")
+        if args.dry_run:
+            flags.append("--dry-run")
+        hint = ".venv/bin/python3 scripts/consolidation.py"
+        if flags:
+            hint += " " + " ".join(flags)
+        print(f"ERROR: {e}", file=sys.stderr)
+        print(
+            "sqlite-vec + fastembed are required for accurate clustering. "
+            "Run with the project venv Python:\n"
+            f"  {hint}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     finally:
         conn.close()

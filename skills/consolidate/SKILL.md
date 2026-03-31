@@ -10,22 +10,28 @@ Run the memory consolidation pipeline to find and merge redundant memories.
 
 ## What it does
 
-1. Finds clusters of semantically similar active memories (cosine similarity >= 0.80)
+1. Finds clusters of semantically similar active memories via three strategies:
+   - Cosine similarity from sqlite-vec embeddings (threshold >= 0.80)
+   - Entity overlap (Jaccard >= 0.70) for memories sharing entity metadata
+   - Token overlap coefficient (>= 0.45) for paraphrased content
 2. For each cluster, asks an LLM whether to MERGE (redundant) or SKIP (evolving knowledge)
 3. Merged clusters produce a single new memory that supersedes the originals
 
 ## Usage
 
+**Important:** Requires sqlite-vec + fastembed. The script will exit with an
+error if either is missing — run with the project venv Python.
+
 Run consolidation now (bypasses the daily schedule):
 
 ```bash
-python3 ~/.claude/scripts/consolidation.py --force
+.venv/bin/python3 scripts/consolidation.py --force
 ```
 
 Preview what would be consolidated without making changes:
 
 ```bash
-python3 ~/.claude/scripts/consolidation.py --dry-run
+.venv/bin/python3 scripts/consolidation.py --dry-run
 ```
 
 ## When to use
