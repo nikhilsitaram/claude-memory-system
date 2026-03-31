@@ -113,7 +113,7 @@ def write_recall_file(
         "---",
     ]
     if first_prompt:
-        parts.append(f"> {first_prompt}")
+        parts.extend(f"> {line}" for line in first_prompt.splitlines())
         parts.append("")
 
     parts.extend("\n\n".join(collected).split("\n"))
@@ -123,7 +123,7 @@ def write_recall_file(
     target = recall_dir / f"{session_id}.md"
     tmp = target.with_suffix(".tmp")
     tmp.write_text("\n".join(parts), encoding="utf-8")
-    tmp.rename(target)
+    tmp.replace(target)
 
 
 def main() -> None:
