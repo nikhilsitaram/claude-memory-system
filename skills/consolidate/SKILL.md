@@ -20,7 +20,7 @@ Run the memory consolidation pipeline to find and merge redundant memories.
 ## Usage
 
 **Important:** Requires sqlite-vec + fastembed. The script will exit with an
-error if sqlite-vec is not available — run with the project venv Python.
+error if either is missing — run with the project venv Python.
 
 Run consolidation now (bypasses the daily schedule):
 

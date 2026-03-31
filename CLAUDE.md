@@ -45,6 +45,10 @@ claude-memory-system/
 2. Add to `link_scripts()` in `scripts/install.py`
 3. If it needs a hook, add in `merge_hooks()` function
 
+## Python
+
+**Always use the project venv Python** (`.venv/bin/python3`), never bare `python3`. The venv has sqlite-vec and fastembed which are required by embeddings, consolidation, and the MCP server. Bare `python3` resolves to Homebrew Python which lacks these packages and causes silent failures.
+
 ## Testing
 
 **Rule: Always add or update unit tests when adding new functions or modifying existing function behavior.**
@@ -52,12 +56,12 @@ claude-memory-system/
 Tests live in `tests/test_<module>.py` matching the script they test.
 
 ```bash
-python3 -m pytest tests/ -q                  # Run all (do this first)
-python3 -m pytest tests/ -v                  # Verbose for debugging
-python3 scripts/install.py                    # Apply changes
-python3 ~/.claude/scripts/load_memory.py     # Test memory loading
-python3 ~/.claude/scripts/indexing.py list-recent  # Test session listing
-python3 ~/.claude/scripts/decay.py --dry-run # Test decay
+.venv/bin/python3 -m pytest tests/ -q                  # Run all (do this first)
+.venv/bin/python3 -m pytest tests/ -v                  # Verbose for debugging
+.venv/bin/python3 scripts/install.py                    # Apply changes
+.venv/bin/python3 ~/.claude/scripts/load_memory.py     # Test memory loading
+.venv/bin/python3 ~/.claude/scripts/indexing.py list-recent  # Test session listing
+.venv/bin/python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 ```
 
 **Conventions:**
@@ -157,5 +161,5 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 
 ### Web UI
 ```bash
-python3 ~/.claude/scripts/web_app.py   # start at http://localhost:8742
+.venv/bin/python3 ~/.claude/scripts/web_app.py   # start at http://localhost:8742
 ```

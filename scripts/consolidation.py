@@ -42,11 +42,8 @@ def _load_vec_extension(conn):
             "sqlite-vec not installed. Install with: pip install sqlite-vec"
         )
     if not HAS_FASTEMBED:
-        print(
-            "WARNING: fastembed not installed — cosine similarity clustering "
-            "unavailable, falling back to entity-overlap only. "
-            "Install with: pip install fastembed",
-            file=sys.stderr,
+        raise RuntimeError(
+            "fastembed not installed. Install with: pip install fastembed"
         )
     if not ensure_vec_table(conn):
         raise RuntimeError(
@@ -543,6 +540,8 @@ def run_consolidation(conn, settings=None, backfill=False, dry_run=False):
 
 def _run_consolidation_locked(conn, settings, backfill, dry_run):
     """Inner consolidation logic, called while holding the lock."""
+    _load_vec_extension(conn)
+
     if settings is None:
         settings = load_settings()
 
@@ -620,18 +619,24 @@ if __name__ == "__main__":
 
     conn = ensure_db()
     try:
-        _load_vec_extension(conn)
+        stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
+        print(json.dumps(stats, indent=2))
     except RuntimeError as e:
+        flags = []
+        if args.force:
+            flags.append("--force")
+        if args.dry_run:
+            flags.append("--dry-run")
+        hint = ".venv/bin/python3 scripts/consolidation.py"
+        if flags:
+            hint += " " + " ".join(flags)
         print(f"ERROR: {e}", file=sys.stderr)
         print(
-            "Cosine similarity is required for accurate clustering. "
-            "Run with the project venv Python that has sqlite-vec + fastembed:\n"
-            "  .venv/bin/python3 scripts/consolidation.py --force",
+            "sqlite-vec + fastembed are required for accurate clustering. "
+            "Run with the project venv Python:\n"
+            f"  {hint}",
             file=sys.stderr,
         )
         sys.exit(1)
-    try:
-        stats = run_consolidation(conn, backfill=args.force, dry_run=args.dry_run)
-        print(json.dumps(stats, indent=2))
     finally:
         conn.close()
