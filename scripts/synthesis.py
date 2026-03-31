@@ -481,10 +481,11 @@ def _apply_add_v3(conn, op: "MemoryOp") -> dict:
 
     # Attempt to generate embedding (best-effort; requires sqlite-vec)
     try:
-        from embeddings import index_data_points
+        from embeddings import ensure_vec_table, index_data_points
+        ensure_vec_table(conn)
         index_data_points(conn, [dp_id])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: embedding generation failed for {dp_id!r}: {e}", file=sys.stderr)
 
     return {"action": "ADD", "status": "inserted", "id": dp_id}
 
@@ -521,10 +522,11 @@ def _apply_update_v3(conn, op: "MemoryOp") -> dict:
     # Attempt to re-embed updated content
     if rows_affected > 0 and op.fact:
         try:
-            from embeddings import index_data_points
+            from embeddings import ensure_vec_table, index_data_points
+            ensure_vec_table(conn)
             index_data_points(conn, [op.id])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: embedding generation failed for {op.id!r}: {e}", file=sys.stderr)
 
     return {"action": "UPDATE", "status": "updated" if rows_affected > 0 else "not_found", "id": op.id}
 
