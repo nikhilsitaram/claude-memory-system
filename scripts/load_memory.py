@@ -302,22 +302,26 @@ def load_pending_recall(
         except IOError:
             continue
 
-        # Simple frontmatter parser
+        # Line-by-line frontmatter parser (avoids index("---") substring false matches)
         project = ""
         cwd = ""
         timestamp = ""
         if file_content.startswith("---"):
-            try:
-                end = file_content.index("---", 3)
-            except ValueError:
-                continue
-            for line in file_content[3:end].strip().splitlines():
-                if line.startswith("project:"):
-                    project = line.split(":", 1)[1].strip().strip('"').strip("'")
-                elif line.startswith("cwd:"):
-                    cwd = line.split(":", 1)[1].strip()
-                elif line.startswith("timestamp:"):
-                    timestamp = line.split(":", 1)[1].strip()
+            in_frontmatter = False
+            for line in file_content.splitlines():
+                if line.strip() == "---":
+                    if not in_frontmatter:
+                        in_frontmatter = True
+                        continue
+                    else:
+                        break
+                if in_frontmatter:
+                    if line.startswith("project:"):
+                        project = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    elif line.startswith("cwd:"):
+                        cwd = line.split(":", 1)[1].strip()
+                    elif line.startswith("timestamp:"):
+                        timestamp = line.split(":", 1)[1].strip()
 
         # Two-tier matching
         if current_project_name:
@@ -336,15 +340,20 @@ def load_pending_recall(
     candidates.sort(key=lambda x: x[0], reverse=True)
     _, _, file_content, timestamp = candidates[0]
 
-    # Strip frontmatter for display
+    # Strip frontmatter for display (line-by-line to avoid --- substring false matches)
+    body = file_content.strip()
     if file_content.startswith("---"):
-        try:
-            second_dash = file_content.index("---", 3)
-            body = file_content[second_dash + 3:].strip()
-        except ValueError:
-            body = file_content.strip()
-    else:
-        body = file_content.strip()
+        lines = file_content.splitlines()
+        dash_count = 0
+        body_start = 0
+        for i, line in enumerate(lines):
+            if line.strip() == "---":
+                dash_count += 1
+                if dash_count == 2:
+                    body_start = i + 1
+                    break
+        if dash_count == 2:
+            body = "\n".join(lines[body_start:]).strip()
 
     # Format timestamp for display
     timestamp_line = ""
@@ -352,7 +361,7 @@ def load_pending_recall(
         try:
             ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
             timestamp_line = f"*From {ts.astimezone().strftime('%Y-%m-%d %H:%M %Z')}:*\n"
-        except (ValueError, OSError):
+        except ValueError:
             pass
 
     section = f"## Previous Session Recall\n{timestamp_line}\n{body}"

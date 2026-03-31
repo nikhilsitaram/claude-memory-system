@@ -76,8 +76,6 @@ def write_recall_file(
     first_prompt = extract_first_user_prompt(transcript_path)
 
     messages = parse_jsonl_file(transcript_path)
-    if not messages:
-        return
 
     collected = []
     running_tokens = 0
@@ -93,7 +91,7 @@ def write_recall_file(
         collected.append(text)
         running_tokens += msg_tokens
 
-    if not collected:
+    if not collected and not first_prompt:
         return
 
     collected.reverse()
