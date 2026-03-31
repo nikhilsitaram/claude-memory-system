@@ -35,6 +35,7 @@ from memory_utils import (
     get_daily_dir,
     get_global_memory_file,
     get_memory_dir,
+    get_pending_recall_dir,
     get_project_memory_dir,
     get_projects_index_file,
     get_synthesis_error_log,
@@ -68,6 +69,7 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 #   load_project_memory(name) -> (str, int)
 #   load_daily_summaries(days, scope) -> (list[(date, content)], int)
 #   load_project_history(project, days) -> (list[(date, content)], int)
+#   load_pending_recall(session_id, project, cwd) -> (str, int)
 # Scheduling:
 #   should_synthesize(settings) -> bool
 # =============================================================================
@@ -247,6 +249,102 @@ def load_project_history(
     summaries.reverse()
 
     return summaries, total_bytes
+
+
+def load_pending_recall(
+    current_session_id: str | None,
+    current_project_name: str,
+    resolved_cwd: str,
+) -> tuple[str, int]:
+    """Load most recent pending recall for current project.
+
+    Two-tier matching:
+    1. If current_project_name is set, match by project field
+    2. Otherwise, match by resolved CWD path
+
+    Deletes files older than 24 hours (safety net for unprocessed sessions).
+    Returns (formatted_section, byte_count).
+    """
+    settings = load_settings()
+    if not settings.get("previousSessionRecall", {}).get("enabled", True):
+        return "", 0
+
+    recall_dir = get_pending_recall_dir()
+    if not recall_dir.exists():
+        return "", 0
+
+    import time
+    now = time.time()
+    cutoff = 24 * 3600  # 24 hours
+
+    candidates = []
+    for f in recall_dir.glob("*.md"):
+        # Safety net: delete old files
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            continue
+        if now - mtime > cutoff:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+            continue
+
+        # Skip current session
+        session_id = f.stem
+        if session_id == current_session_id:
+            continue
+
+        # Parse frontmatter for matching
+        try:
+            file_content = f.read_text(encoding="utf-8")
+        except IOError:
+            continue
+
+        # Simple frontmatter parser
+        project = ""
+        cwd = ""
+        if file_content.startswith("---"):
+            try:
+                end = file_content.index("---", 3)
+            except ValueError:
+                continue
+            for line in file_content[3:end].strip().splitlines():
+                if line.startswith("project:"):
+                    project = line.split(":", 1)[1].strip().strip('"').strip("'")
+                elif line.startswith("cwd:"):
+                    cwd = line.split(":", 1)[1].strip()
+
+        # Two-tier matching
+        if current_project_name:
+            if project != current_project_name:
+                continue
+        else:
+            if cwd != resolved_cwd:
+                continue
+
+        candidates.append((mtime, f, file_content))
+
+    if not candidates:
+        return "", 0
+
+    # Sort by mtime descending, take most recent
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    _, _, file_content = candidates[0]
+
+    # Strip frontmatter for display
+    if file_content.startswith("---"):
+        try:
+            second_dash = file_content.index("---", 3)
+            body = file_content[second_dash + 3:].strip()
+        except ValueError:
+            body = file_content.strip()
+    else:
+        body = file_content.strip()
+
+    section = "## Previous Session Recall\n\n" + body
+    return section, len(section.encode("utf-8"))
 
 
 def _get_project_names_str() -> str:
@@ -834,6 +932,18 @@ def main() -> None:
                 print(f"### {date}")
                 print(content)
                 print()
+
+    # Load pending recall for current project
+    project_name = current_project.get("name", "") if current_project else ""
+    recall_section, recall_bytes = load_pending_recall(
+        current_session_id=current_session_id,
+        current_project_name=project_name,
+        resolved_cwd=pwd,
+    )
+    total_bytes += recall_bytes
+    if recall_section:
+        print(recall_section)
+        print()
 
     print("</memory>")
 

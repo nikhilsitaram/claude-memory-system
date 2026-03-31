@@ -1543,5 +1543,166 @@ class TestCheckSynthesisErrors:
         assert "error 0" not in result
 
 
+# =============================================================================
+# load_pending_recall Tests
+# =============================================================================
+
+from memory_utils import DEFAULT_SETTINGS
+
+
+class TestLoadPendingRecall:
+    """Tests for load_pending_recall() function."""
+
+    def _write_recall_file(self, recall_dir, session_id, project="", cwd="/test",
+                           content="Test recall content", age_hours=0):
+        """Helper to create a recall file with frontmatter."""
+        import time
+        recall_dir.mkdir(parents=True, exist_ok=True)
+        f = recall_dir / f"{session_id}.md"
+        lines = [
+            "---",
+            f"session_id: {session_id}",
+            f"project: {project}",
+            "timestamp: 2026-03-31T18:00:00Z",
+            f"cwd: {cwd}",
+            "---",
+            f"> first prompt",
+            "",
+            content,
+            "",
+        ]
+        f.write_text(chr(10).join(lines))
+        if age_hours:
+            old_time = time.time() - (age_hours * 3600)
+            import os
+            os.utime(f, (old_time, old_time))
+        return f
+
+    def test_returns_recall_for_matching_project(self, tmp_path):
+        """Returns recall section when project name matches."""
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "sess-1", project="my-project")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="sess-2",
+                current_project_name="my-project",
+                resolved_cwd="/other/path",
+            )
+        assert "Previous Session Recall" in section
+        assert "Test recall content" in section
+        assert size > 0
+
+    def test_cwd_fallback_when_no_project(self, tmp_path):
+        """Falls back to CWD matching when no project name."""
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "sess-1", project="", cwd="/my/dir")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="sess-2",
+                current_project_name="",
+                resolved_cwd="/my/dir",
+            )
+        assert "Previous Session Recall" in section
+
+    def test_skips_current_session(self, tmp_path):
+        """Does not return recall from the current session."""
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "current-sess", project="proj")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="current-sess",
+                current_project_name="proj",
+                resolved_cwd="/test",
+            )
+        assert section == ""
+        assert size == 0
+
+    def test_most_recent_only(self, tmp_path):
+        """Returns only the most recent matching recall file."""
+        import time
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "old-sess", project="proj", content="OLD content")
+        time.sleep(0.05)
+        self._write_recall_file(recall_dir, "new-sess", project="proj", content="NEW content")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="other-sess",
+                current_project_name="proj",
+                resolved_cwd="/test",
+            )
+        assert "NEW content" in section
+        assert "OLD content" not in section
+
+    def test_deletes_files_older_than_24h(self, tmp_path):
+        """Deletes recall files older than 24 hours as safety net."""
+        recall_dir = tmp_path / "pending-recall"
+        old_file = self._write_recall_file(
+            recall_dir, "old-sess", project="proj", age_hours=25
+        )
+        self._write_recall_file(recall_dir, "new-sess", project="proj")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            load_pending_recall(
+                current_session_id="other",
+                current_project_name="proj",
+                resolved_cwd="/test",
+            )
+        assert not old_file.exists()
+
+    def test_no_matching_project(self, tmp_path):
+        """Returns empty when no recall files match current project."""
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "sess-1", project="other-project")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="sess-2",
+                current_project_name="my-project",
+                resolved_cwd="/different/path",
+            )
+        assert section == ""
+
+    def test_empty_recall_dir(self, tmp_path):
+        """Returns empty when pending-recall dir doesn't exist."""
+        recall_dir = tmp_path / "pending-recall"
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir):
+            section, size = load_pending_recall(
+                current_session_id="sess",
+                current_project_name="proj",
+                resolved_cwd="/test",
+            )
+        assert section == ""
+        assert size == 0
+
+    def test_disabled_setting(self, tmp_path):
+        """Returns empty when previousSessionRecall.enabled is False."""
+        recall_dir = tmp_path / "pending-recall"
+        self._write_recall_file(recall_dir, "sess-1", project="proj")
+
+        from load_memory import load_pending_recall
+        with mock.patch("load_memory.get_pending_recall_dir", return_value=recall_dir),              mock.patch("load_memory.load_settings", return_value={
+                 **DEFAULT_SETTINGS,
+                 "previousSessionRecall": {"enabled": False, "tokenLimit": 1500},
+             }):
+            section, size = load_pending_recall(
+                current_session_id="sess-2",
+                current_project_name="proj",
+                resolved_cwd="/test",
+            )
+        assert section == ""
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
