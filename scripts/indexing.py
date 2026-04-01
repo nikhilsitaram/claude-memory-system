@@ -235,16 +235,17 @@ def list_recent_sessions(
     """
     List recent sessions eligible for synthesis.
 
-    Filters by file modification time instead of a captured set.
+    Uses index.created (real session date) when available, falls back to
+    file mtime. This handles migrated sessions whose mtime changed on copy.
 
     Args:
-        max_age_days: Only include sessions modified within this many days
+        max_age_days: Only include sessions created/modified within this many days
         min_file_size: Minimum file size in bytes (default MIN_SESSION_SIZE_BYTES)
         exclude_session_id: Optional session ID to exclude (e.g., the active session)
         verify_content: If True, parse JSONL to verify at least one assistant message exists
 
     Returns list of SessionInfo for sessions that:
-    - Have mtime within max_age_days
+    - Were created (or modified) within max_age_days
     - Meet minimum file size threshold
     - Are not the excluded session
     - (If verify_content) contain at least one assistant message
@@ -255,7 +256,7 @@ def list_recent_sessions(
     return [
         s
         for s in all_sessions
-        if s.file_mtime >= cutoff
+        if (s.created or s.file_mtime) >= cutoff
         and s.file_size >= min_file_size
         and s.session_id != exclude_session_id
         and (not verify_content or has_assistant_message(s.transcript_path))

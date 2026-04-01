@@ -35,7 +35,6 @@ from memory_utils import (
     local_today,
     parse_markdown_sections,
     project_name_to_filename,
-    prune_stale_state_entries,
     resolve_git_subdir_to_root,
     resolve_project_path_to_name,
     resolve_session_path,
@@ -209,95 +208,6 @@ class TestJsonFileUtils:
 ])
 def test_project_name_to_filename(name, expected):
     assert project_name_to_filename(name) == expected
-
-
-# =============================================================================
-# Prune Stale State Entries Tests
-# =============================================================================
-
-
-class TestPruneStaleStateEntries:
-    """Tests for prune_stale_state_entries."""
-
-    def test_removes_old_entries(self, tmp_path):
-        """Entries with mtime older than max_age_days are pruned."""
-        import time
-
-        state_file = tmp_path / ".synthesis-state.json"
-        state = {"sessions": {
-            "old-sess": {"offset": 100, "lines": 10, "last_synthesized": "2026-01-01T10:00:00Z"},
-            "recent-sess": {"offset": 200, "lines": 20, "last_synthesized": "2026-02-22T10:00:00Z"},
-        }}
-        state_file.write_text(json.dumps(state))
-
-        # Create session files: one old, one recent
-        projects_dir = tmp_path / "projects" / "proj-hash"
-        projects_dir.mkdir(parents=True)
-        old_file = projects_dir / "old-sess.jsonl"
-        old_file.write_text("data")
-        old_time = time.time() - (8 * 86400)  # 8 days ago
-        os.utime(old_file, (old_time, old_time))
-
-        recent_file = projects_dir / "recent-sess.jsonl"
-        recent_file.write_text("data")
-
-        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file), \
-             mock.patch("memory_utils.get_projects_dir", return_value=tmp_path / "projects"):
-            pruned = prune_stale_state_entries(max_age_days=7)
-
-        assert pruned == 1
-        result = json.loads(state_file.read_text())
-        assert "old-sess" not in result["sessions"]
-        assert "recent-sess" in result["sessions"]
-
-    def test_removes_entries_for_missing_files(self, tmp_path):
-        """Entries whose session files no longer exist are pruned."""
-        state_file = tmp_path / ".synthesis-state.json"
-        state = {"sessions": {
-            "gone-sess": {"offset": 100, "lines": 10, "last_synthesized": "2026-02-20T10:00:00Z"},
-        }}
-        state_file.write_text(json.dumps(state))
-
-        # Empty projects dir — no session file exists
-        projects_dir = tmp_path / "projects"
-        projects_dir.mkdir()
-
-        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file), \
-             mock.patch("memory_utils.get_projects_dir", return_value=projects_dir):
-            pruned = prune_stale_state_entries(max_age_days=7)
-
-        assert pruned == 1
-        result = json.loads(state_file.read_text())
-        assert result["sessions"] == {}
-
-    def test_noop_when_all_recent(self, tmp_path):
-        """No entries pruned when all are recent."""
-        state_file = tmp_path / ".synthesis-state.json"
-        state = {"sessions": {
-            "sess-1": {"offset": 100, "lines": 10, "last_synthesized": "2026-02-22T10:00:00Z"},
-        }}
-        state_file.write_text(json.dumps(state))
-
-        projects_dir = tmp_path / "projects" / "proj-hash"
-        projects_dir.mkdir(parents=True)
-        (projects_dir / "sess-1.jsonl").write_text("data")
-
-        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file), \
-             mock.patch("memory_utils.get_projects_dir", return_value=tmp_path / "projects"):
-            pruned = prune_stale_state_entries(max_age_days=7)
-
-        assert pruned == 0
-
-    def test_empty_state_noop(self, tmp_path):
-        """Empty state file is a no-op."""
-        state_file = tmp_path / ".synthesis-state.json"
-        state_file.write_text('{"sessions": {}}')
-
-        with mock.patch("memory_utils.get_synthesis_state_file", return_value=state_file), \
-             mock.patch("memory_utils.get_projects_dir", return_value=tmp_path / "projects"):
-            pruned = prune_stale_state_entries(max_age_days=7)
-
-        assert pruned == 0
 
 
 # =============================================================================
