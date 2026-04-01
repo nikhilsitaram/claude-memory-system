@@ -436,17 +436,19 @@ Group entries by project. The system handles section placement and scope injecti
 
 **Project names:** Use the project names from the session headers: {project_names_str}. Use `global` for entries not tied to a specific project.
 
-**[LTM] flag (be HIGHLY selective):** Prefix entries worth preserving long-term. Route to LTM:
-- Multi-day implementations, novel integrations, reusable setups
-- Architecture choices, design tradeoffs, scope decisions with lasting impact
-- Non-obvious gotchas, proven patterns, hard-won lessons
-- Mental models, useful commands, workarounds
+**[LTM] flag (VERY rare — most entries should NOT be routed):** Only prefix entries that would save significant time or prevent a real mistake if encountered again months from now. Route to LTM:
+- Architecture choices or design tradeoffs with lasting impact across sessions
+- Gotchas that caused >30 min of debugging and aren't googleable
+- Patterns proven across multiple sessions, not just discovered once
 Do NOT route:
-- Common dev knowledge (git basics, standard SQL, well-known language features)
+- Common dev knowledge (git, SQL, well-known language/framework features)
 - Generic software patterns (DRY, separation of concerns, use env vars)
-- One-time fixes unlikely to recur
-- Version-specific notes, easily re-discoverable things
-Maximum 5 [LTM] entries per project per synthesis run.
+- One-time fixes or bugs unlikely to recur
+- Tool-specific tips that are easily re-discoverable (man pages, --help, docs)
+- Implementation details (built X, fixed Y) — these belong in short-term memory
+- Gotchas with obvious error messages that point to the solution
+- Version-specific notes or workarounds for known issues with tracked fixes
+Tag up to 5 [LTM] candidates per project, ordered by importance (most important first). Only the top 3 will be kept — the rest are discarded. This means you must rank: put the entry most worth preserving long-term first.
 
 **[GLOBAL] flag:** Only for genuinely cross-project learnings (OS behavior, tool tips, general dev practices). Most entries should stay project-scoped.
 
