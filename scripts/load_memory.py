@@ -48,6 +48,7 @@ from memory_utils import (
     resolve_project_path_to_name,
     resolve_session_path,
 )
+from synthesis import ROUTE_CAP
 from transcript_ops import (
     extract_transcripts_incremental,
     format_transcripts_incremental,
@@ -448,7 +449,7 @@ Do NOT route:
 - Implementation details (built X, fixed Y) — these belong in short-term memory
 - Gotchas with obvious error messages that point to the solution
 - Version-specific notes or workarounds for known issues with tracked fixes
-Tag up to 5 [LTM] candidates per project, ordered by importance (most important first). Only the top 3 will be kept — the rest are discarded. This means you must rank: put the entry most worth preserving long-term first.
+Tag up to {ROUTE_CAP + 2} [LTM] candidates per project, ordered by importance (most important first). Only the top {ROUTE_CAP} will be kept — the rest are discarded. This means you must rank: put the entry most worth preserving long-term first.
 
 **[GLOBAL] flag:** Only for genuinely cross-project learnings (OS behavior, tool tips, general dev practices). Most entries should stay project-scoped.
 
