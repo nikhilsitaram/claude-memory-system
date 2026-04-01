@@ -422,15 +422,16 @@ def build_projects_index() -> dict:
             # Skip merge: no live entry, or ambiguous (multiple live entries share the name)
             continue
         live_key = live_candidates[0]
+        live_entry = projects[live_key]
+        work_days = set(live_entry["workDays"])
         for stale_key in stale_paths:
             stale_data = projects[stale_key]
-            existing_days = set(projects[live_key]["workDays"])
-            existing_days.update(stale_data.get("workDays", []))
-            projects[live_key]["workDays"] = sorted(existing_days)
+            work_days.update(stale_data.get("workDays", []))
             for ep in stale_data.get("encodedPaths", []):
-                if ep not in projects[live_key]["encodedPaths"]:
-                    projects[live_key]["encodedPaths"].append(ep)
+                if ep not in live_entry["encodedPaths"]:
+                    live_entry["encodedPaths"].append(ep)
             stale_keys.add(stale_key)
+        live_entry["workDays"] = sorted(work_days)
 
     for key in stale_keys:
         del projects[key]

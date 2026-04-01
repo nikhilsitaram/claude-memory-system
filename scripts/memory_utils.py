@@ -791,10 +791,13 @@ def _worktree_pattern_fallback(path: str) -> str:
     Fallback for when git is unavailable (directory deleted, git not installed).
     Checks for both /.claude/worktrees/ and /.worktrees/ patterns.
     """
-    for marker in ("/.claude/worktrees/", "/.worktrees/"):
-        idx = path.find(marker)
-        if idx != -1:
-            return path[:idx]
+    parts = Path(path).parts
+    markers = ((".claude", "worktrees"), (".worktrees",))
+    for marker in markers:
+        mlen = len(marker)
+        for i in range(len(parts) - mlen + 1):
+            if parts[i : i + mlen] == marker:
+                return str(Path(*parts[:i]))
     return path
 
 
