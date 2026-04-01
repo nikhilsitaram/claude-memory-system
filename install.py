@@ -197,7 +197,7 @@ def link_skills(script_dir: Path) -> None:
     """Symlink skill directories to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "settings", "projects"]
+    skills = ["remember", "synthesize", "recall", "settings", "projects", "audit"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
@@ -575,6 +575,7 @@ def print_success_message() -> None:
     print("  /recall     - Search historical memory")
     print("  /settings   - View/modify memory settings & token usage")
     print("  /projects   - Manage projects (move, merge orphans, cleanup)")
+    print("  /audit      - Audit long-term memory for stale or incorrect entries")
     print()
     print("Memory location: ~/.claude/memory/")
     print("  - global-long-term-memory.md  (loaded every session)")
