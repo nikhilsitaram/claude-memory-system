@@ -19,7 +19,7 @@ Fact-check long-term memory entries against the current codebase. Detect outdate
 2. **Current project LTM:** List files in `~/.claude/memory/project-memory/` matching `*-long-term-memory.md`. Find the file whose name prefix (before `-long-term-memory.md`) matches the current repository directory name (case-insensitive, normalized to kebab-case — spaces and underscores become hyphens). If no match, skip project LTM.
 3. **With `--all` flag:** Read ALL `*-long-term-memory.md` files in `~/.claude/memory/project-memory/` instead of just the current project.
 
-Parse each file into sections using `##` headers. Track which section each entry belongs to, noting whether the section is pinned. A section is pinned if its header matches one of: "About Me", "Current Projects", "Technical Environment", "Patterns & Preferences", "Pinned" — or if the section body contains an `<!-- Auto-pinned` or `<!-- Custom pinned` HTML comment.
+Parse each file into sections using `##` headers. Track which section each entry belongs to, noting whether the section is pinned. A section is pinned if its header matches one of: "About Me", "Current Projects", "Technical Environment", "Patterns & Preferences", "Pinned". These are the authoritative pinned section names (matching the decay system's protected set).
 
 ## Detection Categories
 
@@ -100,7 +100,7 @@ Present findings as a Markdown table grouped by file:
 
 After the table, ask the user which findings to act on. List findings by number and ask the user to reply with the numbers they want to apply (e.g., "Apply 1, 3" or "Apply all" or "Dismiss all").
 
-If there are more than 15 findings, batch them into groups of 10 and present each group separately, waiting for user response before showing the next group.
+If there are more than 10 findings, batch them into groups of 10 and present each group separately, waiting for user response before showing the next group.
 
 ## Actions on Approved Findings
 
@@ -126,7 +126,7 @@ Archive format example:
 ### Correct (directed mode or user-provided edit)
 
 1. Use the Edit tool to replace the entry text in place in the source LTM file
-2. Update the date prefix to today's date: `(YYYY-MM-DD)`
+2. Inform the user that the date prefix will be updated to today's date `(YYYY-MM-DD)` to reflect the correction. If the user prefers to preserve the original date, keep it unchanged.
 
 ### Merge duplicate
 
