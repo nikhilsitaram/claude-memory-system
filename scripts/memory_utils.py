@@ -241,7 +241,7 @@ DEFAULT_SETTINGS = {
         "model": "sonnet",
         "background": True,
         "deferred": True,
-        "minSessionMessages": 10,
+        "minSessionMessages": 5,
     },
     "decay": {
         "ageDays": 30,
@@ -938,6 +938,7 @@ def find_current_project(projects_index: dict, pwd: str) -> dict | None:
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads
 _projects_index_cache: dict | None = None
+_normalized_projects_cache: dict | None = None
 
 
 def resolve_project_path_to_name(
@@ -958,7 +959,7 @@ def resolve_project_path_to_name(
     Returns:
         Project name string, or None if not found.
     """
-    global _projects_index_cache
+    global _projects_index_cache, _normalized_projects_cache
 
     if not project_path and not project_hash:
         return None
@@ -966,8 +967,11 @@ def resolve_project_path_to_name(
     try:
         if _projects_index_cache is None:
             _projects_index_cache = load_json_file(get_projects_index_file(), {})
+            _normalized_projects_cache = None  # invalidate on reload
         cache: dict = _projects_index_cache or {}
-        projects = _normalize_projects_keys(cache.get("projects", {}))
+        if _normalized_projects_cache is None:
+            _normalized_projects_cache = _normalize_projects_keys(cache.get("projects", {}))
+        projects = _normalized_projects_cache
 
         # Primary: direct path lookup (case-insensitive)
         if project_path:

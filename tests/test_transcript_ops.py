@@ -813,5 +813,43 @@ class TestResolveProjectNameWorktreePrefix:
         assert result is None
 
 
+class TestExtractFirstUserPrompt:
+    """Tests for extract_first_user_prompt()."""
+
+    def test_returns_first_user_message(self, tmp_path):
+        """Extracts the first substantive user message from JSONL."""
+        from transcript_ops import extract_first_user_prompt
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":"hello world"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"hi"}}\n'
+        )
+        assert extract_first_user_prompt(transcript) == "hello world"
+
+    def test_skips_noise_messages(self, tmp_path):
+        """Skips messages that should_skip_message filters out."""
+        from transcript_ops import extract_first_user_prompt
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":"<system-reminder>hook output</system-reminder>"}}\n'
+            '{"type":"user","message":{"role":"user","content":"real question"}}\n'
+        )
+        assert extract_first_user_prompt(transcript) == "real question"
+
+    def test_returns_empty_on_no_user_messages(self, tmp_path):
+        """Returns empty string when no user messages exist."""
+        from transcript_ops import extract_first_user_prompt
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            '{"type":"assistant","message":{"role":"assistant","content":"hi"}}\n'
+        )
+        assert extract_first_user_prompt(transcript) == ""
+
+    def test_returns_empty_on_missing_file(self, tmp_path):
+        """Returns empty string for nonexistent file."""
+        from transcript_ops import extract_first_user_prompt
+        assert extract_first_user_prompt(tmp_path / "nonexistent.jsonl") == ""
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

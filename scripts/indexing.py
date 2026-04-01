@@ -406,21 +406,22 @@ def build_projects_index() -> dict:
     # Merge stale-path entries into live entries with the same project name.
     # Handles cross-platform migration (e.g., WSL /home/... -> macOS /Users/...).
     stale_keys = set()
-    live_by_name: dict[str, str] = {}  # name -> canonical_path (live)
+    live_by_name: dict[str, list[str]] = defaultdict(list)  # name -> [canonical_paths]
     stale_by_name: dict[str, list[str]] = defaultdict(list)  # name -> [canonical_paths]
 
-    for canonical_path, data in projects.items():
+    for canonical_path, data in sorted(projects.items()):
         original_path = data.get("originalPath", "")
         if original_path and Path(original_path).exists():
-            if data["name"] not in live_by_name:
-                live_by_name[data["name"]] = canonical_path
+            live_by_name[data["name"]].append(canonical_path)
         elif original_path:
             stale_by_name[data["name"]].append(canonical_path)
 
     for name, stale_paths in stale_by_name.items():
-        if name not in live_by_name:
+        live_candidates = live_by_name.get(name, [])
+        if len(live_candidates) != 1:
+            # Skip merge: no live entry, or ambiguous (multiple live entries share the name)
             continue
-        live_key = live_by_name[name]
+        live_key = live_candidates[0]
         for stale_key in stale_paths:
             stale_data = projects[stale_key]
             existing_days = set(projects[live_key]["workDays"])
