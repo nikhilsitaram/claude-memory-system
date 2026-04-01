@@ -9,6 +9,7 @@ Requirements: Python 3.9+
 """
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -240,7 +241,7 @@ DEFAULT_SETTINGS = {
         "model": "sonnet",
         "background": True,
         "deferred": True,
-        "minSessionMessages": 10,
+        "minSessionMessages": 5,
     },
     "decay": {
         "ageDays": 30,
@@ -785,15 +786,15 @@ def prune_stale_state_entries(max_age_days: int = 7) -> int:
 
 
 def _worktree_pattern_fallback(path: str) -> str:
-    """Resolve a worktree path using /.worktrees/ directory convention.
+    """Resolve a worktree path using worktree directory conventions.
 
     Fallback for when git is unavailable (directory deleted, git not installed).
-    If path contains /.worktrees/, returns everything before it.
+    Checks for both /.claude/worktrees/ and /.worktrees/ patterns.
     """
-    marker = "/.worktrees/"
-    idx = path.find(marker)
-    if idx != -1:
-        return path[:idx]
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        idx = path.find(marker)
+        if idx != -1:
+            return path[:idx]
     return path
 
 
@@ -904,22 +905,40 @@ def resolve_session_path(path: str) -> str:
     return path
 
 
+def _normalize_projects_keys(projects: dict) -> dict:
+    """Build a lowercase-keyed lookup dict from projects, merging case variants."""
+    normalized: dict = {}
+    for key, value in projects.items():
+        lower_key = key.lower()
+        if lower_key in normalized:
+            # Merge workDays from case variant
+            existing_days = set(normalized[lower_key].get("workDays", []))
+            existing_days.update(value.get("workDays", []))
+            normalized[lower_key]["workDays"] = sorted(existing_days)
+            for ep in value.get("encodedPaths", []):
+                if ep not in normalized[lower_key].get("encodedPaths", []):
+                    normalized[lower_key].setdefault("encodedPaths", []).append(ep)
+        else:
+            normalized[lower_key] = copy.deepcopy(value)
+    return normalized
+
+
 def find_current_project(projects_index: dict, pwd: str) -> dict | None:
     """
     Find the project matching the current working directory.
 
-    Uses exact match only. Subdirectory resolution is handled upstream
-    by resolve_session_path() before this function is called.
+    Case-insensitive: normalizes both keys and pwd to lowercase.
+    Subdirectory resolution is handled upstream by resolve_session_path().
 
     Returns project dict with 'name', 'originalPath', 'workDays' or None.
     """
-    projects = projects_index.get("projects", {})
-    pwd_lower = pwd.lower()
-    return projects.get(pwd_lower)
+    projects = _normalize_projects_keys(projects_index.get("projects", {}))
+    return projects.get(pwd.lower())
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads
 _projects_index_cache: dict | None = None
+_normalized_projects_cache: dict | None = None
 
 
 def resolve_project_path_to_name(
@@ -940,7 +959,7 @@ def resolve_project_path_to_name(
     Returns:
         Project name string, or None if not found.
     """
-    global _projects_index_cache
+    global _projects_index_cache, _normalized_projects_cache
 
     if not project_path and not project_hash:
         return None
@@ -948,11 +967,15 @@ def resolve_project_path_to_name(
     try:
         if _projects_index_cache is None:
             _projects_index_cache = load_json_file(get_projects_index_file(), {})
-        projects = _projects_index_cache.get("projects", {})
+            _normalized_projects_cache = None  # invalidate on reload
+        cache: dict = _projects_index_cache or {}
+        if _normalized_projects_cache is None:
+            _normalized_projects_cache = _normalize_projects_keys(cache.get("projects", {}))
+        projects = _normalized_projects_cache
 
-        # Primary: direct path lookup
+        # Primary: direct path lookup (case-insensitive)
         if project_path:
-            data = projects.get(project_path)
+            data = projects.get(project_path.lower())
             if data and data.get("name"):
                 return data["name"]
 

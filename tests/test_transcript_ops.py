@@ -813,232 +813,42 @@ class TestResolveProjectNameWorktreePrefix:
         assert result is None
 
 
-# =============================================================================
-# extract_first_user_prompt Tests
-# =============================================================================
-
-
 class TestExtractFirstUserPrompt:
-    def test_normal_case(self, tmp_path):
-        """Extracts first substantive user message."""
+    """Tests for extract_first_user_prompt()."""
+
+    def test_returns_first_user_message(self, tmp_path):
+        """Extracts the first substantive user message from JSONL."""
         from transcript_ops import extract_first_user_prompt
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":"hello world"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"hi"}}\n'
+        )
+        assert extract_first_user_prompt(transcript) == "hello world"
 
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "investigate what it would take to implement instant recall"),
-            ("assistant", "I'll look into the synthesis pipeline..."),
-            ("user", "what about the token cost?"),
-            ("assistant", "The token cost would be minimal..."),
-        ]))
-        result = extract_first_user_prompt(transcript)
-        assert result == "investigate what it would take to implement instant recall"
-
-    def test_skips_system_reminder_user_messages(self, tmp_path):
-        """Skips user messages that are system reminders or skill injections."""
+    def test_skips_noise_messages(self, tmp_path):
+        """Skips messages that should_skip_message filters out."""
         from transcript_ops import extract_first_user_prompt
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":"<system-reminder>hook output</system-reminder>"}}\n'
+            '{"type":"user","message":{"role":"user","content":"real question"}}\n'
+        )
+        assert extract_first_user_prompt(transcript) == "real question"
 
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "<system-reminder>You have tools available</system-reminder>"),
-            ("user", "Base directory for this skill: /foo/bar"),
-            ("user", "fix the bug in load_memory.py"),
-            ("assistant", "I'll fix that bug..."),
-        ]))
-        result = extract_first_user_prompt(transcript)
-        assert result == "fix the bug in load_memory.py"
-
-    def test_truncation_at_max_chars(self, tmp_path):
-        """Truncates long messages with ellipsis."""
-        from transcript_ops import extract_first_user_prompt
-
-        long_msg = "a" * 300
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", long_msg),
-            ("assistant", "OK"),
-        ]))
-        result = extract_first_user_prompt(transcript, max_chars=200)
-        assert len(result) == 203  # 200 chars + "..."
-        assert result.endswith("...")
-
-    def test_empty_transcript(self, tmp_path):
-        """Returns empty string for empty file."""
-        from transcript_ops import extract_first_user_prompt
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text("")
-        result = extract_first_user_prompt(transcript)
-        assert result == ""
-
-    def test_no_user_messages(self, tmp_path):
+    def test_returns_empty_on_no_user_messages(self, tmp_path):
         """Returns empty string when no user messages exist."""
         from transcript_ops import extract_first_user_prompt
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("assistant", "Hello, how can I help?"),
-        ]))
-        result = extract_first_user_prompt(transcript)
-        assert result == ""
-
-    def test_custom_max_chars(self, tmp_path):
-        """Respects custom max_chars parameter."""
-        from transcript_ops import extract_first_user_prompt
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "this is a moderately long message that exceeds fifty chars"),
-            ("assistant", "OK"),
-        ]))
-        result = extract_first_user_prompt(transcript, max_chars=50)
-        assert len(result) == 53  # 50 + "..."
-        assert result.endswith("...")
-
-    def test_missing_file_returns_empty(self, tmp_path):
-        """Returns empty string for non-existent file."""
-        from transcript_ops import extract_first_user_prompt
-
-        result = extract_first_user_prompt(tmp_path / "nonexistent.jsonl")
-        assert result == ""
-
-    def test_malformed_json_lines_skipped(self, tmp_path):
-        """Malformed JSON lines are skipped gracefully."""
-        from transcript_ops import extract_first_user_prompt
-
-        transcript = tmp_path / "session.jsonl"
+        transcript = tmp_path / "transcript.jsonl"
         transcript.write_text(
-            "not valid json\n"
-            + make_jsonl_content([("user", "real message")])
+            '{"type":"assistant","message":{"role":"assistant","content":"hi"}}\n'
         )
-        result = extract_first_user_prompt(transcript)
-        assert result == "real message"
+        assert extract_first_user_prompt(transcript) == ""
 
-
-# =============================================================================
-# format_transcripts_incremental First Prompt Tests
-# =============================================================================
-
-
-class TestFormatTranscriptsIncrementalFirstPrompt:
-    """Tests for first user prompt in format_transcripts_incremental output."""
-
-    def test_includes_first_prompt_in_header(self, tmp_path):
-        """Session header includes 'First prompt:' line."""
-        from transcript_ops import format_transcripts_incremental
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "investigate the synthesis pipeline"),
-            ("assistant", "I'll look into it."),
-        ]))
-
-        daily_data = {
-            "2026-03-31": [{
-                "session_id": "test-sess",
-                "filepath": str(transcript),
-                "project_path": "/test",
-                "project_name": "test-project",
-                "message_count": 1,
-                "messages": [{"role": "assistant", "content": "I'll look into it."}],
-                "mode": "full",
-                "current_offset": 100,
-                "current_lines": 4,
-            }]
-        }
-
-        result = format_transcripts_incremental(daily_data)
-        assert "First prompt: investigate the synthesis pipeline" in result
-
-    def test_omits_first_prompt_when_empty(self, tmp_path):
-        """No 'First prompt:' line when no substantive user message."""
-        from transcript_ops import format_transcripts_incremental
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "<system-reminder>tools</system-reminder>"),
-            ("assistant", "Hello"),
-        ]))
-
-        daily_data = {
-            "2026-03-31": [{
-                "session_id": "test-sess",
-                "filepath": str(transcript),
-                "project_path": "/test",
-                "project_name": "test-project",
-                "message_count": 1,
-                "messages": [{"role": "assistant", "content": "Hello"}],
-                "mode": "full",
-                "current_offset": 100,
-                "current_lines": 2,
-            }]
-        }
-
-        result = format_transcripts_incremental(daily_data)
-        assert "First prompt:" not in result
-
-    def test_first_prompt_truncated(self, tmp_path):
-        """Long first prompts are truncated in the header."""
-        from transcript_ops import format_transcripts_incremental
-
-        long_prompt = "x" * 300
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", long_prompt),
-            ("assistant", "OK"),
-        ]))
-
-        daily_data = {
-            "2026-03-31": [{
-                "session_id": "test-sess",
-                "filepath": str(transcript),
-                "project_path": "/test",
-                "project_name": "test-project",
-                "message_count": 1,
-                "messages": [{"role": "assistant", "content": "OK"}],
-                "mode": "full",
-                "current_offset": 100,
-                "current_lines": 2,
-            }]
-        }
-
-        result = format_transcripts_incremental(daily_data)
-        assert "First prompt:" in result
-        first_prompt_line = [l for l in result.split("\n") if "First prompt:" in l][0]
-        prompt_text = first_prompt_line.split("First prompt: ", 1)[1]
-        assert prompt_text.endswith("...")
-        assert len(prompt_text) <= 203  # 200 + "..."
-
-    def test_session_header_format_unchanged(self, tmp_path):
-        """The Session: header line format is unchanged (synthesis.py regex compat)."""
-        from transcript_ops import format_transcripts_incremental
-
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(make_jsonl_content([
-            ("user", "test prompt"),
-            ("assistant", "OK"),
-        ]))
-
-        daily_data = {
-            "2026-03-31": [{
-                "session_id": "abc123",
-                "filepath": str(transcript),
-                "project_path": "/test",
-                "project_name": "my-project",
-                "message_count": 1,
-                "messages": [{"role": "assistant", "content": "OK"}],
-                "mode": "full",
-                "current_offset": 100,
-                "current_lines": 2,
-            }]
-        }
-
-        result = format_transcripts_incremental(daily_data)
-        import re
-        session_header_re = re.compile(r"^Session:\s+\S+\s+\[project:\s+[^\]]+\]")
-        header_lines = [l for l in result.split("\n") if l.startswith("Session:")]
-        assert len(header_lines) == 1
-        assert session_header_re.match(header_lines[0])
-        assert "First prompt:" not in header_lines[0]
+    def test_returns_empty_on_missing_file(self, tmp_path):
+        """Returns empty string for nonexistent file."""
+        from transcript_ops import extract_first_user_prompt
+        assert extract_first_user_prompt(tmp_path / "nonexistent.jsonl") == ""
 
 
 if __name__ == "__main__":

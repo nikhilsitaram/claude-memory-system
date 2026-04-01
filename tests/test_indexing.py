@@ -713,5 +713,86 @@ class TestBuildProjectsIndex:
         assert "2026-01-16" in projects[canonical]["workDays"]
 
 
+    def test_stale_path_merges_into_live_entry_with_same_name(self, env):
+        """Stale WSL path merges workDays into live macOS entry with same project name."""
+        projects_dir, memory_dir, index_file = env
+
+        # Stale entry (WSL path, doesn't exist on filesystem)
+        self._setup_project(
+            projects_dir, "-wsl-home-user-myproject", "/home/user/myproject",
+            [
+                _make_session_entry("s1", "2026-01-10T10:00:00Z"),
+                _make_session_entry("s2", "2026-01-12T10:00:00Z"),
+            ],
+        )
+
+        # Live entry (macOS path, exists on filesystem)
+        live_path = str(env[0].parent / "myproject")
+        Path(live_path).mkdir(parents=True, exist_ok=True)
+        self._setup_project(
+            projects_dir, "-mac-user-myproject", live_path,
+            [_make_session_entry("s3", "2026-02-01T10:00:00Z")],
+        )
+
+        result = build_projects_index()
+
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert data["name"] == "myproject"
+        assert data["originalPath"] == live_path
+        assert len(data["workDays"]) == 3
+        assert "2026-01-10" in data["workDays"]
+        assert "2026-02-01" in data["workDays"]
+        assert len(data["encodedPaths"]) == 2
+
+    def test_stale_path_not_merged_when_multiple_live_entries_share_name(self, env):
+        """Stale entry is NOT merged when two live repos share the same basename."""
+        projects_dir, memory_dir, index_file = env
+
+        # Two distinct live projects both named "api"
+        live_path_a = str(env[0].parent / "team-a" / "api")
+        Path(live_path_a).mkdir(parents=True, exist_ok=True)
+        self._setup_project(
+            projects_dir, "-team-a-api", live_path_a,
+            [_make_session_entry("s1", "2026-01-10T10:00:00Z")],
+        )
+
+        live_path_b = str(env[0].parent / "team-b" / "api")
+        Path(live_path_b).mkdir(parents=True, exist_ok=True)
+        self._setup_project(
+            projects_dir, "-team-b-api", live_path_b,
+            [_make_session_entry("s2", "2026-02-01T10:00:00Z")],
+        )
+
+        # Stale entry also named "api" (WSL path)
+        self._setup_project(
+            projects_dir, "-wsl-api", "/home/user/api",
+            [_make_session_entry("s3", "2026-03-01T10:00:00Z")],
+        )
+
+        result = build_projects_index()
+
+        # All three should remain separate — no merge into either live entry
+        assert len(result["projects"]) == 3
+        for data in result["projects"].values():
+            if data["originalPath"] in (live_path_a, live_path_b):
+                assert "2026-03-01" not in data["workDays"]
+
+    def test_stale_path_kept_when_no_live_entry_matches(self, env):
+        """Stale entry without a live counterpart is preserved (not silently dropped)."""
+        projects_dir, memory_dir, index_file = env
+
+        self._setup_project(
+            projects_dir, "-wsl-proj", "/home/user/unique-project",
+            [_make_session_entry("s1", "2026-01-15T10:00:00Z")],
+        )
+
+        result = build_projects_index()
+
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert data["name"] == "unique-project"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

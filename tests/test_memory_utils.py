@@ -36,8 +36,8 @@ from memory_utils import (
     parse_markdown_sections,
     project_name_to_filename,
     prune_stale_state_entries,
-    resolve_project_path_to_name,
     resolve_git_subdir_to_root,
+    resolve_project_path_to_name,
     resolve_session_path,
     resolve_worktree_to_main_repo,
     save_json_file,
@@ -534,6 +534,42 @@ class TestFindCurrentProject:
         assert result is not None
         assert result["name"] == "project"
 
+    def test_case_insensitive_key_stored_uppercase(self):
+        """Keys stored with mixed case still match lowercase PWD."""
+        index = {
+            "projects": {
+                "/Users/nsitaram/personal/project": {
+                    "name": "project",
+                    "originalPath": "/Users/nsitaram/personal/project",
+                }
+            }
+        }
+        result = find_current_project(index, "/users/nsitaram/personal/project")
+        assert result is not None
+        assert result["name"] == "project"
+
+    def test_case_variants_merged(self):
+        """Two entries differing only in case get merged."""
+        index = {
+            "projects": {
+                "/home/user/project": {
+                    "name": "project",
+                    "workDays": ["2026-01-01"],
+                    "encodedPaths": ["enc-a"],
+                },
+                "/Home/User/Project": {
+                    "name": "project",
+                    "workDays": ["2026-01-02"],
+                    "encodedPaths": ["enc-b"],
+                },
+            }
+        }
+        result = find_current_project(index, "/home/user/project")
+        assert result is not None
+        assert result["name"] == "project"
+        assert sorted(result["workDays"]) == ["2026-01-01", "2026-01-02"]
+        assert sorted(result["encodedPaths"]) == ["enc-a", "enc-b"]
+
 
 # =============================================================================
 # FileLock Tests
@@ -947,8 +983,18 @@ class TestWorktreePatternFallback:
         from memory_utils import _worktree_pattern_fallback
         assert _worktree_pattern_fallback("/repo/.worktrees/feature/src/main") == "/repo"
 
+    def test_claude_worktrees_path_resolves(self):
+        """Path with /.claude/worktrees/ returns everything before .claude/worktrees/."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/Users/nsitaram/personal/claude-caliper/.claude/worktrees/pipeline-gates") == "/Users/nsitaram/personal/claude-caliper"
+
+    def test_claude_worktrees_nested_path(self):
+        """Nested /.claude/worktrees/ path resolves correctly."""
+        from memory_utils import _worktree_pattern_fallback
+        assert _worktree_pattern_fallback("/home/user/repo/.claude/worktrees/feature/src") == "/home/user/repo"
+
     def test_non_worktree_path_unchanged(self):
-        """Path without /.worktrees/ returns unchanged."""
+        """Path without any worktree marker returns unchanged."""
         from memory_utils import _worktree_pattern_fallback
         assert _worktree_pattern_fallback("/tmp/not-a-repo") == "/tmp/not-a-repo"
 
@@ -1299,6 +1345,15 @@ class TestResolveProjectPathToName:
             resolve_project_path_to_name("/proj")
             # Should only load once thanks to caching
             mock_load.assert_called_once()
+
+    def test_case_insensitive_path_lookup(self, tmp_path):
+        """Path stored with different case still resolves."""
+        index = {"projects": {
+            "/Users/Nsitaram/MyProject": {"name": "myproject", "encodedPaths": ["-users-nsitaram-myproject"]}
+        }}
+        with mock.patch("memory_utils.load_json_file", return_value=index), \
+             mock.patch("memory_utils.get_projects_index_file", return_value=tmp_path / "idx.json"):
+            assert resolve_project_path_to_name("/users/nsitaram/myproject") == "myproject"
 
     def test_non_worktree_hash_no_prefix_fallback(self, tmp_path):
         """Hash without --worktrees- does not trigger prefix matching."""

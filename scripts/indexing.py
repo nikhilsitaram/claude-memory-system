@@ -403,7 +403,39 @@ def build_projects_index() -> dict:
                 "workDays": sorted(work_days),
             }
 
-    # Check for stale paths (projects where originalPath no longer exists)
+    # Merge stale-path entries into live entries with the same project name.
+    # Handles cross-platform migration (e.g., WSL /home/... -> macOS /Users/...).
+    stale_keys = set()
+    live_by_name: dict[str, list[str]] = defaultdict(list)  # name -> [canonical_paths]
+    stale_by_name: dict[str, list[str]] = defaultdict(list)  # name -> [canonical_paths]
+
+    for canonical_path, data in sorted(projects.items()):
+        original_path = data.get("originalPath", "")
+        if original_path and Path(original_path).exists():
+            live_by_name[data["name"]].append(canonical_path)
+        elif original_path:
+            stale_by_name[data["name"]].append(canonical_path)
+
+    for name, stale_paths in stale_by_name.items():
+        live_candidates = live_by_name.get(name, [])
+        if len(live_candidates) != 1:
+            # Skip merge: no live entry, or ambiguous (multiple live entries share the name)
+            continue
+        live_key = live_candidates[0]
+        for stale_key in stale_paths:
+            stale_data = projects[stale_key]
+            existing_days = set(projects[live_key]["workDays"])
+            existing_days.update(stale_data.get("workDays", []))
+            projects[live_key]["workDays"] = sorted(existing_days)
+            for ep in stale_data.get("encodedPaths", []):
+                if ep not in projects[live_key]["encodedPaths"]:
+                    projects[live_key]["encodedPaths"].append(ep)
+            stale_keys.add(stale_key)
+
+    for key in stale_keys:
+        del projects[key]
+
+    # Check for remaining stale paths (no live entry to merge into)
     stale_projects = []
     for canonical_path, data in projects.items():
         original_path = data.get("originalPath", "")
