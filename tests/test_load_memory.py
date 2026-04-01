@@ -27,6 +27,7 @@ from load_memory import (
     should_synthesize,
     write_synthesis_prompt,
 )
+from synthesis import ROUTE_CAP
 
 # =============================================================================
 # _strip_profile_sections Tests
@@ -505,7 +506,8 @@ class TestBuildSynthesisInstructions:
     def test_contains_routing_rules(self):
         instructions = _build_synthesis_instructions("(none registered)")
         assert "[LTM]" in instructions
-        assert "Maximum 5" in instructions
+        assert f"Only the top {ROUTE_CAP}" in instructions
+        assert "ordered by importance" in instructions
         # Dedup is now handled by deterministic code, not LLM
         assert "DEDUP REQUIREMENT" not in instructions
 

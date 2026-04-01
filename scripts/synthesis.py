@@ -76,7 +76,7 @@ END_MARKER = "===END==="
 
 # Routing quality gates
 MIN_ROUTE_KEYWORDS = 4  # Minimum meaningful keywords for an entry to be routed
-ROUTE_CAP = 5  # Maximum entries routed per LTM file per synthesis run
+ROUTE_CAP = 3  # Maximum entries routed per LTM file per synthesis run
 
 # Type -> Section mapping (deterministic)
 TYPE_TO_SECTION = {
