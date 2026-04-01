@@ -6,17 +6,19 @@ Run with: python -m pytest tests/test_indexing.py -v
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from helpers import make_jsonl_line, make_session_info  # noqa: I001
 from indexing import (
+    DEFAULT_RECENCY_WINDOW_DAYS,
     MIN_SESSION_SIZE_BYTES,
     build_projects_index,
     get_session_date,
     has_assistant_message,
+    list_recent_sessions,
 )
 from transcript_ops import (
     extract_text_content,
@@ -200,7 +202,6 @@ class TestListRecentSessions:
         ]
 
     def test_filters_old_sessions(self):
-        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
             result = list_recent_sessions(max_age_days=7)
@@ -210,7 +211,6 @@ class TestListRecentSessions:
             assert "old-1" not in ids
 
     def test_filters_small_sessions(self):
-        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
             result = list_recent_sessions(max_age_days=7)
@@ -218,7 +218,6 @@ class TestListRecentSessions:
             assert "small-1" not in ids
 
     def test_excludes_session_id(self):
-        from indexing import list_recent_sessions
         sessions = self._make_sessions()
         with mock.patch("indexing.list_all_sessions", return_value=sessions):
             result = list_recent_sessions(
@@ -228,8 +227,26 @@ class TestListRecentSessions:
             assert "recent-1" not in ids
             assert "recent-2" in ids
 
+    def test_prefers_created_over_mtime(self):
+        """Migrated sessions with stale mtime are included if created is recent."""
+        now = datetime.now(timezone.utc)
+        sessions = [
+            # Old mtime (migrated), but recent created (real session date)
+            make_session_info("migrated-1", file_size=2000,
+                              file_mtime=now - timedelta(days=20),
+                              created=now - timedelta(days=3)),
+            # Old mtime AND old created — should be excluded
+            make_session_info("truly-old", file_size=2000,
+                              file_mtime=now - timedelta(days=20),
+                              created=now - timedelta(days=20)),
+        ]
+        with mock.patch("indexing.list_all_sessions", return_value=sessions):
+            result = list_recent_sessions(max_age_days=7)
+            ids = {s.session_id for s in result}
+            assert "migrated-1" in ids
+            assert "truly-old" not in ids
+
     def test_default_window(self):
-        from indexing import DEFAULT_RECENCY_WINDOW_DAYS
         assert DEFAULT_RECENCY_WINDOW_DAYS == 7
 
     def test_min_session_size_constant(self):

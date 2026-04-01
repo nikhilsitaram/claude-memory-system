@@ -139,7 +139,7 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `projectLongTerm.tokenLimit` | 3,000 |
 | `synthesis.intervalHours` | 0.5 |
 | `synthesis.model` | sonnet |
-| `synthesis.minSessionMessages` | 10 |
+| `synthesis.minSessionMessages` | 5 |
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |
 | `decay.archiveRetentionDays` | 365 |

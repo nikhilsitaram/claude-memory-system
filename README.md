@@ -139,7 +139,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "synthesis": {
     "intervalHours": 0.5,
     "model": "sonnet",
-    "minSessionMessages": 10
+    "minSessionMessages": 5
   },
   "decay": {
     "ageDays": 30,
@@ -157,7 +157,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `projectLongTerm.tokenLimit` | 3,000 | Token limit for project long-term memory |
 | `synthesis.intervalHours` | 0.5 | Hours between auto-synthesis checks |
 | `synthesis.model` | sonnet | Model for synthesis LLM calls |
-| `synthesis.minSessionMessages` | 10 | Skip sessions with fewer messages |
+| `synthesis.minSessionMessages` | 5 | Skip sessions with fewer messages |
 | `decay.ageDays` | 30 | Archive global LTM entries older than N days |
 | `decay.projectWorkingDays` | 20 | Archive project LTM entries after N project work days |
 | `decay.archiveRetentionDays` | 365 | Purge archived items after N days |

@@ -779,22 +779,10 @@ class TestRunPostProcessing:
         with patch("synthesis.rebuild_projects_index_quiet"), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
-             patch("synthesis.prune_stale_state_entries"):
+             patch("synthesis.run_decay"):
             run_post_processing(extract_paths=[str(extract)])
 
         assert not extract.exists()
-
-    def test_prunes_stale_state(self):
-        """Calls prune_stale_state_entries during post-processing."""
-        with patch("synthesis.rebuild_projects_index_quiet"), \
-             patch("synthesis.run_mark_routed"), \
-             patch("synthesis.run_validate_ltm"), \
-             patch("synthesis.run_decay"), \
-             patch("synthesis.prune_stale_state_entries") as mock_prune:
-            run_post_processing(extract_paths=[])
-
-        mock_prune.assert_called_once()
 
     def test_updates_timestamp(self, tmp_path):
         """Writes .last-synthesis timestamp file."""
@@ -802,7 +790,6 @@ class TestRunPostProcessing:
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
-             patch("synthesis.prune_stale_state_entries"), \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
 
@@ -824,7 +811,7 @@ class TestPendingRecallCleanup:
         (recall_dir / "session-bbb.md").write_text("recall content")
         (recall_dir / "session-ccc.md").write_text("other recall")
 
-        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing([], session_ids=["session-aaa", "session-bbb"])
 
         assert not (recall_dir / "session-aaa.md").exists()
@@ -837,7 +824,7 @@ class TestPendingRecallCleanup:
         recall_dir.mkdir()
         (recall_dir / "session-aaa.md").write_text("recall content")
 
-        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing([])
 
         assert (recall_dir / "session-aaa.md").exists()
@@ -846,7 +833,7 @@ class TestPendingRecallCleanup:
         """No error when pending-recall directory doesn't exist."""
         recall_dir = tmp_path / "pending-recall"  # Not created
 
-        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.prune_stale_state_entries"),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
+        with patch("synthesis.get_pending_recall_dir", return_value=recall_dir),              patch("synthesis.rebuild_projects_index_quiet"),              patch("synthesis.run_mark_routed"),              patch("synthesis.run_validate_ltm"),              patch("synthesis.run_decay"),              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing([], session_ids=["session-aaa"])
         # Should not raise
 
@@ -1308,7 +1295,7 @@ class TestRunPostProcessingOffsetsCleanup:
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
-             patch("synthesis.prune_stale_state_entries"), \
+             \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(
                 extract_paths=[],
@@ -1323,7 +1310,7 @@ class TestRunPostProcessingOffsetsCleanup:
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
              patch("synthesis.run_decay"), \
-             patch("synthesis.prune_stale_state_entries"), \
+             \
              patch("synthesis.get_memory_dir", return_value=tmp_path):
             run_post_processing(extract_paths=[])
 
@@ -1342,8 +1329,7 @@ class TestRunPostProcessingNoSubprocess:
 
     def test_calls_run_mark_routed(self, tmp_path):
         """run_post_processing calls run_mark_routed."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+        with patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet"), \
              patch("synthesis.run_mark_routed") as mock_mr, \
              patch("synthesis.run_validate_ltm"), \
@@ -1353,8 +1339,7 @@ class TestRunPostProcessingNoSubprocess:
 
     def test_calls_run_validate_ltm(self, tmp_path):
         """run_post_processing calls run_validate_ltm."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+        with patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet"), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm") as mock_vl, \
@@ -1364,8 +1349,7 @@ class TestRunPostProcessingNoSubprocess:
 
     def test_calls_run_decay(self, tmp_path):
         """run_post_processing calls run_decay."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+        with patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet"), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
@@ -1375,8 +1359,7 @@ class TestRunPostProcessingNoSubprocess:
 
     def test_calls_rebuild_projects_index(self, tmp_path):
         """run_post_processing rebuilds projects index before decay."""
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+        with patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet") as mock_rebuild, \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \
@@ -1394,8 +1377,7 @@ class TestRunPostProcessingNoSubprocess:
         def track_decay():
             call_order.append("decay")
 
-        with patch("synthesis.prune_stale_state_entries"), \
-             patch("synthesis.get_memory_dir", return_value=tmp_path), \
+        with patch("synthesis.get_memory_dir", return_value=tmp_path), \
              patch("synthesis.rebuild_projects_index_quiet", side_effect=track_rebuild), \
              patch("synthesis.run_mark_routed"), \
              patch("synthesis.run_validate_ltm"), \

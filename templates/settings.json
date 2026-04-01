@@ -20,7 +20,7 @@
   "synthesis": {
     "intervalHours": 0.5,
     "model": "sonnet",
-    "minSessionMessages": 10,
+    "minSessionMessages": 5,
     "_comment": "Minimum hours between auto-synthesis runs. Model: sonnet (default)|haiku|opus. minSessionMessages: skip sessions with fewer messages during synthesis."
   },
   "decay": {
@@ -49,7 +49,7 @@
     "projectLongTerm.tokenLimit": 3000,
     "synthesis.intervalHours": 0.5,
     "synthesis.model": "sonnet",
-    "synthesis.minSessionMessages": 10,
+    "synthesis.minSessionMessages": 5,
     "decay.ageDays": 30,
     "decay.projectWorkingDays": 20,
     "decay.archiveRetentionDays": 365

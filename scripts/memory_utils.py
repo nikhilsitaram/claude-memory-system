@@ -67,7 +67,6 @@ __all__ = [
     "load_synthesis_state",
     "save_synthesis_state",
     "update_synthesis_state",
-    "prune_stale_state_entries",
     # Project resolution
     "resolve_project_path_to_name",
     # Markdown parsing
@@ -104,7 +103,6 @@ LOCK_STALE_SECONDS = 300  # 5 minutes — locks older than this are considered s
 # Synthesis state:
 #   load_synthesis_state() -> dict        save_synthesis_state(state) -> None
 #   update_synthesis_state(updates) -> None
-#   prune_stale_state_entries(max_age_days?) -> int
 # Content:
 #   filter_daily_content(content, scope) -> str
 #   find_current_project(index, pwd) -> dict | None
@@ -740,47 +738,6 @@ def update_synthesis_state(session_updates: dict[str, dict]) -> None:
         }
     save_synthesis_state(state)
 
-
-def prune_stale_state_entries(max_age_days: int = 7) -> int:
-    """Remove state entries for sessions older than max_age_days or missing from disk.
-
-    Scans .synthesis-state.json and removes entries where the session's .jsonl
-    file has mtime older than max_age_days or no longer exists on disk.
-
-    Returns number of entries pruned.
-    """
-    state = load_synthesis_state()
-    sessions = state.get("sessions", {})
-    if not sessions:
-        return 0
-
-    cutoff = datetime.now(timezone.utc).timestamp() - (max_age_days * 86400)
-    projects_dir = get_projects_dir()
-    to_remove = []
-
-    for sid in sessions:
-        # Find the session file across project dirs
-        found = False
-        if projects_dir.exists():
-            for proj_dir in projects_dir.iterdir():
-                if not proj_dir.is_dir():
-                    continue
-                session_file = proj_dir / f"{sid}.jsonl"
-                if session_file.exists():
-                    found = True
-                    if session_file.stat().st_mtime < cutoff:
-                        to_remove.append(sid)
-                    break
-        if not found:
-            to_remove.append(sid)
-
-    for sid in to_remove:
-        sessions.pop(sid, None)
-
-    if to_remove:
-        save_synthesis_state(state)
-
-    return len(to_remove)
 
 
 def _worktree_pattern_fallback(path: str) -> str:

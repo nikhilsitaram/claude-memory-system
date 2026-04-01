@@ -54,7 +54,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
 | `synthesis.intervalHours` | float | 0.25-24 | 0.5 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
-| `synthesis.minSessionMessages` | int | 0-100 | 10 | Skip sessions with fewer messages during synthesis |
+| `synthesis.minSessionMessages` | int | 0-100 | 5 | Skip sessions with fewer messages during synthesis |
 | `decay.ageDays` | int | 7-365 | 30 | Archive learnings older than this |
 | `decay.projectWorkingDays` | int | 5-100 | 20 | Archive project entries after N project work days |
 | `decay.archiveRetentionDays` | int | 30-730 | 365 | Purge archived items older than this |

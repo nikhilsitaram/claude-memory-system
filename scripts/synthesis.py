@@ -33,12 +33,11 @@ from memory_utils import (  # noqa: E402
     get_daily_dir,
     get_global_memory_file,
     get_memory_dir,
+    get_pending_recall_dir,
     get_project_memory_dir,
     get_projects_dir,
     is_routed_match,
     parse_markdown_sections,
-    get_pending_recall_dir,
-    prune_stale_state_entries,
     rebuild_projects_index_quiet,
     update_synthesis_state,
 )
@@ -784,14 +783,8 @@ def run_post_processing(
     offsets_json: str | None = None,
     session_ids: list[str] | None = None,
 ) -> None:
-    """Run state pruning, cleanup, decay, validation, and timestamp update."""
+    """Run cleanup, decay, validation, and timestamp update."""
     from datetime import datetime, timezone
-
-    # Prune stale state entries
-    try:
-        prune_stale_state_entries()
-    except Exception:
-        pass  # Non-critical
 
     # Cleanup temp files
     paths_to_clean = list(extract_paths)
