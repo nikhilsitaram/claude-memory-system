@@ -139,8 +139,6 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `projectLongTerm.tokenLimit` | 3,000 |
 | `synthesis.intervalHours` | 0.5 |
 | `synthesis.model` | sonnet |
-| `synthesis.background` | true |
-| `synthesis.deferred` | true |
 | `synthesis.minSessionMessages` | 10 |
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |

@@ -239,8 +239,6 @@ DEFAULT_SETTINGS = {
     "synthesis": {
         "intervalHours": 0.5,
         "model": "sonnet",
-        "background": True,
-        "deferred": True,
         "minSessionMessages": 5,
     },
     "decay": {
