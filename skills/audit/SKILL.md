@@ -16,10 +16,10 @@ Fact-check long-term memory entries against the current codebase. Detect outdate
 ## File Discovery
 
 1. **Global LTM:** Read `~/.claude/memory/global-long-term-memory.md`
-2. **Current project LTM:** List files in `~/.claude/memory/project-memory/` matching `*-long-term-memory.md`. Find the file whose name prefix (before `-long-term-memory.md`) matches the current repository directory name (case-insensitive). If no match, skip project LTM.
+2. **Current project LTM:** List files in `~/.claude/memory/project-memory/` matching `*-long-term-memory.md`. Find the file whose name prefix (before `-long-term-memory.md`) matches the current repository directory name (case-insensitive, normalized to kebab-case — spaces and underscores become hyphens). If no match, skip project LTM.
 3. **With `--all` flag:** Read ALL `*-long-term-memory.md` files in `~/.claude/memory/project-memory/` instead of just the current project.
 
-Parse each file into sections using `## ` headers. Track which section each entry belongs to, noting whether the section is pinned (sections: "About Me", "Current Projects", "Technical Environment", "Patterns & Preferences", "Pinned" -- or any section with `<!-- Auto-pinned` or `<!-- Custom pinned` comments).
+Parse each file into sections using `##` headers. Track which section each entry belongs to, noting whether the section is pinned. A section is pinned if its header matches one of: "About Me", "Current Projects", "Technical Environment", "Patterns & Preferences", "Pinned" — or if the section body contains an `<!-- Auto-pinned` or `<!-- Custom pinned` HTML comment.
 
 ## Detection Categories
 
@@ -32,7 +32,7 @@ Entry references files, functions, configs, or systems that no longer exist.
 
 ### incorrect
 Entry states something demonstrably wrong about current code or behavior.
-- **Verify:** For code-reference entries: `Read` relevant code and compare the claim vs reality. For config/default claims (e.g., "default is X"): search for the config key in `settings.json`, `memory_utils.py DEFAULT_SETTINGS`, or relevant scripts.
+- **Verify:** For code-reference entries: `Read` relevant code and compare the claim vs reality. For config/default claims (e.g., "default is X"): search for the config key in project configuration files and scripts (e.g., `settings.json`, constants in source files, `.env`).
 - **Flag when:** The entry's claim contradicts what the code actually does.
 
 ### superseded
@@ -57,7 +57,7 @@ Two entries say opposite things, or an entry contradicts current code.
 3. For each entry with identifiable code references:
    a. Extract referenced identifiers (file paths, function names, class names, config keys, CLI commands)
    b. For file paths: `Glob` to check existence
-   c. For function/class names: `Grep` in likely locations (scripts/, skills/, tests/)
+   c. For function/class names: `Grep` across the codebase to find definitions and usages
    d. For config keys/values: `Read` the relevant config file and compare
    e. If reference not found or value doesn't match: record as finding
 4. For ALL entries (including those without code references): check for duplicates across files and contradictions between entries
@@ -70,7 +70,7 @@ If no findings are discovered, report: "No findings -- N entries checked across 
 ## Directed Audit Workflow (`/audit <context>`)
 
 1. Discover LTM files (same as full scan)
-2. Extract significant keywords from the context string (nouns, identifiers, technical terms -- skip stop words like "the", "is", "and", etc.)
+2. Extract significant keywords from the context string (nouns, identifiers, technical terms -- skip stop words like "the", "is", "and", etc.). If keyword extraction yields an empty set (e.g., context is all stop words), ask the user to provide a more specific context string.
 3. Find entries whose text shares keywords with the context. Use judgment to filter out entries where keyword overlap is coincidental rather than topical.
 4. For each related entry, verify whether the entry's claim is still correct given the context provided
 5. Present findings with **suggested corrections** -- propose edited entry text, not just "archive"
@@ -82,9 +82,9 @@ If related entries all verify clean, report: "N entries checked related to <cont
 
 ## Triage Presentation
 
-Present findings as a markdown table grouped by file:
+Present findings as a Markdown table grouped by file:
 
-```
+```markdown
 ### global-long-term-memory.md (3 findings)
 
 | # | Section | Entry | Category | Reasoning |
@@ -107,13 +107,13 @@ If there are more than 15 findings, batch them into groups of 10 and present eac
 ### Archive (default for outdated, superseded, incorrect)
 
 1. Remove the entry line from its source LTM file using the Edit tool
-2. Append the entry to `~/.claude/memory/.decay-archive.md` under an `## Audited YYYY-MM-DD` header (use today's date)
+2. Append the entry to `~/.claude/memory/.audit-archive.md` under an `## Audited YYYY-MM-DD` header (use today's date). If an `## Audited` header for today already exists, append under it instead of creating a duplicate.
 3. Append `[audit:category - reasoning]` tag to the archived entry
-4. Add a source annotation on the next line: `  - *Source: filename.md*` (filename only, not full path)
-5. If `.decay-archive.md` does not exist, create it with a `# Decay Archive` header before appending
+4. Add a source annotation on the next line (indented): `- *Source: filename.md*` (filename only, not full path)
+5. If `.audit-archive.md` does not exist, create it with a `# Audit Archive` header before appending
 
 Archive format example:
-```
+```markdown
 ## Audited 2026-03-31
 - (2026-02-10) [pattern] Use set_memory_dir() for path resolution [audit:outdated - function removed in v1 migration]
   - *Source: global-long-term-memory.md*
@@ -121,7 +121,7 @@ Archive format example:
   - *Source: claude-memory-system-long-term-memory.md*
 ```
 
-**Important:** Use `## Audited` header (NOT `## Archived` which is used by the decay system). Audit archives are distinct from decay archives and are not subject to decay's purge cycle.
+**Important:** Audit archives are stored in `.audit-archive.md` (separate from `.decay-archive.md`) to ensure they are not subject to the decay system's purge cycle.
 
 ### Correct (directed mode or user-provided edit)
 
@@ -130,7 +130,7 @@ Archive format example:
 
 ### Merge duplicate
 
-1. Ask the user which tier to keep the entry in (global or project)
+1. Recommend which tier to keep: project-specific entries belong in project LTM, general/cross-project entries belong in global LTM. Present the recommendation and let the user confirm or override.
 2. Archive the entry from the other tier (using the Archive flow above)
 3. If the user wants to combine wording, edit the kept entry in place
 
@@ -141,5 +141,5 @@ Archive format example:
 3. **All sections are auditable** including Pinned and auto-pinned sections -- clearly indicate when a finding affects a pinned entry
 4. **Entries with no verifiable code references** are skipped for outdated/incorrect/superseded detection but still checked for duplicates and contradictions
 5. **Behavioral/preference entries** (e.g., "prefer X over Y") are skipped for code verification
-6. **Use `## Audited` header in archive** (not `## Archived`) to distinguish audit actions from age-based decay
+6. **Archive to `.audit-archive.md`** (not `.decay-archive.md`) using `## Audited` headers to keep audit and decay archives separate
 7. **Source annotations use filename only** (e.g., `global-long-term-memory.md`), not full paths
