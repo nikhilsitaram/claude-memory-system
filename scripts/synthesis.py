@@ -783,7 +783,7 @@ def run_post_processing(
     offsets_json: str | None = None,
     session_ids: list[str] | None = None,
 ) -> None:
-    """Run state pruning, cleanup, decay, validation, and timestamp update."""
+    """Run cleanup, decay, validation, and timestamp update."""
     from datetime import datetime, timezone
 
     # Cleanup temp files

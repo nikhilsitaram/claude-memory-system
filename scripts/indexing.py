@@ -256,7 +256,7 @@ def list_recent_sessions(
     return [
         s
         for s in all_sessions
-        if (s.created or s.file_mtime) >= cutoff
+        if (s.file_mtime >= cutoff or (s.created is not None and s.created >= cutoff))
         and s.file_size >= min_file_size
         and s.session_id != exclude_session_id
         and (not verify_content or has_assistant_message(s.transcript_path))
