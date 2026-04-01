@@ -54,8 +54,6 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
 | `synthesis.intervalHours` | float | 0.25-24 | 0.5 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
-| `synthesis.background` | bool | — | true | Run auto-synthesis in background |
-| `synthesis.deferred` | bool | — | true | Use systemd timer instead of in-session synthesis |
 | `synthesis.minSessionMessages` | int | 0-100 | 10 | Skip sessions with fewer messages during synthesis |
 | `decay.ageDays` | int | 7-365 | 30 | Archive learnings older than this |
 | `decay.projectWorkingDays` | int | 5-100 | 20 | Archive project entries after N project work days |
@@ -79,7 +77,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 
 **Git subdirectories**: Subdirectories of a git repo automatically map to the repo root unless gitignored — no configuration required. Gitignored paths (e.g. `projects/`) stay as separate projects.
 
-**Synthesis**: First session of day (UTC) always prompts if transcripts pending. Manual `/synthesize` always runs in foreground regardless of `background` setting.
+**Synthesis**: Runs via launchd/systemd timer (deferred). Manual `/synthesize` always runs in foreground.
 
 **Decay**: Archives entries older than `ageDays` from decay-eligible sections (Key Actions/Decisions/Learnings/Lessons). `## Pinned` section, auto-pinned sections, and entries without dates are protected. Archive at `~/.claude/memory/.decay-archive.md`.
 

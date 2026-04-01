@@ -15,59 +15,32 @@ from synthesis_cron import (
 class TestShouldRunDeferredSynthesis:
     """Tests for the scheduling check."""
 
-    def test_returns_false_when_not_deferred(self):
-        """If synthesis.deferred is False, should not run."""
-        with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"deferred": False, "intervalHours": 2}
-        }):
-            assert should_run_deferred_synthesis() is False
-
     def test_returns_false_when_recently_synthesized(self, tmp_path):
         """If .last-synthesis is recent, should not run."""
         last_synth = tmp_path / ".last-synthesis"
         last_synth.write_text(datetime.now(timezone.utc).isoformat())
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"deferred": True, "intervalHours": 2}
+            "synthesis": {"intervalHours": 2}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is False
 
-    def test_returns_true_when_deferred_and_due(self, tmp_path):
-        """If deferred=True and enough time passed, should run."""
+    def test_returns_true_when_due(self, tmp_path):
+        """If enough time passed, should run."""
         last_synth = tmp_path / ".last-synthesis"
-        # Don't create it -- never synthesized
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"deferred": True, "intervalHours": 2}
+            "synthesis": {"intervalHours": 2}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is True
 
-    def test_returns_true_when_deferred_and_old_timestamp(self, tmp_path):
-        """If deferred=True and timestamp is old enough, should run."""
+    def test_returns_true_when_old_timestamp(self, tmp_path):
+        """If timestamp is old enough, should run."""
         last_synth = tmp_path / ".last-synthesis"
         old_time = datetime.now(timezone.utc) - timedelta(hours=3)
         last_synth.write_text(old_time.isoformat())
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"deferred": True, "intervalHours": 2}
+            "synthesis": {"intervalHours": 2}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is True
-
-    def test_returns_true_when_deferred_missing_defaults_to_setting(self):
-        """If synthesis.deferred key is missing, defaults to DEFAULT_SETTINGS value."""
-        from memory_utils import DEFAULT_SETTINGS
-
-        expected = DEFAULT_SETTINGS["synthesis"]["deferred"]
-        with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": 2}
-        }), patch("synthesis_cron.should_synthesize", return_value=True):
-            assert should_run_deferred_synthesis() is expected
-
-    def test_returns_true_when_synthesis_section_missing(self):
-        """If synthesis section is missing entirely, defaults to DEFAULT_SETTINGS deferred."""
-        from memory_utils import DEFAULT_SETTINGS
-
-        expected = DEFAULT_SETTINGS["synthesis"]["deferred"]
-        with patch("synthesis_cron.load_settings", return_value={}), \
-             patch("synthesis_cron.should_synthesize", return_value=True):
-            assert should_run_deferred_synthesis() is expected
 
 
 class TestBuildClaudeCommand:

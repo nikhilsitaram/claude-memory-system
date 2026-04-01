@@ -39,15 +39,10 @@ SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
 def should_run_deferred_synthesis() -> bool:
     """Check if deferred synthesis should run now.
 
-    Returns False if:
-    - synthesis.deferred is not True
-    - should_synthesize() says it's not time yet (recently ran)
-
-    Returns True if deferred mode is enabled and synthesis is due.
+    Returns False if should_synthesize() says it's not time yet (recently ran).
+    Returns True if synthesis is due.
     """
     settings = load_settings()
-    if not settings.get("synthesis", {}).get("deferred", True):
-        return False
     return should_synthesize(settings)
 
 
@@ -105,7 +100,7 @@ def run_synthesis(force: bool = False) -> int:
         0 on success or nothing to do, 1 on failure.
     """
     if not force and not should_run_deferred_synthesis():
-        print("Synthesis not due (deferred=false or recently ran)")
+        print("Synthesis not due (recently ran)")
         return 0
 
     # Capture write_synthesis_prompt output to parse model + prompt_file

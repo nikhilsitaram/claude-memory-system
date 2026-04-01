@@ -1402,96 +1402,6 @@ class TestSkipMemory:
                 main()
 
 
-# =============================================================================
-# Synthesis Deferred Setting Tests
-# =============================================================================
-
-
-class TestSynthesisDeferredSetting:
-    def test_default_deferred_matches_default_settings(self, tmp_path):
-        """synthesis.deferred defaults to DEFAULT_SETTINGS value."""
-        from memory_utils import DEFAULT_SETTINGS, load_settings
-
-        settings_file = tmp_path / "settings.json"
-        with mock.patch("memory_utils.get_settings_file", return_value=settings_file):
-            settings = load_settings()
-        assert settings["synthesis"]["deferred"] is DEFAULT_SETTINGS["synthesis"]["deferred"]
-
-    def _make_settings(self, deferred=False):
-        """Build a settings dict with synthesis.deferred set."""
-        import copy
-
-        from memory_utils import DEFAULT_SETTINGS, _calculate_token_limits
-
-        s = copy.deepcopy(DEFAULT_SETTINGS)
-        s["synthesis"]["deferred"] = deferred
-        _calculate_token_limits(s)
-        return s
-
-    def _run_main_with_mocks(self, monkeypatch, capsys, tmp_path, settings):
-        """Run main() with enough mocks to reach the synthesis gate, then return captured output."""
-        import io
-
-        from load_memory import main
-
-        # stdin is not a tty in tests; provide valid JSON so session_id parsing works
-        monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id": "test-session"}'))
-
-        # Settings
-        monkeypatch.setattr("load_memory.load_settings", lambda: settings)
-
-        # get_recent_days returns pending dates (triggers synthesis path)
-        monkeypatch.setattr("load_memory.get_recent_days", lambda **kw: ["2026-02-23"])
-
-        # should_synthesize returns True (time-based check passes)
-        monkeypatch.setattr("load_memory.should_synthesize", lambda s: True)
-
-        # Mock the synthesis file write (eager timestamp)
-        synth_file = tmp_path / "last-synthesis"
-        monkeypatch.setattr("load_memory.get_last_synthesis_file", lambda: synth_file)
-
-        # Mock pre-extraction to return data that reaches the AUTO-SYNTHESIZE banner
-        monkeypatch.setattr(
-            "load_memory.pre_extract_transcripts_incremental",
-            lambda dates, **kw: (
-                {"2026-02-23": "/tmp/extract.txt"},
-                {"sid1": {"offset": 100, "lines": 10}},
-                {"2026-02-23": [{"session_id": "sid1", "project_path": "/test", "messages": ["hi"]}]},
-            ),
-        )
-        monkeypatch.setattr(
-            "load_memory._build_embedded_files",
-            lambda *a, **kw: {"transcripts": {"2026-02-23": "test"}, "global_ltm": "", "project_ltms": {}},
-        )
-        monkeypatch.setattr(
-            "load_memory._build_synthesis_prompt",
-            lambda *a, **kw: "FAKE_PROMPT",
-        )
-        monkeypatch.setattr("load_memory.SYNTHESIS_PROMPT_DIR", str(tmp_path))
-
-        # Mock memory loading functions (not under test here)
-        monkeypatch.setattr("load_memory.load_global_memory", lambda: ("", 0))
-        monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
-        monkeypatch.setattr("load_memory.load_json_file", lambda p, d: {})
-        monkeypatch.setattr("load_memory.find_current_project", lambda *a: None)
-        monkeypatch.setattr("load_memory.load_daily_summaries", lambda *a, **kw: ([], 0))
-
-        main()
-        return capsys.readouterr().out
-
-    def test_deferred_true_skips_auto_synthesis(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=True, main() should not print AUTO-SYNTHESIZE banner."""
-        settings = self._make_settings(deferred=True)
-        output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" not in output
-
-    def test_deferred_false_preserves_auto_synthesis(self, tmp_path, capsys, monkeypatch):
-        """When synthesis.deferred=False, existing behavior is preserved."""
-        settings = self._make_settings(deferred=False)
-        output = self._run_main_with_mocks(monkeypatch, capsys, tmp_path, settings)
-        assert "AUTO-SYNTHESIZE" in output
-
-
 class TestCheckSynthesisErrors:
     """Tests for check_synthesis_errors()."""
 
@@ -1566,7 +1476,7 @@ class TestLoadPendingRecall:
             "timestamp: 2026-03-31T18:00:00Z",
             f"cwd: {cwd}",
             "---",
-            f"> first prompt",
+            "> first prompt",
             "",
             content,
             "",
