@@ -21,7 +21,7 @@
     "intervalHours": 0.5,
     "model": "sonnet",
     "minSessionMessages": 10,
-    "_comment": "Minimum hours between auto-synthesis prompts (always runs on first session of day). Model: sonnet (default)|haiku|opus. minSessionMessages: skip sessions with fewer messages during synthesis."
+    "_comment": "Minimum hours between auto-synthesis runs. Model: sonnet (default)|haiku|opus. minSessionMessages: skip sessions with fewer messages during synthesis."
   },
   "decay": {
     "ageDays": 30,

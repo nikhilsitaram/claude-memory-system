@@ -5,7 +5,7 @@ A markdown-based memory system for Claude Code that persists context across sess
 ## Features
 
 - **Two-tier memory**: Global patterns (always loaded) + project-specific learnings (loaded when in project), filtered by `[scope/*]` tags
-- **Auto-synthesis**: Deferred mode runs via systemd timer outside active sessions; in-session mode available as fallback. Per-date processing ensures multi-day backlogs produce correct daily files
+- **Auto-synthesis**: Runs via launchd/systemd timer outside active sessions. Per-date processing ensures multi-day backlogs produce correct daily files
 - **Incremental processing**: Tracks per-session byte offsets to delta-extract only new content; skips unchanged sessions
 - **Deterministic scoping**: Session CWD metadata determines project scope programmatically — no LLM guessing
 - **Age-based decay**: Learnings older than 30 days are automatically archived; pinned sections protected
@@ -55,7 +55,7 @@ The installer detects your Python command and configures hooks with absolute pat
 
 1. **Session Start**: Loads long-term memory + filtered short-term memory. Checks for synthesis errors to surface.
 2. **During Session**: Use `/remember` to capture notes; Claude proactively uses `/recall` for historical context.
-3. **Session End**: Transcript saved. If deferred synthesis is enabled, systemd timer processes it out-of-session.
+3. **Session End**: Transcript saved. Launchd/systemd timer processes it out-of-session.
 
 ### Memory Architecture
 
@@ -139,8 +139,6 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "synthesis": {
     "intervalHours": 0.5,
     "model": "sonnet",
-    "background": true,
-    "deferred": true,
     "minSessionMessages": 10
   },
   "decay": {
@@ -189,9 +187,7 @@ Entries with dates older than `decay.ageDays` (default: 30) are moved to `.decay
 
 ### Synthesis
 
-**Deferred mode** (default): A systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`. SessionEnd hook triggers on session exit. When multiple dates are pending, each is processed as a separate LLM call.
-
-**In-session mode**: First session of day always checks for pending transcripts. Subsequent sessions check every `synthesis.intervalHours`. Runs as a background subagent.
+A launchd/systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`. SessionEnd hook triggers on session exit. When multiple dates are pending, each is processed as a separate LLM call.
 
 **Error handling**: Failures are logged to `.synthesis-errors.log` and surfaced as an alert on next session start. Eager timestamps are cleared on failure so the next timer interval can retry.
 
