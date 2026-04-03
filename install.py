@@ -492,17 +492,17 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
 
     # Remove existing synthesis SessionEnd/PreCompact hooks (handles platform migration)
     # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
-    for _event in ("SessionEnd", "PreCompact"):
-        if _event in settings.get("hooks", {}):
-            settings["hooks"][_event] = [
-                entry for entry in settings["hooks"][_event]
+    for event in ("SessionEnd", "PreCompact"):
+        if event in settings.get("hooks", {}):
+            settings["hooks"][event] = [
+                entry for entry in settings["hooks"][event]
                 if not any(
                     "memory-synthesis" in h.get("command", "")
                     for h in entry.get("hooks", [])
                 )
             ]
-            if not settings["hooks"][_event]:
-                del settings["hooks"][_event]
+            if not settings["hooks"][event]:
+                del settings["hooks"][event]
 
     for event, new_entries in hooks_to_add.items():
         if event not in settings["hooks"]:

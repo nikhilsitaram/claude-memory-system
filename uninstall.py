@@ -58,7 +58,8 @@ def remove_hooks(settings: dict) -> dict:
         "load_memory.py",
         "save_session.py",
         "pretooluse-allow-memory.sh",
-        "memory-synthesis",  # SessionEnd hook: matches both systemctl and launchctl commands
+        "session_end_recall.py",
+        "memory-synthesis",  # SessionEnd/PreCompact hook: matches both systemctl and launchctl commands
     ]
 
     removed_count = 0

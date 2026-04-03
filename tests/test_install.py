@@ -598,9 +598,7 @@ class TestPreCompactHook:
         hooks = settings["hooks"]["PreCompact"]
         for entry in hooks:
             for h in entry.get("hooks", []):
-                cmd = h.get("command", "")
-                if "claude-memory-synthesis" in cmd:
-                    assert h.get("timeout", 999) <= 5
+                assert h.get("timeout", 999) <= 10
 
     def test_precompact_hook_not_duplicated(self):
         """Running merge_hooks twice does not duplicate PreCompact entries."""
@@ -641,7 +639,11 @@ class TestPreCompactHook:
                 ]
             }
         }
-        result = install.merge_hooks(settings, "python3")
+        with mock.patch("install.sys") as mock_sys, \
+             mock.patch("install.os") as mock_os:
+            mock_sys.platform = "darwin"
+            mock_os.getuid.return_value = 501
+            result = install.merge_hooks(settings, "python3")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["PreCompact"]
