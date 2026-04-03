@@ -467,23 +467,42 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 ],
             }
         ],
+        # PreCompact: same as SessionEnd — synthesize and write recall before transcript is compacted
+        "PreCompact": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{python_cmd} {scripts_dir}/session_end_recall.py",
+                        "timeout": 10,
+                    },
+                    {
+                        "type": "command",
+                        "command": _session_end_command(),
+                        "timeout": 5,
+                    },
+                ],
+            }
+        ],
     }
 
     if "hooks" not in settings:
         settings["hooks"] = {}
 
-    # Remove existing synthesis SessionEnd hooks (handles platform migration)
+    # Remove existing synthesis SessionEnd/PreCompact hooks (handles platform migration)
     # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
-    if "SessionEnd" in settings.get("hooks", {}):
-        settings["hooks"]["SessionEnd"] = [
-            entry for entry in settings["hooks"]["SessionEnd"]
-            if not any(
-                "memory-synthesis" in h.get("command", "")
-                for h in entry.get("hooks", [])
-            )
-        ]
-        if not settings["hooks"]["SessionEnd"]:
-            del settings["hooks"]["SessionEnd"]
+    for _event in ("SessionEnd", "PreCompact"):
+        if _event in settings.get("hooks", {}):
+            settings["hooks"][_event] = [
+                entry for entry in settings["hooks"][_event]
+                if not any(
+                    "memory-synthesis" in h.get("command", "")
+                    for h in entry.get("hooks", [])
+                )
+            ]
+            if not settings["hooks"][_event]:
+                del settings["hooks"][_event]
 
     for event, new_entries in hooks_to_add.items():
         if event not in settings["hooks"]:
