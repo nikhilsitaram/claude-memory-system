@@ -579,6 +579,109 @@ class TestSessionEndRecallHook:
 
 
 # ---------------------------------------------------------------------------
+# PreCompact hook
+# ---------------------------------------------------------------------------
+
+
+class TestPreCompactHook:
+    def test_precompact_hook_added_to_settings(self):
+        """merge_hooks adds a PreCompact hook."""
+        settings = {"hooks": {}}
+        result = install.merge_hooks(settings, "python3")
+        assert "PreCompact" in result["hooks"]
+        hooks = result["hooks"]["PreCompact"]
+        assert len(hooks) >= 1
+
+    def test_precompact_hook_has_short_timeout(self):
+        """PreCompact synthesis trigger has a short timeout since it's fire-and-forget."""
+        settings = install.merge_hooks({}, "python3")
+        hooks = settings["hooks"]["PreCompact"]
+        for entry in hooks:
+            for h in entry.get("hooks", []):
+                assert h.get("timeout", 999) <= 10
+
+    def test_precompact_hook_not_duplicated(self):
+        """Running merge_hooks twice does not duplicate PreCompact entries."""
+        settings = install.merge_hooks({}, "python3")
+        count_before = len(settings["hooks"]["PreCompact"])
+        settings = install.merge_hooks(settings, "python3")
+        count_after = len(settings["hooks"]["PreCompact"])
+        assert count_before == count_after
+
+    def test_precompact_hook_has_two_hooks(self):
+        """PreCompact hook has recall script first, then deferred synthesis."""
+        settings = {"hooks": {}}
+        result = install.merge_hooks(settings, "python3")
+        precompact = result["hooks"]["PreCompact"]
+        assert len(precompact) == 1
+        hooks = precompact[0]["hooks"]
+        assert len(hooks) == 2
+        assert "session_end_recall.py" in hooks[0]["command"]
+        assert hooks[0]["timeout"] == 10
+        assert "memory-synthesis" in hooks[1]["command"]
+        assert hooks[1]["timeout"] == 5
+
+    def test_migration_removes_old_synthesis_precompact_hook(self):
+        """Existing PreCompact synthesis hooks are replaced on re-install."""
+        settings = {
+            "hooks": {
+                "PreCompact": [
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        with mock.patch("install.sys") as mock_sys, \
+             mock.patch("install.os") as mock_os:
+            mock_sys.platform = "darwin"
+            mock_os.getuid.return_value = 501
+            result = install.merge_hooks(settings, "python3")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["PreCompact"]
+            for h in entry.get("hooks", [])
+        ]
+        assert not any("systemctl --user start --no-block claude-memory-synthesis" in c for c in commands)
+
+    def test_preserves_non_synthesis_precompact_hooks(self):
+        """Migration only removes synthesis hooks, not other PreCompact hooks."""
+        settings = {
+            "hooks": {
+                "PreCompact": [
+                    {
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "echo compacting"}],
+                    },
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "python3")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["PreCompact"]
+            for h in entry.get("hooks", [])
+        ]
+        assert any("echo compacting" in c for c in commands)
+
+
+# ---------------------------------------------------------------------------
 # install_launchd_agent
 # ---------------------------------------------------------------------------
 
