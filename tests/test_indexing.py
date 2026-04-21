@@ -914,7 +914,7 @@ class TestExtractFromJsonlMtimeOrdering:
 
     def test_newest_cwd_wins(self, tmp_path):
         """Newest JSONL file's cwd is used, not the first alphabetically."""
-        import time
+        import os
 
         from indexing import _extract_from_jsonl
 
@@ -929,8 +929,6 @@ class TestExtractFromJsonlMtimeOrdering:
             "type": "user",
         }) + "\n")
 
-        time.sleep(0.05)
-
         # Newer file with current path
         new_file = folder / "zzz-new-session.jsonl"
         new_file.write_text(json.dumps({
@@ -938,6 +936,10 @@ class TestExtractFromJsonlMtimeOrdering:
             "timestamp": "2026-02-01T10:00:00Z",
             "type": "user",
         }) + "\n")
+
+        # Set explicit mtimes for deterministic ordering
+        os.utime(old_file, (1000, 1000))
+        os.utime(new_file, (2000, 2000))
 
         original_path, work_days = _extract_from_jsonl(folder)
         assert original_path == "/Users/newuser/myproject"

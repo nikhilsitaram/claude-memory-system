@@ -295,7 +295,13 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
     original_path = ""
     work_days: set[str] = set()
 
-    for jsonl_file in sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True):
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    for jsonl_file in sorted(folder.glob("*.jsonl"), key=_safe_mtime, reverse=True):
         try:
             with open(jsonl_file, "r", encoding="utf-8") as f:
                 first_line = f.readline().strip()
@@ -347,37 +353,43 @@ def _suggest_path_correction(
 
     # Strategy 2: Home directory substitution
     home = str(Path.home())
-    m = re.match(r"/home/[^/]+/(.*)", stale_path)
+    m = re.match(r"(?:/home|/Users)/[^/]+/(.*)", stale_path)
     if m:
         candidate = os.path.join(home, m.group(1))
         if Path(candidate).exists():
             return candidate, "home directory match"
 
     # Strategy 3: Basename scan under $HOME (3 levels deep, skip hidden dirs)
+    # Collects all matches and only returns when exactly 1 found (avoids
+    # non-deterministic first-match when multiple dirs share the basename).
     basename = project_data.get("name", Path(stale_path).name)
     home_path = Path(home)
+    matches: list[tuple[str, str]] = []
     try:
         for depth1 in home_path.iterdir():
             if not depth1.is_dir() or depth1.name.startswith("."):
                 continue
             if depth1.name == basename:
-                return str(depth1), f"basename match in {home}"
+                matches.append((str(depth1), f"basename match in {home}"))
             try:
                 for depth2 in depth1.iterdir():
                     if not depth2.is_dir() or depth2.name.startswith("."):
                         continue
                     if depth2.name == basename:
-                        return str(depth2), f"basename match in {depth1}"
+                        matches.append((str(depth2), f"basename match in {depth1}"))
                     try:
                         for depth3 in depth2.iterdir():
                             if depth3.is_dir() and not depth3.name.startswith(".") and depth3.name == basename:
-                                return str(depth3), f"basename match in {depth2}"
+                                matches.append((str(depth3), f"basename match in {depth2}"))
                     except OSError:
                         continue
             except OSError:
                 continue
     except OSError:
         pass
+
+    if len(matches) == 1:
+        return matches[0]
 
     return None, None
 
