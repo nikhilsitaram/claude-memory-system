@@ -929,7 +929,6 @@ def find_current_project(projects_index: dict, pwd: str) -> dict | None:
                 break
         # Persist the corrected index to disk
         _persist_projects_index(projects_index)
-        import sys
         print(
             f"Auto-corrected stale project path: {old_path} -> {pwd}",
             file=sys.stderr,
@@ -941,10 +940,8 @@ def find_current_project(projects_index: dict, pwd: str) -> dict | None:
 
 def _persist_projects_index(projects_index: dict) -> None:
     """Write corrected projects index back to disk."""
-    import json
-    from datetime import datetime, timezone
     output_file = get_projects_index_file()
-    projects_index["lastUpdated"] = datetime.now(timezone.utc).isoformat() + "Z"
+    projects_index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
     try:
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(projects_index, f, indent=2)

@@ -880,12 +880,13 @@ class TestSuggestPathCorrection:
         assert suggested == str(live_dir)
         assert "basename match" in strategy
 
-    def test_no_match_returns_none(self):
+    def test_no_match_returns_none(self, tmp_path):
         """No strategies match -> (None, None)."""
         project_data = {"encodedPaths": [], "name": "nonexistent-proj"}
-        suggested, strategy = _suggest_path_correction(
-            "/home/old/nonexistent-proj", project_data, {},
-        )
+        with mock.patch("indexing.Path.home", return_value=tmp_path):
+            suggested, strategy = _suggest_path_correction(
+                "/home/old/nonexistent-proj", project_data, {},
+            )
         assert suggested is None
         assert strategy is None
 

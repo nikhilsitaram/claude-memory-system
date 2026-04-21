@@ -356,19 +356,28 @@ def _suggest_path_correction(
     # Strategy 3: Basename scan under $HOME (3 levels deep, skip hidden dirs)
     basename = project_data.get("name", Path(stale_path).name)
     home_path = Path(home)
-    for depth1 in home_path.iterdir():
-        if not depth1.is_dir() or depth1.name.startswith("."):
-            continue
-        if depth1.name == basename:
-            return str(depth1), f"basename match in {home}"
-        for depth2 in depth1.iterdir():
-            if not depth2.is_dir() or depth2.name.startswith("."):
+    try:
+        for depth1 in home_path.iterdir():
+            if not depth1.is_dir() or depth1.name.startswith("."):
                 continue
-            if depth2.name == basename:
-                return str(depth2), f"basename match in {depth1}"
-            for depth3 in depth2.iterdir():
-                if depth3.is_dir() and not depth3.name.startswith(".") and depth3.name == basename:
-                    return str(depth3), f"basename match in {depth2}"
+            if depth1.name == basename:
+                return str(depth1), f"basename match in {home}"
+            try:
+                for depth2 in depth1.iterdir():
+                    if not depth2.is_dir() or depth2.name.startswith("."):
+                        continue
+                    if depth2.name == basename:
+                        return str(depth2), f"basename match in {depth1}"
+                    try:
+                        for depth3 in depth2.iterdir():
+                            if depth3.is_dir() and not depth3.name.startswith(".") and depth3.name == basename:
+                                return str(depth3), f"basename match in {depth2}"
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+    except OSError:
+        pass
 
     return None, None
 
@@ -520,7 +529,6 @@ def build_projects_index(fix_paths: bool = False) -> dict:
             })
 
     # Apply corrections if --fix-paths was requested
-    fixed_count = 0
     if fix_paths and stale_projects:
         for stale in stale_projects:
             suggested = stale["suggested_path"]
@@ -541,7 +549,6 @@ def build_projects_index(fix_paths: bool = False) -> dict:
                         existing["encodedPaths"].append(ep)
             else:
                 projects[new_key] = entry
-            fixed_count += 1
 
     # Emit warnings for stale paths
     if stale_projects:
