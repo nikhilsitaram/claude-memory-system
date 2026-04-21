@@ -885,13 +885,72 @@ def find_current_project(projects_index: dict, pwd: str) -> dict | None:
     """
     Find the project matching the current working directory.
 
-    Case-insensitive: normalizes both keys and pwd to lowercase.
+    Two-tier lookup:
+    1. Direct path match (case-insensitive)
+    2. Basename match — if pwd's basename matches exactly one project name
+       whose indexed path doesn't exist on disk (stale path from platform
+       migration). Updates the index entry in-place when matched.
+
     Subdirectory resolution is handled upstream by resolve_session_path().
 
     Returns project dict with 'name', 'originalPath', 'workDays' or None.
     """
     projects = _normalize_projects_keys(projects_index.get("projects", {}))
-    return projects.get(pwd.lower())
+
+    # Tier 1: direct path match
+    result = projects.get(pwd.lower())
+    if result is not None:
+        return result
+
+    # Tier 2: basename match against stale entries
+    basename = Path(pwd).name.lower()
+    candidates = []
+    for key, data in projects.items():
+        if data.get("name", "").lower() == basename:
+            original = data.get("originalPath", "")
+            if original and not Path(original).exists():
+                candidates.append((key, data))
+
+    if len(candidates) == 1:
+        key, data = candidates[0]
+        old_path = data.get("originalPath", "")
+        # Update the entry to the current path
+        data["originalPath"] = pwd
+        data["name"] = Path(pwd).name
+        # Also update the raw index so the fix persists on next write
+        raw_projects = projects_index.get("projects", {})
+        for raw_key, raw_data in list(raw_projects.items()):
+            if raw_key.lower() == key:
+                raw_projects[pwd.lower()] = raw_data
+                raw_data["originalPath"] = pwd
+                raw_data["name"] = Path(pwd).name
+                if raw_key.lower() != pwd.lower():
+                    del raw_projects[raw_key]
+                break
+        # Persist the corrected index to disk
+        _persist_projects_index(projects_index)
+        print(
+            f"Auto-corrected stale project path: {old_path} -> {pwd}",
+            file=sys.stderr,
+        )
+        return data
+
+    return None
+
+
+def _persist_projects_index(projects_index: dict) -> None:
+    """Write corrected projects index back to disk (atomic via tmp+replace)."""
+    output_file = get_projects_index_file()
+    tmp_file = output_file.with_suffix(".tmp")
+    projects_index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(projects_index, f, indent=2)
+        tmp_file.replace(output_file)
+    except (IOError, OSError):
+        if tmp_file.exists():
+            tmp_file.unlink()
+
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads

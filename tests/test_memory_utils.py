@@ -480,6 +480,107 @@ class TestFindCurrentProject:
         assert sorted(result["workDays"]) == ["2026-01-01", "2026-01-02"]
         assert sorted(result["encodedPaths"]) == ["enc-a", "enc-b"]
 
+    def test_basename_fallback_corrects_stale_path(self, tmp_path):
+        """Tier 2: basename match against stale entry auto-corrects the path."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        index_file = tmp_path / "projects-index.json"
+
+        index = {
+            "projects": {
+                "/home/olduser/myproject": {
+                    "name": "myproject",
+                    "originalPath": "/home/olduser/myproject",
+                    "workDays": ["2026-01-01"],
+                    "encodedPaths": ["enc-a"],
+                }
+            }
+        }
+        with patch("memory_utils.get_projects_index_file", return_value=index_file):
+            result = find_current_project(index, str(live_dir))
+        assert result is not None
+        assert result["name"] == "myproject"
+        assert result["originalPath"] == str(live_dir)
+
+    def test_basename_fallback_no_match_when_path_exists(self, tmp_path):
+        """Tier 2 does not fire when the indexed path exists on disk."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        index = {
+            "projects": {
+                str(live_dir).lower(): {
+                    "name": "myproject",
+                    "originalPath": str(live_dir),
+                    "workDays": ["2026-01-01"],
+                }
+            }
+        }
+        result = find_current_project(index, str(live_dir))
+        assert result is not None
+        assert result["name"] == "myproject"
+
+    def test_basename_fallback_ambiguous_skipped(self, tmp_path):
+        """Tier 2 returns None when multiple stale entries share the basename."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        index = {
+            "projects": {
+                "/home/user1/myproject": {
+                    "name": "myproject",
+                    "originalPath": "/home/user1/myproject",
+                },
+                "/home/user2/myproject": {
+                    "name": "myproject",
+                    "originalPath": "/home/user2/myproject",
+                },
+            }
+        }
+        result = find_current_project(index, str(live_dir))
+        assert result is None
+
+    def test_basename_fallback_ignores_live_entries(self, tmp_path):
+        """Tier 2 only considers stale entries (path doesn't exist on disk)."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        index = {
+            "projects": {
+                str(other_dir).lower(): {
+                    "name": "myproject",
+                    "originalPath": str(other_dir),
+                }
+            }
+        }
+        result = find_current_project(index, str(live_dir))
+        assert result is None
+
+    def test_basename_fallback_persists_correction(self, tmp_path):
+        """Tier 2 writes the corrected index to disk."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        index_file = tmp_path / "projects-index.json"
+
+        index = {
+            "projects": {
+                "/home/olduser/myproject": {
+                    "name": "myproject",
+                    "originalPath": "/home/olduser/myproject",
+                    "workDays": ["2026-01-01"],
+                    "encodedPaths": ["enc-a"],
+                }
+            }
+        }
+        with patch("memory_utils.get_projects_index_file", return_value=index_file):
+            find_current_project(index, str(live_dir))
+
+        assert index_file.exists()
+        import json
+        saved = json.loads(index_file.read_text())
+        keys = list(saved["projects"].keys())
+        assert len(keys) == 1
+        assert keys[0] == str(live_dir).lower()
+
 
 # =============================================================================
 # FileLock Tests
