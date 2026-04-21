@@ -939,14 +939,18 @@ def find_current_project(projects_index: dict, pwd: str) -> dict | None:
 
 
 def _persist_projects_index(projects_index: dict) -> None:
-    """Write corrected projects index back to disk."""
+    """Write corrected projects index back to disk (atomic via tmp+replace)."""
     output_file = get_projects_index_file()
+    tmp_file = output_file.with_suffix(".tmp")
     projects_index["lastUpdated"] = to_iso_z(datetime.now(timezone.utc))
     try:
-        with open(output_file, "w", encoding="utf-8") as f:
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(projects_index, f, indent=2)
-    except IOError:
-        pass
+        tmp_file.replace(output_file)
+    except (IOError, OSError):
+        if tmp_file.exists():
+            tmp_file.unlink()
+
 
 
 # Cache for resolve_project_path_to_name to avoid repeated file reads
