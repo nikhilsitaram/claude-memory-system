@@ -15,6 +15,7 @@ from helpers import make_jsonl_line, make_session_info  # noqa: I001
 from indexing import (
     DEFAULT_RECENCY_WINDOW_DAYS,
     MIN_SESSION_SIZE_BYTES,
+    _suggest_path_correction,
     build_projects_index,
     get_session_date,
     has_assistant_message,
@@ -809,6 +810,213 @@ class TestBuildProjectsIndex:
         assert len(result["projects"]) == 1
         data = list(result["projects"].values())[0]
         assert data["name"] == "unique-project"
+
+
+class TestSuggestPathCorrection:
+    """Tests for _suggest_path_correction fuzzy matching."""
+
+    def test_jsonl_cwd_strategy(self, tmp_path):
+        """Strategy 1: JSONL cwd from encoded folder matches."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        project_data = {"encodedPaths": ["enc-a"], "name": "myproject"}
+        jsonl_paths = {"enc-a": str(live_dir)}
+
+        suggested, strategy = _suggest_path_correction(
+            "/home/old/myproject", project_data, jsonl_paths,
+        )
+        assert suggested == str(live_dir)
+        assert strategy == "JSONL cwd"
+
+    def test_jsonl_cwd_nonexistent_skipped(self, tmp_path):
+        """JSONL cwd that doesn't exist on disk is skipped."""
+        project_data = {"encodedPaths": ["enc-a"], "name": "myproject"}
+        jsonl_paths = {"enc-a": "/nonexistent/path/myproject"}
+
+        suggested, strategy = _suggest_path_correction(
+            "/home/old/myproject", project_data, jsonl_paths,
+        )
+        # Should fall through to other strategies (which also won't match)
+        assert suggested is None
+
+    def test_home_substitution_strategy(self, tmp_path):
+        """Strategy 2: /home/<user>/ replaced with $HOME/."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        project_data = {"encodedPaths": [], "name": "myproject"}
+
+        with mock.patch("indexing.Path.home", return_value=tmp_path):
+            suggested, strategy = _suggest_path_correction(
+                "/home/olduser/myproject", project_data, {},
+            )
+        assert suggested == str(live_dir)
+        assert strategy == "home directory match"
+
+    def test_basename_scan_strategy_direct_child(self, tmp_path):
+        """Strategy 3: basename found as direct child of $HOME."""
+        live_dir = tmp_path / "myproject"
+        live_dir.mkdir()
+        project_data = {"encodedPaths": [], "name": "myproject"}
+
+        with mock.patch("indexing.Path.home", return_value=tmp_path):
+            suggested, strategy = _suggest_path_correction(
+                "/some/other/path/myproject", project_data, {},
+            )
+        assert suggested == str(live_dir)
+        assert "basename match" in strategy
+
+    def test_basename_scan_strategy_grandchild(self, tmp_path):
+        """Strategy 3: basename found as grandchild of $HOME."""
+        parent = tmp_path / "personal"
+        parent.mkdir()
+        live_dir = parent / "myproject"
+        live_dir.mkdir()
+        project_data = {"encodedPaths": [], "name": "myproject"}
+
+        with mock.patch("indexing.Path.home", return_value=tmp_path):
+            suggested, strategy = _suggest_path_correction(
+                "/some/other/path/myproject", project_data, {},
+            )
+        assert suggested == str(live_dir)
+        assert "basename match" in strategy
+
+    def test_no_match_returns_none(self):
+        """No strategies match -> (None, None)."""
+        project_data = {"encodedPaths": [], "name": "nonexistent-proj"}
+        suggested, strategy = _suggest_path_correction(
+            "/home/old/nonexistent-proj", project_data, {},
+        )
+        assert suggested is None
+        assert strategy is None
+
+    def test_priority_order_jsonl_over_home_sub(self, tmp_path):
+        """JSONL cwd is preferred over home substitution when both match."""
+        jsonl_dir = tmp_path / "jsonl-location" / "myproject"
+        jsonl_dir.mkdir(parents=True)
+        home_dir = tmp_path / "home-location"
+        home_dir.mkdir()
+        (home_dir / "myproject").mkdir()
+
+        project_data = {"encodedPaths": ["enc-a"], "name": "myproject"}
+        jsonl_paths = {"enc-a": str(jsonl_dir)}
+
+        with mock.patch("indexing.Path.home", return_value=home_dir):
+            suggested, strategy = _suggest_path_correction(
+                "/home/old/myproject", project_data, jsonl_paths,
+            )
+        assert suggested == str(jsonl_dir)
+        assert strategy == "JSONL cwd"
+
+
+class TestExtractFromJsonlMtimeOrdering:
+    """Tests that _extract_from_jsonl prefers the newest file's cwd."""
+
+    def test_newest_cwd_wins(self, tmp_path):
+        """Newest JSONL file's cwd is used, not the first alphabetically."""
+        import time
+
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        # Older file with stale path (alphabetically first: aaa < zzz)
+        old_file = folder / "aaa-old-session.jsonl"
+        old_file.write_text(json.dumps({
+            "cwd": "/home/olduser/myproject",
+            "timestamp": "2026-01-01T10:00:00Z",
+            "type": "user",
+        }) + "\n")
+
+        time.sleep(0.05)
+
+        # Newer file with current path
+        new_file = folder / "zzz-new-session.jsonl"
+        new_file.write_text(json.dumps({
+            "cwd": "/Users/newuser/myproject",
+            "timestamp": "2026-02-01T10:00:00Z",
+            "type": "user",
+        }) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/newuser/myproject"
+        assert "2026-01-01" in work_days
+        assert "2026-02-01" in work_days
+
+
+class TestBuildProjectsIndexFixPaths:
+    """Tests for the --fix-paths flag in build_projects_index."""
+
+    @pytest.fixture()
+    def env(self, tmp_path):
+        projects_dir = tmp_path / "projects"
+        memory_dir = tmp_path / "memory"
+        index_file = memory_dir / "projects-index.json"
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir), \
+             mock.patch("indexing.get_memory_dir", return_value=memory_dir), \
+             mock.patch("indexing.get_projects_index_file", return_value=index_file):
+            yield projects_dir, memory_dir, index_file
+
+    def _make_jsonl_file(self, folder, session_id, cwd, timestamp):
+        line = json.dumps({
+            "cwd": cwd, "timestamp": timestamp,
+            "type": "user", "sessionId": session_id,
+            "message": {"role": "user", "content": "hello"},
+        })
+        jsonl_path = folder / f"{session_id}.jsonl"
+        jsonl_path.write_text(line + "\n", encoding="utf-8")
+        return jsonl_path
+
+    def test_fix_paths_corrects_stale_entry(self, env):
+        """--fix-paths replaces stale path with suggested correction."""
+        projects_dir, memory_dir, index_file = env
+
+        # Create a live directory to match
+        live_dir = env[0].parent / "myproject"
+        live_dir.mkdir(parents=True, exist_ok=True)
+
+        # Project folder with stale sessions-index but correct JSONL cwd
+        folder = projects_dir / "-enc-myproject"
+        folder.mkdir(parents=True)
+        sessions_index = {
+            "originalPath": "/home/stale/myproject",
+            "entries": [{"created": "2026-01-15T10:00:00Z",
+                         "projectPath": "/home/stale/myproject"}],
+        }
+        (folder / "sessions-index.json").write_text(json.dumps(sessions_index))
+        self._make_jsonl_file(folder, "s1", str(live_dir), "2026-01-15T10:00:00Z")
+
+        result = build_projects_index(fix_paths=True)
+
+        projects = result["projects"]
+        assert len(projects) == 1
+        data = list(projects.values())[0]
+        assert data["originalPath"] == str(live_dir)
+        assert data["name"] == "myproject"
+
+    def test_no_fix_without_flag(self, env):
+        """Without --fix-paths, stale entries are preserved with warnings."""
+        projects_dir, memory_dir, index_file = env
+
+        live_dir = env[0].parent / "myproject"
+        live_dir.mkdir(parents=True, exist_ok=True)
+
+        folder = projects_dir / "-enc-myproject"
+        folder.mkdir(parents=True)
+        sessions_index = {
+            "originalPath": "/home/stale/myproject",
+            "entries": [{"created": "2026-01-15T10:00:00Z",
+                         "projectPath": "/home/stale/myproject"}],
+        }
+        (folder / "sessions-index.json").write_text(json.dumps(sessions_index))
+        self._make_jsonl_file(folder, "s1", str(live_dir), "2026-01-15T10:00:00Z")
+
+        result = build_projects_index(fix_paths=False)
+
+        projects = result["projects"]
+        data = list(projects.values())[0]
+        # Path should still be stale
+        assert data["originalPath"] == "/home/stale/myproject"
 
 
 if __name__ == "__main__":

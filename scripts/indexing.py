@@ -20,6 +20,8 @@ Requirements: Python 3.9+
 
 import argparse
 import json
+import os
+import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -284,13 +286,16 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
     Extract original path and work days from JSONL transcript files.
 
     Reads the first line of each .jsonl file to get cwd and timestamp.
+    Sorts by mtime descending so the newest session's cwd wins (handles
+    cross-platform migration where older sessions have stale paths).
+
     Returns (original_path, work_days_set). original_path may be empty
     if no cwd field is found.
     """
     original_path = ""
     work_days: set[str] = set()
 
-    for jsonl_file in sorted(folder.glob("*.jsonl")):
+    for jsonl_file in sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True):
         try:
             with open(jsonl_file, "r", encoding="utf-8") as f:
                 first_line = f.readline().strip()
@@ -314,7 +319,61 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
     return original_path, work_days
 
 
-def build_projects_index() -> dict:
+def _suggest_path_correction(
+    stale_path: str,
+    project_data: dict,
+    jsonl_paths: dict[str, str],
+) -> tuple[str, str] | tuple[None, None]:
+    """Suggest a corrected path for a stale project path.
+
+    Tries three strategies in priority order:
+    1. JSONL cwd — direct evidence from recent sessions on this machine
+    2. Home substitution — replace /home/<user>/ prefix with $HOME/
+    3. Basename scan — shallow search under $HOME and $HOME/*/
+
+    Args:
+        stale_path: The path that doesn't exist on disk
+        project_data: Project dict with encodedPaths, name, etc.
+        jsonl_paths: Mapping of encoded folder name -> resolved JSONL cwd
+
+    Returns:
+        (suggested_path, strategy_name) or (None, None) if no match found.
+    """
+    # Strategy 1: JSONL cwd from this project's encoded folders
+    for encoded_path in project_data.get("encodedPaths", []):
+        candidate = jsonl_paths.get(encoded_path)
+        if candidate and Path(candidate).exists():
+            return candidate, "JSONL cwd"
+
+    # Strategy 2: Home directory substitution
+    home = str(Path.home())
+    m = re.match(r"/home/[^/]+/(.*)", stale_path)
+    if m:
+        candidate = os.path.join(home, m.group(1))
+        if Path(candidate).exists():
+            return candidate, "home directory match"
+
+    # Strategy 3: Basename scan under $HOME (3 levels deep, skip hidden dirs)
+    basename = project_data.get("name", Path(stale_path).name)
+    home_path = Path(home)
+    for depth1 in home_path.iterdir():
+        if not depth1.is_dir() or depth1.name.startswith("."):
+            continue
+        if depth1.name == basename:
+            return str(depth1), f"basename match in {home}"
+        for depth2 in depth1.iterdir():
+            if not depth2.is_dir() or depth2.name.startswith("."):
+                continue
+            if depth2.name == basename:
+                return str(depth2), f"basename match in {depth1}"
+            for depth3 in depth2.iterdir():
+                if depth3.is_dir() and not depth3.name.startswith(".") and depth3.name == basename:
+                    return str(depth3), f"basename match in {depth2}"
+
+    return None, None
+
+
+def build_projects_index(fix_paths: bool = False) -> dict:
     """
     Build a project-to-work-days index from Claude Code's project data.
 
@@ -336,6 +395,9 @@ def build_projects_index() -> dict:
     # Key: lowercase project path for consistent lookup
     # Value: project metadata
     projects: dict[str, dict] = {}
+
+    # Track resolved JSONL cwd per encoded folder (for stale-path suggestions)
+    jsonl_paths: dict[str, str] = {}
 
     # Also track path variations (case differences) that map to same project
     path_variations: dict[str, set[str]] = defaultdict(set)
@@ -370,6 +432,9 @@ def build_projects_index() -> dict:
 
         # Supplement with JSONL transcripts (fallback for path, additional work days)
         jsonl_path, jsonl_days = _extract_from_jsonl(project_folder)
+        if jsonl_path:
+            resolved_jsonl = resolve_session_path(jsonl_path)
+            jsonl_paths[project_folder.name] = resolved_jsonl
         if not original_path:
             original_path = jsonl_path
             if original_path:
@@ -438,22 +503,69 @@ def build_projects_index() -> dict:
         del projects[key]
 
     # Check for remaining stale paths (no live entry to merge into)
-    stale_projects = []
+    stale_projects: list[dict] = []
     for canonical_path, data in projects.items():
         original_path = data.get("originalPath", "")
         if original_path and not Path(original_path).exists():
+            suggested, strategy = _suggest_path_correction(
+                original_path, data, jsonl_paths,
+            )
             stale_projects.append({
+                "canonical_path": canonical_path,
                 "name": data.get("name", "unknown"),
                 "original_path": original_path,
                 "work_days": len(data.get("workDays", [])),
+                "suggested_path": suggested,
+                "strategy": strategy,
             })
+
+    # Apply corrections if --fix-paths was requested
+    fixed_count = 0
+    if fix_paths and stale_projects:
+        for stale in stale_projects:
+            suggested = stale["suggested_path"]
+            if not suggested:
+                continue
+            old_key = stale["canonical_path"]
+            new_key = suggested.lower()
+            entry = projects.pop(old_key)
+            entry["originalPath"] = suggested
+            entry["name"] = Path(suggested).name
+            if new_key in projects:
+                existing = projects[new_key]
+                existing_days = set(existing["workDays"])
+                existing_days.update(entry.get("workDays", []))
+                existing["workDays"] = sorted(existing_days)
+                for ep in entry.get("encodedPaths", []):
+                    if ep not in existing["encodedPaths"]:
+                        existing["encodedPaths"].append(ep)
+            else:
+                projects[new_key] = entry
+            fixed_count += 1
 
     # Emit warnings for stale paths
     if stale_projects:
-        print(f"\nWarning: {len(stale_projects)} project(s) have missing paths:", file=sys.stderr)
-        for stale in stale_projects:
-            print(f"  - {stale['name']}: {stale['original_path']} ({stale['work_days']} work days)", file=sys.stderr)
-        print("  Consider using /projects to migrate or cleanup stale data.\n", file=sys.stderr)
+        unfixed = [s for s in stale_projects if not fix_paths or not s["suggested_path"]]
+        fixed = [s for s in stale_projects if fix_paths and s["suggested_path"]]
+
+        if fixed:
+            print(f"\nFixed {len(fixed)} stale path(s):", file=sys.stderr)
+            for s in fixed:
+                print(f"  {s['name']}: {s['original_path']}", file=sys.stderr)
+                print(f"    -> {s['suggested_path']} ({s['strategy']})", file=sys.stderr)
+
+        if unfixed:
+            print(f"\nWarning: {len(unfixed)} project(s) have stale paths:", file=sys.stderr)
+            for s in unfixed:
+                print(f"  - {s['name']}: {s['original_path']} ({s['work_days']} work days)", file=sys.stderr)
+                if s["suggested_path"]:
+                    print(f"    Suggested: {s['suggested_path']} ({s['strategy']})", file=sys.stderr)
+                else:
+                    print("    No suggestion found", file=sys.stderr)
+            if any(s["suggested_path"] for s in unfixed):
+                print("  Run `python indexing.py build-index --fix-paths` to apply suggestions.\n", file=sys.stderr)
+            else:
+                print("  Consider using /projects to migrate or cleanup stale data.\n", file=sys.stderr)
 
     # Build output structure
     output = {
@@ -492,7 +604,7 @@ def print_index_summary(index: dict) -> None:
 
 def cmd_build_index(args: argparse.Namespace) -> int:
     """Handle build-index command."""
-    index = build_projects_index()
+    index = build_projects_index(fix_paths=args.fix_paths)
     print_index_summary(index)
     return 0
 
@@ -522,6 +634,10 @@ def main() -> int:
     # Build-index command
     build_parser = subparsers.add_parser(
         "build-index", help="Build/rebuild project index"
+    )
+    build_parser.add_argument(
+        "--fix-paths", action="store_true",
+        help="Auto-apply suggested corrections for stale project paths",
     )
     build_parser.set_defaults(func=cmd_build_index)
 
