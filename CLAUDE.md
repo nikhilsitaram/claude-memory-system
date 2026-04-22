@@ -95,7 +95,7 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 ### Key Pipelines
 
-**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles context string → outputs to stdout for SessionStart hook injection.
+**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles full memory to stdout for SessionStart hook injection. Output order: read instruction → timestamp → recall → global LTM → project LTM → project STM → global STM. When output exceeds ~10K chars, Claude Code saves it to a session-specific file and shows the path + 2KB preview; the read instruction in the first 2KB prompts Claude to read the full file.
 
 **Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → inject scopes from CWD metadata → LLM summarizes → programmatic daily merge → LTM routing with keyword-overlap dedup (threshold 0.6) + route cap (5/file) → update `.synthesis-state.json` offsets.
 
