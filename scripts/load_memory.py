@@ -65,7 +65,9 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # Key Interfaces
 # =============================================================================
 # Entry points:
-#   main()                                  SessionStart hook (stdout -> context)
+#   main()                  SessionStart hook — outputs all memory sections to
+#                           stdout; read instruction in first 2KB prompts Claude
+#                           to read the full output file when Claude Code truncates
 # Memory loading:
 #   load_global_memory() -> (str, int)
 #   load_project_memory(name) -> (str, int)
@@ -790,7 +792,21 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
 
 
 def main() -> None:
-    """Main entry point - outputs memory context to stdout."""
+    """Main entry point - outputs memory context to stdout.
+
+    Output order (most important first so the 2KB preview is maximally useful):
+    1. Read instruction (for when Claude Code truncates large output to a file)
+    2. Timestamp + synthesis errors
+    3. Previous session recall (highest-value context)
+    4. Global LTM
+    5. Project LTM
+    6. Project STM
+    7. Global STM
+
+    When output exceeds ~10K chars, Claude Code saves the full content to a
+    session-specific file and shows the path + first 2KB as a preview. The read
+    instruction in the first 2KB prompts Claude to read the full file.
+    """
     check_python_version()
 
     # Skip memory injection if explicitly disabled (e.g., ccblocks ping sessions)
@@ -806,6 +822,12 @@ def main() -> None:
     except (json.JSONDecodeError, IOError):
         pass  # Not called from hook, or invalid input — safe to continue
 
+    # Detect current project early (needed for recall matching and project memory)
+    pwd = resolve_session_path(os.getcwd())
+    projects_index = load_json_file(get_projects_index_file(), {})
+    current_project = find_current_project(projects_index, pwd)
+    project_name = current_project.get("name", "") if current_project else ""
+
     # Load settings
     settings = load_settings()
     short_term_days = settings["globalShortTerm"]["workingDays"]
@@ -815,8 +837,21 @@ def main() -> None:
     # Track total bytes for token estimation
     total_bytes = 0
 
+    # Load recall before starting output (placed early so it lands in the 2KB preview)
+    recall_section, recall_bytes = load_pending_recall(
+        current_session_id=current_session_id,
+        current_project_name=project_name,
+        resolved_cwd=pwd,
+    )
+    total_bytes += recall_bytes
+
     # Start output
     print("<memory>")
+
+    # Read instruction: when output is large, Claude Code saves it to a file and
+    # shows a path + 2KB preview. This instruction prompts Claude to read the full file.
+    print("If you see \"Full output saved to: ...\" above this text, read that file now for complete memory context.")
+    print()
 
     # Include current local time for context
     now = datetime.now(timezone.utc).astimezone()
@@ -831,6 +866,11 @@ def main() -> None:
         print(error_alert)
         print()
 
+    # Previous session recall (most valuable: what you were just working on)
+    if recall_section:
+        print(recall_section)
+        print()
+
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
     total_bytes += global_bytes
@@ -840,21 +880,28 @@ def main() -> None:
         print(global_content)
         print()
 
-    # Detect current project (resolve worktree/subdir to repo root for matching)
-    pwd = resolve_session_path(os.getcwd())
-    projects_index = load_json_file(get_projects_index_file(), {})
-    current_project = find_current_project(projects_index, pwd)
-
     # Load project-specific long-term memory
-    if current_project:
-        project_name = current_project.get("name", "")
-        if project_name:
-            project_content, project_bytes = load_project_memory(project_name)
-            total_bytes += project_bytes
+    if project_name:
+        project_content, project_bytes = load_project_memory(project_name)
+        total_bytes += project_bytes
 
-            if project_content:
-                print(f"## Project Long-Term Memory: {project_name}")
-                print(project_content)
+        if project_content:
+            print(f"## Project Long-Term Memory: {project_name}")
+            print(project_content)
+            print()
+
+    # Load project short-term memory (project history, filtered to [project/*] tags)
+    if current_project:
+        pn = current_project.get("name", "unknown")
+        project_history, history_bytes = load_project_history(current_project, project_days)
+        total_bytes += history_bytes
+
+        if project_history:
+            print(f"## Project Short-Term Memory: {pn}")
+            print()
+            for date, content in project_history:
+                print(f"### {date}")
+                print(content)
                 print()
 
     # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
@@ -867,32 +914,6 @@ def main() -> None:
             print(f"### {date}")
             print(content)
             print()
-
-    # Load project short-term memory (project history, filtered to [project/*] tags)
-    if current_project:
-        project_name = current_project.get("name", "unknown")
-        project_history, history_bytes = load_project_history(current_project, project_days)
-        total_bytes += history_bytes
-
-        if project_history:
-            print(f"## Project Short-Term Memory: {project_name}")
-            print()
-            for date, content in project_history:
-                print(f"### {date}")
-                print(content)
-                print()
-
-    # Load pending recall for current project
-    project_name = current_project.get("name", "") if current_project else ""
-    recall_section, recall_bytes = load_pending_recall(
-        current_session_id=current_session_id,
-        current_project_name=project_name,
-        resolved_cwd=pwd,
-    )
-    total_bytes += recall_bytes
-    if recall_section:
-        print(recall_section)
-        print()
 
     print("</memory>")
 

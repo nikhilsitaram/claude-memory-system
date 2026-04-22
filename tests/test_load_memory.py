@@ -1616,5 +1616,130 @@ class TestLoadPendingRecall:
         assert section == ""
 
 
+# =============================================================================
+# main() Output Order Tests
+# =============================================================================
+
+
+class TestMainOutputOrder:
+    """Verify main() outputs sections in the correct order with read instruction first."""
+
+    def _run_main(self, monkeypatch, tmp_path, *, global_ltm="", project_ltm="",
+                  global_stm=None, project_stm=None, recall=""):
+        """Run main() with mocked memory sources, return captured stdout."""
+        import io
+        from load_memory import main
+
+        monkeypatch.delenv("CLAUDE_SKIP_MEMORY", raising=False)
+        monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+
+        monkeypatch.setattr("load_memory.load_global_memory", lambda: (global_ltm, len(global_ltm)))
+        monkeypatch.setattr("load_memory.load_project_memory", lambda name: (project_ltm, len(project_ltm)))
+
+        global_stm = global_stm or []
+        project_stm = project_stm or []
+        monkeypatch.setattr("load_memory.load_daily_summaries", lambda days, scope="global": (global_stm, sum(len(c) for _, c in global_stm)))
+        monkeypatch.setattr("load_memory.load_project_history", lambda proj, days: (project_stm, sum(len(c) for _, c in project_stm)))
+
+        recall_section = f"## Previous Session Recall\n{recall}" if recall else ""
+        monkeypatch.setattr("load_memory.load_pending_recall", lambda **kw: (recall_section, len(recall_section)))
+        monkeypatch.setattr("load_memory.check_synthesis_errors", lambda: None)
+        monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
+        monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
+        monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: {"name": "testproject"})
+        monkeypatch.setattr("load_memory.load_settings", lambda: {
+            **DEFAULT_SETTINGS,
+            "globalShortTerm": {"workingDays": 2, "tokenLimit": 1500},
+            "projectShortTerm": {"workingDays": 5, "tokenLimit": 3750},
+            "totalTokenBudget": 6000,
+        })
+
+        captured = io.StringIO()
+        monkeypatch.setattr("sys.stdout", captured)
+        main()
+        return captured.getvalue()
+
+    def test_read_instruction_present(self, monkeypatch, tmp_path):
+        """Read instruction appears in output so Claude can find the full file when truncated."""
+        output = self._run_main(monkeypatch, tmp_path, global_ltm="## Long-Term Memory\n- item")
+        assert "Full output saved to" in output
+
+    def test_read_instruction_before_ltm(self, monkeypatch, tmp_path):
+        """Read instruction appears before long-term memory content."""
+        output = self._run_main(monkeypatch, tmp_path, global_ltm="## Long-Term Memory\n- ltm item")
+        instr_pos = output.find("Full output saved to")
+        ltm_pos = output.find("ltm item")
+        assert instr_pos < ltm_pos
+
+    def test_recall_before_ltm(self, monkeypatch, tmp_path):
+        """Previous session recall appears before long-term memory."""
+        output = self._run_main(
+            monkeypatch, tmp_path,
+            global_ltm="## Long-Term Memory\n- ltm item",
+            recall="I was working on feature X",
+        )
+        recall_pos = output.find("Previous Session Recall")
+        ltm_pos = output.find("ltm item")
+        assert recall_pos != -1, "Recall section missing"
+        assert recall_pos < ltm_pos
+
+    def test_project_stm_before_global_stm(self, monkeypatch, tmp_path):
+        """Project STM appears before global STM."""
+        output = self._run_main(
+            monkeypatch, tmp_path,
+            global_stm=[("2026-04-20", "- [global/implement] global work")],
+            project_stm=[("2026-04-21", "- [testproject/implement] project work")],
+        )
+        proj_stm_pos = output.find("project work")
+        global_stm_pos = output.find("global work")
+        assert proj_stm_pos != -1, "Project STM missing"
+        assert global_stm_pos != -1, "Global STM missing"
+        assert proj_stm_pos < global_stm_pos
+
+    def test_project_ltm_before_project_stm(self, monkeypatch, tmp_path):
+        """Project LTM appears before project STM."""
+        output = self._run_main(
+            monkeypatch, tmp_path,
+            project_ltm="- (2026-01-01) [pattern] ltm pattern",
+            project_stm=[("2026-04-21", "- [testproject/implement] recent work")],
+        )
+        ltm_pos = output.find("ltm pattern")
+        stm_pos = output.find("recent work")
+        assert ltm_pos < stm_pos
+
+    def test_section_order_full(self, monkeypatch, tmp_path):
+        """Full section order: read instruction → recall → global LTM → project LTM → project STM → global STM."""
+        output = self._run_main(
+            monkeypatch, tmp_path,
+            global_ltm="- global ltm content",
+            project_ltm="- project ltm content",
+            global_stm=[("2026-04-20", "- [global/implement] global stm content")],
+            project_stm=[("2026-04-21", "- [testproject/implement] project stm content")],
+            recall="recall content here",
+        )
+        positions = {
+            "read_instr": output.find("Full output saved to"),
+            "recall": output.find("recall content here"),
+            "global_ltm": output.find("global ltm content"),
+            "project_ltm": output.find("project ltm content"),
+            "project_stm": output.find("project stm content"),
+            "global_stm": output.find("global stm content"),
+        }
+        assert all(v != -1 for v in positions.values()), f"Missing section: {[k for k,v in positions.items() if v == -1]}"
+        order = sorted(positions.items(), key=lambda x: x[1])
+        order_keys = [k for k, _ in order]
+        assert order_keys.index("read_instr") < order_keys.index("recall")
+        assert order_keys.index("recall") < order_keys.index("global_ltm")
+        assert order_keys.index("global_ltm") < order_keys.index("project_ltm")
+        assert order_keys.index("project_ltm") < order_keys.index("project_stm")
+        assert order_keys.index("project_stm") < order_keys.index("global_stm")
+
+    def test_no_recall_still_has_instruction(self, monkeypatch, tmp_path):
+        """Read instruction appears even when there's no recall."""
+        output = self._run_main(monkeypatch, tmp_path, global_ltm="- some ltm")
+        assert "Full output saved to" in output
+        assert "Previous Session Recall" not in output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
