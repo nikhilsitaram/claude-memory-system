@@ -1621,12 +1621,19 @@ class TestLoadPendingRecall:
 # =============================================================================
 
 
+_DEFAULT_PROJECT = object()  # sentinel: use {"name": "testproject"} as the default mock
+
+
 class TestMainOutputOrder:
     """Verify main() outputs sections in the correct order with read instruction first."""
 
-    def _run_main(self, monkeypatch, tmp_path, *, global_ltm="", project_ltm="",
-                  global_stm=None, project_stm=None, recall=""):
-        """Run main() with mocked memory sources, return captured stdout."""
+    def _run_main(self, monkeypatch, *, global_ltm="", project_ltm="",
+                  global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT):
+        """Run main() with mocked memory sources, return captured stdout.
+
+        Pass current_project=None to simulate no project found (find_current_project returns None).
+        Omit current_project to use the default {"name": "testproject"} mock.
+        """
         import io
         from load_memory import main
 
@@ -1646,7 +1653,8 @@ class TestMainOutputOrder:
         monkeypatch.setattr("load_memory.check_synthesis_errors", lambda: None)
         monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
         monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
-        monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: {"name": "testproject"})
+        effective_project = {"name": "testproject"} if current_project is _DEFAULT_PROJECT else current_project
+        monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: effective_project)
         monkeypatch.setattr("load_memory.load_settings", lambda: {
             **DEFAULT_SETTINGS,
             "globalShortTerm": {"workingDays": 2, "tokenLimit": 1500},
@@ -1659,22 +1667,22 @@ class TestMainOutputOrder:
         main()
         return captured.getvalue()
 
-    def test_read_instruction_present(self, monkeypatch, tmp_path):
+    def test_read_instruction_present(self, monkeypatch):
         """Read instruction appears in output so Claude can find the full file when truncated."""
-        output = self._run_main(monkeypatch, tmp_path, global_ltm="## Long-Term Memory\n- item")
+        output = self._run_main(monkeypatch, global_ltm="## Long-Term Memory\n- item")
         assert "Full output saved to" in output
 
-    def test_read_instruction_before_ltm(self, monkeypatch, tmp_path):
+    def test_read_instruction_before_ltm(self, monkeypatch):
         """Read instruction appears before long-term memory content."""
-        output = self._run_main(monkeypatch, tmp_path, global_ltm="## Long-Term Memory\n- ltm item")
+        output = self._run_main(monkeypatch, global_ltm="## Long-Term Memory\n- ltm item")
         instr_pos = output.find("Full output saved to")
         ltm_pos = output.find("ltm item")
         assert instr_pos < ltm_pos
 
-    def test_recall_before_ltm(self, monkeypatch, tmp_path):
+    def test_recall_before_ltm(self, monkeypatch):
         """Previous session recall appears before long-term memory."""
         output = self._run_main(
-            monkeypatch, tmp_path,
+            monkeypatch,
             global_ltm="## Long-Term Memory\n- ltm item",
             recall="I was working on feature X",
         )
@@ -1683,10 +1691,10 @@ class TestMainOutputOrder:
         assert recall_pos != -1, "Recall section missing"
         assert recall_pos < ltm_pos
 
-    def test_project_stm_before_global_stm(self, monkeypatch, tmp_path):
+    def test_project_stm_before_global_stm(self, monkeypatch):
         """Project STM appears before global STM."""
         output = self._run_main(
-            monkeypatch, tmp_path,
+            monkeypatch,
             global_stm=[("2026-04-20", "- [global/implement] global work")],
             project_stm=[("2026-04-21", "- [testproject/implement] project work")],
         )
@@ -1696,10 +1704,10 @@ class TestMainOutputOrder:
         assert global_stm_pos != -1, "Global STM missing"
         assert proj_stm_pos < global_stm_pos
 
-    def test_project_ltm_before_project_stm(self, monkeypatch, tmp_path):
+    def test_project_ltm_before_project_stm(self, monkeypatch):
         """Project LTM appears before project STM."""
         output = self._run_main(
-            monkeypatch, tmp_path,
+            monkeypatch,
             project_ltm="- (2026-01-01) [pattern] ltm pattern",
             project_stm=[("2026-04-21", "- [testproject/implement] recent work")],
         )
@@ -1707,10 +1715,10 @@ class TestMainOutputOrder:
         stm_pos = output.find("recent work")
         assert ltm_pos < stm_pos
 
-    def test_section_order_full(self, monkeypatch, tmp_path):
+    def test_section_order_full(self, monkeypatch):
         """Full section order: read instruction → recall → global LTM → project LTM → project STM → global STM."""
         output = self._run_main(
-            monkeypatch, tmp_path,
+            monkeypatch,
             global_ltm="- global ltm content",
             project_ltm="- project ltm content",
             global_stm=[("2026-04-20", "- [global/implement] global stm content")],
@@ -1734,11 +1742,23 @@ class TestMainOutputOrder:
         assert order_keys.index("project_ltm") < order_keys.index("project_stm")
         assert order_keys.index("project_stm") < order_keys.index("global_stm")
 
-    def test_no_recall_still_has_instruction(self, monkeypatch, tmp_path):
+    def test_no_recall_still_has_instruction(self, monkeypatch):
         """Read instruction appears even when there's no recall."""
-        output = self._run_main(monkeypatch, tmp_path, global_ltm="- some ltm")
+        output = self._run_main(monkeypatch, global_ltm="- some ltm")
         assert "Full output saved to" in output
         assert "Previous Session Recall" not in output
+
+    def test_no_current_project_falls_back(self, monkeypatch):
+        """When find_current_project returns None, main() produces global-only output (no project sections)."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm only",
+            project_ltm="- should not appear",
+            current_project=None,
+        )
+        assert "global ltm only" in output
+        assert "Project Long-Term Memory" not in output
+        assert "Project Short-Term Memory" not in output
 
 
 if __name__ == "__main__":

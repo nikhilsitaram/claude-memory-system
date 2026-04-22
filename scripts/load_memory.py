@@ -892,12 +892,11 @@ def main() -> None:
 
     # Load project short-term memory (project history, filtered to [project/*] tags)
     if current_project:
-        pn = current_project.get("name", "unknown")
         project_history, history_bytes = load_project_history(current_project, project_days)
         total_bytes += history_bytes
 
         if project_history:
-            print(f"## Project Short-Term Memory: {pn}")
+            print(f"## Project Short-Term Memory: {project_name}")
             print()
             for date, content in project_history:
                 print(f"### {date}")
