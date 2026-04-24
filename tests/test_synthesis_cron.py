@@ -106,7 +106,8 @@ class TestRunSynthesis:
 
     def test_skips_when_not_due_and_not_forced(self, capsys):
         """When should_run_deferred_synthesis returns False, exit cleanly."""
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=False):
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=False), \
+             patch("synthesis_cron.rotate_log_if_needed"):
             result = run_synthesis(force=False)
         assert result == 0
         output = capsys.readouterr().out
@@ -115,7 +116,8 @@ class TestRunSynthesis:
     def test_force_bypasses_schedule_check(self):
         """When force=True, should skip schedule check and proceed."""
         with patch("synthesis_cron.should_run_deferred_synthesis") as mock_check, \
-             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp:
+             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp, \
+             patch("synthesis_cron.rotate_log_if_needed"):
             # write_synthesis_prompt prints "No pending" -- simulate via side_effect
             mock_wsp.side_effect = lambda **kw: print("No pending transcripts.")
             result = run_synthesis(force=True)
@@ -126,7 +128,8 @@ class TestRunSynthesis:
     def test_skips_when_no_pending(self, capsys):
         """When write_synthesis_prompt prints 'No pending', should exit cleanly."""
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp:
+             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp, \
+             patch("synthesis_cron.rotate_log_if_needed"):
             mock_wsp.side_effect = lambda **kw: print("No pending transcripts.")
             result = run_synthesis()
         assert result == 0
