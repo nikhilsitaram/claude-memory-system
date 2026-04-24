@@ -458,6 +458,66 @@ class TestRunSynthesis:
         assert "complete" in output.lower()  # Second date succeeded
 
 
+    def test_writes_stats_record_on_success(self, tmp_path):
+        """After a successful run, stats file contains one JSONL record with status=ok and token counts."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        import json as _json
+        token_json = _json.dumps({"usage": {"input_tokens": 1234, "output_tokens": 567}})
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"), \
+             patch("synthesis_cron.rotate_log_if_needed"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            mock_run.return_value = MagicMock(returncode=0, stdout=token_json, stderr="")
+            result = run_synthesis()
+
+        assert result == 0
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        assert stats_file.exists()
+        lines = stats_file.read_text().strip().splitlines()
+        assert len(lines) == 1
+        record = _json.loads(lines[0])
+        assert record["status"] == "ok"
+        assert record["input_tokens"] == 1234
+        assert record["output_tokens"] == 567
+        assert "T" in record["ts"]
+
+    def test_writes_error_stats_record_on_failure(self, tmp_path):
+        """After a failed run, stats file contains one JSONL record with status=error."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        import json as _json
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"), \
+             patch("synthesis_cron.rotate_log_if_needed"), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
+            result = run_synthesis()
+
+        assert result == 1
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        assert stats_file.exists()
+        record = _json.loads(stats_file.read_text().strip())
+        assert record["status"] == "error"
+
 class TestClearEagerTimestamp:
     """Tests for _clear_eager_timestamp."""
 
