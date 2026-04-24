@@ -2,10 +2,12 @@
 """Unit tests for devtools.py — keyword dedup and validate-ltm."""
 
 import argparse
+import json
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
-from devtools import cmd_mark_routed, cmd_validate_ltm
+from devtools import cmd_mark_routed, cmd_stats, cmd_validate_ltm
 from memory_utils import (
     extract_entry_keywords,
     is_routed_match,
@@ -224,6 +226,106 @@ class TestValidateLtm:
             "# Empty\n",
             project_files={"fake-project-long-term-memory.md": project_content},
         ) == 1
+
+
+class TestStatsCommand:
+    """Tests for devtools.py stats subcommand."""
+
+    def _write_stats(self, tmp_path, records: list[dict]) -> None:
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        lines = [json.dumps(r) for r in records]
+        stats_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _make_record(self, hours_ago: float = 1, status: str = "ok",
+                     input_tokens: int = 1000, output_tokens: int = 100,
+                     duration_s: float = 10.0) -> dict:
+        ts = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+        return {
+            "ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "prompt": "synthesis-prompt-test",
+            "model": "sonnet",
+            "duration_s": duration_s,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "status": status,
+        }
+
+    def test_missing_file(self, tmp_path, capsys):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "No synthesis stats" in output
+
+    def test_empty_file(self, tmp_path, capsys):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        stats_file.write_text("")
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "Synthesis stats" in output
+
+    def test_24h_records_aggregated(self, tmp_path, capsys):
+        records = [
+            self._make_record(hours_ago=2, input_tokens=5000, output_tokens=400, duration_s=12.0),
+            self._make_record(hours_ago=6, input_tokens=3000, output_tokens=200, duration_s=8.0),
+        ]
+        self._write_stats(tmp_path, records)
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "8,000" in output
+        assert "600" in output
+
+    def test_7d_records_separate_from_24h(self, tmp_path, capsys):
+        records = [
+            self._make_record(hours_ago=2, input_tokens=1000, output_tokens=100),
+            self._make_record(hours_ago=48, input_tokens=2000, output_tokens=200),
+        ]
+        self._write_stats(tmp_path, records)
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        runs_line = [l for l in output.strip().splitlines() if l.strip().startswith("Runs:")][0]
+        parts = runs_line.split()
+        assert parts[1] == "1"
+        assert parts[2] == "2"
+
+    def test_error_records_counted(self, tmp_path, capsys):
+        records = [
+            self._make_record(hours_ago=1, status="ok"),
+            self._make_record(hours_ago=2, status="error"),
+            self._make_record(hours_ago=3, status="error"),
+        ]
+        self._write_stats(tmp_path, records)
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        errors_line = [l for l in output.strip().splitlines() if l.strip().startswith("Errors:")][0]
+        assert "2" in errors_line
+
+    def test_malformed_lines_skipped(self, tmp_path, capsys):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        good_record = self._make_record(hours_ago=1, input_tokens=500, output_tokens=50)
+        stats_file.write_text(
+            "not valid json\n"
+            + json.dumps(good_record) + "\n"
+            + '{"ts": "invalid-date"}\n',
+            encoding="utf-8",
+        )
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "500" in output
 
 
 if __name__ == "__main__":
