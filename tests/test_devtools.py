@@ -310,7 +310,26 @@ class TestStatsCommand:
         assert result == 0
         output = capsys.readouterr().out
         errors_line = [l for l in output.strip().splitlines() if l.strip().startswith("Errors:")][0]
-        assert "2" in errors_line
+        parts = errors_line.split()
+        assert parts[1] == "2"
+        assert parts[2] == "2"
+
+    def test_records_older_than_7d_excluded(self, tmp_path, capsys):
+        records = [
+            self._make_record(hours_ago=2, input_tokens=1000, output_tokens=100),
+            self._make_record(hours_ago=200, input_tokens=9999, output_tokens=999),
+        ]
+        self._write_stats(tmp_path, records)
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with mock.patch("memory_utils.get_synthesis_stats_file", return_value=stats_file):
+            result = cmd_stats(argparse.Namespace())
+        assert result == 0
+        output = capsys.readouterr().out
+        runs_line = [l for l in output.strip().splitlines() if l.strip().startswith("Runs:")][0]
+        parts = runs_line.split()
+        assert parts[1] == "1"
+        assert parts[2] == "1"
+        assert "9,999" not in output
 
     def test_malformed_lines_skipped(self, tmp_path, capsys):
         stats_file = tmp_path / ".synthesis-stats.jsonl"
