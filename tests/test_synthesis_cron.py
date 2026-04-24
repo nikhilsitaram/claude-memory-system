@@ -515,7 +515,7 @@ class TestRunSynthesis:
         assert result == 1
         stats_file = tmp_path / ".synthesis-stats.jsonl"
         assert stats_file.exists()
-        record = _json.loads(stats_file.read_text().strip())
+        record = _json.loads(stats_file.read_text().strip().splitlines()[0])
         assert record["status"] == "error"
 
 class TestClearEagerTimestamp:
