@@ -14,10 +14,11 @@ Requirements: Python 3.9+
 
 import argparse
 import filecmp
+import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_DIR = Path(__file__).parent.parent.resolve()
@@ -427,6 +428,68 @@ def cmd_validate_ltm(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Show synthesis run statistics (24h and 7d summaries)."""
+    sys.path.insert(0, str(REPO_DIR / "scripts"))
+    from memory_utils import get_synthesis_stats_file
+
+    stats_file = get_synthesis_stats_file()
+    if not stats_file.exists():
+        print("No synthesis stats recorded yet.")
+        return 0
+
+    now = datetime.now(timezone.utc)
+    records_24h: list[dict] = []
+    records_7d: list[dict] = []
+
+    with stats_file.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                ts = datetime.fromisoformat(record["ts"].replace("Z", "+00:00"))
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+            age_hours = (now - ts).total_seconds() / 3600
+            if age_hours <= 24:
+                records_24h.append(record)
+            if age_hours <= 168:  # 7 days
+                records_7d.append(record)
+
+    def _summarize(records: list[dict]) -> dict:
+        if not records:
+            return {
+                "runs": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "avg_duration": 0.0,
+                "errors": 0,
+            }
+        total_duration = sum(r.get("duration_s", 0) for r in records)
+        return {
+            "runs": len(records),
+            "input_tokens": sum(r.get("input_tokens", 0) for r in records),
+            "output_tokens": sum(r.get("output_tokens", 0) for r in records),
+            "avg_duration": total_duration / len(records),
+            "errors": sum(1 for r in records if r.get("status") == "error"),
+        }
+
+    s24 = _summarize(records_24h)
+    s7d = _summarize(records_7d)
+
+    print("Synthesis stats")
+    print(f"{'':20s} {'Last 24h':>10s}    {'Last 7d':>10s}")
+    print(f"{'Runs:':20s} {s24['runs']:>10,}    {s7d['runs']:>10,}")
+    print(f"{'Input tokens:':20s} {s24['input_tokens']:>10,}    {s7d['input_tokens']:>10,}")
+    print(f"{'Output tokens:':20s} {s24['output_tokens']:>10,}    {s7d['output_tokens']:>10,}")
+    print(f"{'Avg duration:':20s} {s24['avg_duration']:>9.1f}s    {s7d['avg_duration']:>9.1f}s")
+    print(f"{'Errors:':20s} {s24['errors']:>10,}    {s7d['errors']:>10,}")
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Developer tools for Claude Code Memory System")
     sub = parser.add_subparsers(dest="command")
@@ -450,6 +513,9 @@ def main() -> int:
 
     vl = sub.add_parser("validate-ltm", help="Validate LTM files for duplicates and issues")
     vl.set_defaults(func=cmd_validate_ltm)
+
+    st = sub.add_parser("stats", help="Show synthesis run statistics")
+    st.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()
     if not args.command:

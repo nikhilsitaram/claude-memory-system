@@ -1,12 +1,19 @@
 """Tests for synthesis_cron.py -- systemd-triggered deferred synthesis."""
+import json
 import subprocess as real_subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from synthesis_cron import (
+    LOG_ROTATION_BYTES,
+    _append_stats,
     _clear_eager_timestamp,
+    _log,
     _log_error,
+    _parse_token_usage,
     build_claude_command,
+    rotate_log_if_needed,
     run_synthesis,
     should_run_deferred_synthesis,
 )
@@ -88,13 +95,20 @@ class TestBuildClaudeCommand:
         assert isinstance(cmd, list)
         assert cmd[0] == "claude"
 
+    def test_includes_output_format_json(self):
+        cmd = build_claude_command(model="sonnet")
+        assert "--output-format" in cmd
+        fmt_idx = cmd.index("--output-format") + 1
+        assert cmd[fmt_idx] == "json"
+
 
 class TestRunSynthesis:
     """Tests for the full synthesis pipeline."""
 
     def test_skips_when_not_due_and_not_forced(self, capsys):
         """When should_run_deferred_synthesis returns False, exit cleanly."""
-        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=False):
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=False), \
+             patch("synthesis_cron.rotate_log_if_needed"):
             result = run_synthesis(force=False)
         assert result == 0
         output = capsys.readouterr().out
@@ -103,7 +117,8 @@ class TestRunSynthesis:
     def test_force_bypasses_schedule_check(self):
         """When force=True, should skip schedule check and proceed."""
         with patch("synthesis_cron.should_run_deferred_synthesis") as mock_check, \
-             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp:
+             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp, \
+             patch("synthesis_cron.rotate_log_if_needed"):
             # write_synthesis_prompt prints "No pending" -- simulate via side_effect
             mock_wsp.side_effect = lambda **kw: print("No pending transcripts.")
             result = run_synthesis(force=True)
@@ -114,7 +129,8 @@ class TestRunSynthesis:
     def test_skips_when_no_pending(self, capsys):
         """When write_synthesis_prompt prints 'No pending', should exit cleanly."""
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp:
+             patch("synthesis_cron.write_synthesis_prompt") as mock_wsp, \
+             patch("synthesis_cron.rotate_log_if_needed"):
             mock_wsp.side_effect = lambda **kw: print("No pending transcripts.")
             result = run_synthesis()
         assert result == 0
@@ -133,7 +149,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             result = run_synthesis()
@@ -157,7 +174,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
             result = run_synthesis()
@@ -177,7 +195,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
             result = run_synthesis()
@@ -204,21 +223,23 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run", side_effect=track_subprocess), \
-             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth):
+             patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             result = run_synthesis()
 
         assert result == 0
         # Timestamp should have been written BEFORE subprocess.run was called
         assert call_order == [("subprocess", True)]
 
-    def test_returns_1_when_no_prompt_file_generated(self, capsys):
+    def test_returns_1_when_no_prompt_file_generated(self, tmp_path, capsys):
         """When write_synthesis_prompt outputs unexpected content, should return 1."""
         def fake_write_prompt(**kwargs):
             # Prints something but no model= or prompt_file= lines
             print("Something unexpected happened")
 
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt):
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
             result = run_synthesis()
 
         assert result == 1
@@ -235,7 +256,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             result = run_synthesis()
@@ -257,7 +279,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             run_synthesis()
@@ -279,7 +302,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
+             patch("synthesis_cron._log_error"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_run.side_effect = real_subprocess.TimeoutExpired(cmd="claude", timeout=300)
             result = run_synthesis()
 
@@ -301,7 +325,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
+             patch("synthesis_cron._log_error"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
             result = run_synthesis()
 
@@ -322,7 +347,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file", return_value=last_synth), \
-             patch("synthesis_cron._log_error"):
+             patch("synthesis_cron._log_error"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
             result = run_synthesis()
 
@@ -343,7 +369,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
             run_synthesis()
 
@@ -366,7 +393,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
              patch("synthesis_cron.get_last_synthesis_file", return_value=tmp_path / ".last-synthesis"), \
-             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log):
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", error_log), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_run.side_effect = FileNotFoundError("No such file or directory: 'claude'")
             run_synthesis()
 
@@ -390,7 +418,8 @@ class TestRunSynthesis:
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run") as mock_run, \
-             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf:
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             result = run_synthesis()
@@ -423,7 +452,8 @@ class TestRunSynthesis:
              patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
              patch("synthesis_cron.subprocess.run", side_effect=alternating_results), \
              patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
-             patch("synthesis_cron._log_error"):
+             patch("synthesis_cron._log_error"), \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"):
             mock_lsf.return_value = tmp_path / ".last-synthesis"
             result = run_synthesis()
 
@@ -432,6 +462,66 @@ class TestRunSynthesis:
         output = capsys.readouterr().out
         assert "complete" in output.lower()  # Second date succeeded
 
+
+    def test_writes_stats_record_on_success(self, tmp_path):
+        """After a successful run, stats file contains one JSONL record with status=ok and token counts."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        import json as _json
+        token_json = _json.dumps({"usage": {"input_tokens": 1234, "output_tokens": 567}})
+
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"), \
+             patch("synthesis_cron.rotate_log_if_needed"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            mock_run.return_value = MagicMock(returncode=0, stdout=token_json, stderr="")
+            result = run_synthesis()
+
+        assert result == 0
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        assert stats_file.exists()
+        lines = stats_file.read_text().strip().splitlines()
+        assert len(lines) == 1
+        record = _json.loads(lines[0])
+        assert record["status"] == "ok"
+        assert record["input_tokens"] == 1234
+        assert record["output_tokens"] == 567
+        assert "T" in record["ts"]
+
+    def test_writes_error_stats_record_on_failure(self, tmp_path):
+        """After a failed run, stats file contains one JSONL record with status=error."""
+        prompt_file = tmp_path / "synthesis-prompt-12345.txt"
+        prompt_file.write_text("test prompt content")
+
+        def fake_write_prompt(**kwargs):
+            print("model=sonnet")
+            print(f"prompt_file={prompt_file}")
+
+        import json as _json
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.subprocess.run") as mock_run, \
+             patch("synthesis_cron.get_last_synthesis_file") as mock_lsf, \
+             patch("synthesis_cron.get_synthesis_stats_file", return_value=tmp_path / ".synthesis-stats.jsonl"), \
+             patch("synthesis_cron.rotate_log_if_needed"), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
+            mock_lsf.return_value = tmp_path / ".last-synthesis"
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
+            result = run_synthesis()
+
+        assert result == 1
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        assert stats_file.exists()
+        record = _json.loads(stats_file.read_text().strip().splitlines()[0])
+        assert record["status"] == "error"
 
 class TestClearEagerTimestamp:
     """Tests for _clear_eager_timestamp."""
@@ -476,3 +566,174 @@ class TestLogError:
             _log_error("test")
         content = error_log.read_text()
         assert content.startswith("[2026-")
+
+
+class TestLog:
+    """Tests for _log() timestamped output."""
+
+    def test_prints_with_timestamp_prefix(self, capsys):
+        _log("test message")
+        output = capsys.readouterr().out
+        assert output.startswith("[")
+        assert "T" in output
+        assert "Z]" in output
+        assert "test message" in output
+
+    def test_timestamp_is_utc_iso_format(self, capsys):
+        _log("check format")
+        output = capsys.readouterr().out.strip()
+        ts_str = output.split("]")[0].lstrip("[")
+        dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+        assert dt.year >= 2026
+
+    def test_not_due_message_has_timestamp(self, capsys):
+        with patch("synthesis_cron.should_run_deferred_synthesis", return_value=False):
+            run_synthesis(force=False)
+        output = capsys.readouterr().out
+        assert output.startswith("[")
+        assert "not due" in output.lower()
+
+    def test_writes_to_stderr_when_specified(self, capsys):
+        _log("error message", file=sys.stderr)
+        captured = capsys.readouterr()
+        assert "error message" in captured.err
+        assert "error message" not in captured.out
+
+
+class TestParseTokenUsage:
+    """Tests for _parse_token_usage() JSON parser."""
+
+    def test_valid_json_returns_tokens(self):
+        stdout = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "some text",
+            "session_id": "abc",
+            "usage": {
+                "input_tokens": 7234,
+                "output_tokens": 512,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        })
+        assert _parse_token_usage(stdout) == (7234, 512, False)
+
+    def test_empty_string_returns_zeros(self):
+        assert _parse_token_usage("") == (0, 0, True)
+
+    def test_invalid_json_returns_zeros(self):
+        assert _parse_token_usage("not json at all") == (0, 0, True)
+
+    def test_missing_usage_key_returns_zeros(self):
+        assert _parse_token_usage(json.dumps({"type": "result"})) == (0, 0, True)
+
+    def test_missing_token_fields_returns_zeros(self):
+        assert _parse_token_usage(json.dumps({"usage": {}})) == (0, 0, True)
+
+    def test_non_integer_tokens_returns_zeros(self):
+        assert _parse_token_usage(json.dumps({
+            "usage": {"input_tokens": "many", "output_tokens": "few"}
+        })) == (0, 0, True)
+
+    def test_plain_text_stdout_returns_zeros(self):
+        assert _parse_token_usage("Synthesis complete. Files updated.") == (0, 0, True)
+
+
+class TestAppendStats:
+    """Tests for _append_stats() JSONL writer."""
+
+    def test_creates_file_and_writes_record(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-2026-04-24-12345", "sonnet", 14.2, (7234, 512), "ok")
+        assert stats_file.exists()
+        record = json.loads(stats_file.read_text().strip())
+        assert record["prompt"] == "prompt-2026-04-24-12345"
+        assert record["model"] == "sonnet"
+        assert record["duration_s"] == 14.2
+        assert record["input_tokens"] == 7234
+        assert record["output_tokens"] == 512
+        assert record["status"] == "ok"
+        assert "error" not in record
+        assert "token_parse_failed" not in record
+        assert "T" in record["ts"]
+
+    def test_appends_to_existing_file(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        stats_file.write_text(json.dumps({"ts": "old", "status": "ok"}) + chr(10))
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-new", "sonnet", 5.0, (100, 50), "ok")
+        lines = stats_file.read_text().strip().splitlines()
+        assert len(lines) == 2
+
+    def test_error_record_includes_error_field(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-fail", "sonnet", 0.0, (0, 0), "error", error="timeout")
+        record = json.loads(stats_file.read_text().strip())
+        assert record["status"] == "error"
+        assert record["error"] == "timeout"
+
+    def test_duration_rounded_to_one_decimal(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-x", "sonnet", 14.267, (100, 50), "ok")
+        record = json.loads(stats_file.read_text().strip())
+        assert record["duration_s"] == 14.3
+
+    def test_creates_parent_directories(self, tmp_path):
+        stats_file = tmp_path / "nested" / "deep" / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-x", "sonnet", 1.0, (10, 5), "ok")
+        assert stats_file.exists()
+
+    def test_token_parse_failed_flag_written(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-x", "sonnet", 14.2, (0, 0), "ok", token_parse_failed=True)
+        record = json.loads(stats_file.read_text().strip())
+        assert record["token_parse_failed"] is True
+
+
+class TestRotateLog:
+    """Tests for rotate_log_if_needed() log rotation."""
+
+    def test_rotates_when_over_threshold(self, tmp_path):
+        log_file = tmp_path / "synthesis.log"
+        log_file.write_bytes(b"x" * (LOG_ROTATION_BYTES + 1))
+        with patch("synthesis_cron.get_synthesis_log_file", return_value=log_file):
+            rotate_log_if_needed()
+        assert not log_file.exists()
+        rotated = tmp_path / "synthesis.log.1"
+        assert rotated.exists()
+        assert rotated.stat().st_size == LOG_ROTATION_BYTES + 1
+
+    def test_skips_when_under_threshold(self, tmp_path):
+        log_file = tmp_path / "synthesis.log"
+        log_file.write_bytes(b"x" * LOG_ROTATION_BYTES)
+        with patch("synthesis_cron.get_synthesis_log_file", return_value=log_file):
+            rotate_log_if_needed()
+        assert log_file.exists()
+        assert not (tmp_path / "synthesis.log.1").exists()
+
+    def test_skips_when_file_missing(self, tmp_path):
+        log_file = tmp_path / "synthesis.log"
+        with patch("synthesis_cron.get_synthesis_log_file", return_value=log_file):
+            rotate_log_if_needed()
+
+    def test_skips_when_path_is_none(self):
+        with patch("synthesis_cron.get_synthesis_log_file", return_value=None):
+            rotate_log_if_needed()
+
+    def test_overwrites_existing_backup(self, tmp_path):
+        log_file = tmp_path / "synthesis.log"
+        log_file.write_bytes(b"new content " * 50000)
+        old_backup = tmp_path / "synthesis.log.1"
+        old_backup.write_text("old backup content")
+        with patch("synthesis_cron.get_synthesis_log_file", return_value=log_file):
+            rotate_log_if_needed()
+        assert not log_file.exists()
+        rotated = tmp_path / "synthesis.log.1"
+        assert rotated.exists()
+        assert b"new content" in rotated.read_bytes()

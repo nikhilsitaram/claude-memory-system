@@ -25,7 +25,9 @@ from memory_utils import (
     get_memory_dir,
     get_pending_recall_dir,
     get_sessions_original_path,
+    get_synthesis_log_file,
     get_synthesis_state_file,
+    get_synthesis_stats_file,
     get_working_days,
     is_routed_match,
     load_json_file,
@@ -1470,6 +1472,54 @@ class TestPreviousSessionRecallSetting:
         with patch("memory_utils.get_settings_file", return_value=settings_file):
             settings = load_settings()
         assert settings["previousSessionRecall"]["enabled"] is False
+
+
+# =============================================================================
+# get_synthesis_stats_file Tests
+# =============================================================================
+
+
+class TestGetSynthesisStatsFile:
+    """Tests for get_synthesis_stats_file()."""
+
+    def test_returns_path_under_memory_dir(self):
+        with patch("memory_utils.get_memory_dir", return_value=Path("/fake/memory")):
+            result = get_synthesis_stats_file()
+        assert result == Path("/fake/memory/.synthesis-stats.jsonl")
+
+    def test_returns_path_type(self):
+        result = get_synthesis_stats_file()
+        assert isinstance(result, Path)
+
+    def test_filename_is_dotfile(self):
+        result = get_synthesis_stats_file()
+        assert result.name.startswith(".")
+
+
+# =============================================================================
+# get_synthesis_log_file Tests
+# =============================================================================
+
+
+class TestGetSynthesisLogFile:
+    """Tests for get_synthesis_log_file()."""
+
+    def test_returns_path_on_darwin(self):
+        with patch("memory_utils.sys.platform", "darwin"):
+            result = get_synthesis_log_file()
+        assert result is not None
+        assert result.name == "synthesis.log"
+        assert "Library/Logs/claude-memory" in str(result)
+
+    def test_returns_none_on_linux(self):
+        with patch("memory_utils.sys.platform", "linux"):
+            result = get_synthesis_log_file()
+        assert result is None
+
+    def test_returns_none_on_windows(self):
+        with patch("memory_utils.sys.platform", "win32"):
+            result = get_synthesis_log_file()
+        assert result is None
 
 
 if __name__ == "__main__":

@@ -18,9 +18,11 @@ Usage:
 import argparse
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,9 +33,106 @@ from load_memory import (
     should_synthesize,
     write_synthesis_prompt,
 )
-from memory_utils import get_synthesis_error_log, load_settings
+from memory_utils import (
+    get_synthesis_error_log,
+    get_synthesis_log_file,
+    get_synthesis_stats_file,
+    load_settings,
+)
 
 SYNTHESIS_ERROR_LOG = get_synthesis_error_log()
+
+LOG_ROTATION_BYTES = 500 * 1024  # 500 KB
+
+
+def rotate_log_if_needed() -> None:
+    """Rotate synthesis.log to synthesis.log.1 if it exceeds the size threshold.
+
+    macOS only -- the log path comes from launchd StandardOutPath. On other
+    platforms get_synthesis_log_file() returns None and this is a no-op.
+    Single-backup rotation: synthesis.log -> synthesis.log.1 (overwrites).
+
+    Note: launchd binds stdout to the log file's inode at agent launch. After
+    rotation, the current process still writes to the renamed synthesis.log.1.
+    The new synthesis.log is created on the next launchd invocation.
+    """
+    log_path = get_synthesis_log_file()
+    if log_path is None or not log_path.exists():
+        return
+    try:
+        if log_path.stat().st_size > LOG_ROTATION_BYTES:
+            rotated = log_path.with_name(log_path.name + ".1")
+            log_path.rename(rotated)
+    except OSError:
+        pass
+
+
+def _log(message: str, file=None) -> None:
+    """Print a timestamped log message to stdout (default) or a given file.
+
+    launchd captures stdout to synthesis.log via StandardOutPath.
+    Format: [YYYY-MM-DDTHH:MM:SSZ] message
+    """
+    if file is None:
+        file = sys.stdout
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{timestamp}] {message}", file=file)
+
+
+def _parse_token_usage(stdout: str) -> tuple[int, int, bool]:
+    """Parse token usage from claude --output-format json response.
+
+    Expected shape: {"usage": {"input_tokens": N, "output_tokens": M}, ...}
+
+    Returns:
+        (input_tokens, output_tokens, parse_failed); on any parse failure
+        returns (0, 0, True).
+    """
+    try:
+        data = json.loads(stdout)
+        usage = data["usage"]
+        return (int(usage["input_tokens"]), int(usage["output_tokens"]), False)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return (0, 0, True)
+
+
+def _append_stats(
+    prompt_label: str,
+    model: str,
+    duration_s: float,
+    tokens: tuple[int, int],
+    status: str,
+    error: str | None = None,
+    token_parse_failed: bool = False,
+) -> None:
+    """Append one JSON record to the synthesis stats file.
+
+    Args:
+        prompt_label: Date label identifying this synthesis run.
+        model: Model name (e.g. "sonnet").
+        duration_s: Wall-clock duration in seconds.
+        tokens: (input_tokens, output_tokens) tuple.
+        status: "ok" or "error".
+        error: Error description (only when status="error").
+        token_parse_failed: True if --output-format json parsing failed.
+    """
+    stats_file = get_synthesis_stats_file()
+    stats_file.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "prompt": prompt_label,
+        "model": model,
+        "duration_s": round(duration_s, 1),
+        "input_tokens": tokens[0],
+        "output_tokens": tokens[1],
+        "status": status,
+    }
+    if error is not None:
+        record["error"] = error
+    if token_parse_failed:
+        record["token_parse_failed"] = True
+    with open(stats_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 def should_run_deferred_synthesis() -> bool:
@@ -63,6 +162,7 @@ def build_claude_command(model: str) -> list[str]:
         "-p",
         "--no-session-persistence",
         "--model", model,
+        "--output-format", "json",
         "--permission-mode", "bypassPermissions",
         "--allowedTools", "Write,Bash,Read",
     ]
@@ -91,19 +191,13 @@ def _clear_eager_timestamp() -> None:
 
 
 def run_synthesis(force: bool = False) -> int:
-    """Run the full deferred synthesis pipeline.
+    """Run the full deferred synthesis pipeline."""
+    rotate_log_if_needed()
 
-    Args:
-        force: If True, skip the schedule check.
-
-    Returns:
-        0 on success or nothing to do, 1 on failure.
-    """
     if not force and not should_run_deferred_synthesis():
-        print("Synthesis not due (recently ran)")
+        _log("Synthesis not due (recently ran)")
         return 0
 
-    # Capture write_synthesis_prompt output to parse model + prompt_file
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         write_synthesis_prompt()
@@ -111,10 +205,9 @@ def run_synthesis(force: bool = False) -> int:
     output = captured.getvalue()
 
     if "No pending" in output:
-        print("No pending transcripts")
+        _log("No pending transcripts")
         return 0
 
-    # Parse model and prompt files (one per date) from output
     model = "sonnet"
     prompt_files = []
     for line in output.strip().splitlines():
@@ -126,24 +219,25 @@ def run_synthesis(force: bool = False) -> int:
                 prompt_files.append(path)
 
     if not prompt_files:
-        print("Error: No prompt files generated", file=sys.stderr)
+        msg = "No prompt files generated"
+        _log(f"Error: {msg}", file=sys.stderr)
+        _log_error(msg)
         return 1
 
-    # Write eager timestamp to prevent concurrent runs
     get_last_synthesis_file().write_text(
         datetime.now(timezone.utc).isoformat(),
         encoding="utf-8",
     )
 
-    # Run claude -p for each date's prompt file
     cmd_base = build_claude_command(model)
     env = os.environ.copy()
-    env["CLAUDECODE"] = ""  # Unset nesting guard
+    env["CLAUDECODE"] = ""
 
     failed = False
     for prompt_file in prompt_files:
-        date_label = Path(prompt_file).stem  # e.g. synthesis-prompt-2026-02-26-1234
-        print(f"Running synthesis for {date_label} with model={model}")
+        date_label = Path(prompt_file).stem
+        _log(f"Running synthesis for {date_label} with model={model}")
+        t0 = time.monotonic()
         try:
             with open(prompt_file, encoding="utf-8") as f:
                 result = subprocess.run(
@@ -152,32 +246,49 @@ def run_synthesis(force: bool = False) -> int:
                     env=env,
                     capture_output=True,
                     text=True,
-                    timeout=300,  # 5 minute timeout
+                    timeout=300,
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            duration = time.monotonic() - t0
             msg = f"Synthesis failed for {date_label}: {exc}"
-            print(f"Error: {msg}", file=sys.stderr)
+            _log(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
+            try:
+                _append_stats(date_label, model, duration, (0, 0), "error", error=str(exc))
+            except OSError:
+                pass
             failed = True
             continue
 
+        duration = time.monotonic() - t0
         if result.returncode != 0:
             msg = f"claude -p exited {result.returncode} for {date_label}"
             if result.stderr:
                 msg += f": {result.stderr[:200]}"
-            print(f"Error: {msg}", file=sys.stderr)
+            _log(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
+            try:
+                _append_stats(date_label, model, duration, (0, 0), "error", error=msg)
+            except OSError:
+                pass
             failed = True
             continue
 
-        print(f"Synthesis complete for {date_label}")
+        in_tok, out_tok, parse_failed = _parse_token_usage(result.stdout)
+        try:
+            _append_stats(date_label, model, duration, (in_tok, out_tok), "ok",
+                          token_parse_failed=parse_failed)
+        except OSError:
+            pass
+        if parse_failed:
+            _log(f"Synthesis complete for {date_label} ({duration:.1f}s, in=? out=?)")
+        else:
+            _log(f"Synthesis complete for {date_label} ({duration:.1f}s, in={in_tok}, out={out_tok})")
 
     if failed:
-        # Don't clear timestamp — some dates may have succeeded.
-        # Next run will re-extract only dates that still have pending sessions.
         return 1
 
-    print("All synthesis runs complete")
+    _log("All synthesis runs complete")
     return 0
 
 

@@ -45,6 +45,8 @@ __all__ = [
     "get_global_memory_file",
     "get_pending_recall_dir",
     "get_synthesis_error_log",
+    "get_synthesis_stats_file",
+    "get_synthesis_log_file",
     "collect_ltm_files",
     "resolve_worktree_to_main_repo",
     "resolve_git_subdir_to_root",
@@ -212,6 +214,22 @@ def get_pending_recall_dir() -> Path:
 def get_synthesis_error_log() -> Path:
     """Get the synthesis error log file path."""
     return get_memory_dir() / ".synthesis-errors.log"
+
+
+def get_synthesis_stats_file() -> Path:
+    """Get the synthesis stats JSONL file path."""
+    return get_memory_dir() / ".synthesis-stats.jsonl"
+
+
+def get_synthesis_log_file() -> Path | None:
+    """Get the synthesis log file path (macOS only).
+
+    Returns the launchd StandardOutPath on macOS, None on other platforms.
+    The log file is written by launchd (stdout redirect), not by Python.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "claude-memory" / "synthesis.log"
+    return None
 
 
 # Token limit formulas
