@@ -1,6 +1,7 @@
 """Tests for synthesis_cron.py -- systemd-triggered deferred synthesis."""
 import json
 import subprocess as real_subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -230,14 +231,15 @@ class TestRunSynthesis:
         # Timestamp should have been written BEFORE subprocess.run was called
         assert call_order == [("subprocess", True)]
 
-    def test_returns_1_when_no_prompt_file_generated(self, capsys):
+    def test_returns_1_when_no_prompt_file_generated(self, tmp_path, capsys):
         """When write_synthesis_prompt outputs unexpected content, should return 1."""
         def fake_write_prompt(**kwargs):
             # Prints something but no model= or prompt_file= lines
             print("Something unexpected happened")
 
         with patch("synthesis_cron.should_run_deferred_synthesis", return_value=True), \
-             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt):
+             patch("synthesis_cron.write_synthesis_prompt", side_effect=fake_write_prompt), \
+             patch("synthesis_cron.SYNTHESIS_ERROR_LOG", tmp_path / ".synthesis-errors.log"):
             result = run_synthesis()
 
         assert result == 1
@@ -591,6 +593,12 @@ class TestLog:
         assert output.startswith("[")
         assert "not due" in output.lower()
 
+    def test_writes_to_stderr_when_specified(self, capsys):
+        _log("error message", file=sys.stderr)
+        captured = capsys.readouterr()
+        assert "error message" in captured.err
+        assert "error message" not in captured.out
+
 
 class TestParseTokenUsage:
     """Tests for _parse_token_usage() JSON parser."""
@@ -609,27 +617,27 @@ class TestParseTokenUsage:
                 "cache_read_input_tokens": 0,
             },
         })
-        assert _parse_token_usage(stdout) == (7234, 512)
+        assert _parse_token_usage(stdout) == (7234, 512, False)
 
     def test_empty_string_returns_zeros(self):
-        assert _parse_token_usage("") == (0, 0)
+        assert _parse_token_usage("") == (0, 0, True)
 
     def test_invalid_json_returns_zeros(self):
-        assert _parse_token_usage("not json at all") == (0, 0)
+        assert _parse_token_usage("not json at all") == (0, 0, True)
 
     def test_missing_usage_key_returns_zeros(self):
-        assert _parse_token_usage(json.dumps({"type": "result"})) == (0, 0)
+        assert _parse_token_usage(json.dumps({"type": "result"})) == (0, 0, True)
 
     def test_missing_token_fields_returns_zeros(self):
-        assert _parse_token_usage(json.dumps({"usage": {}})) == (0, 0)
+        assert _parse_token_usage(json.dumps({"usage": {}})) == (0, 0, True)
 
     def test_non_integer_tokens_returns_zeros(self):
         assert _parse_token_usage(json.dumps({
             "usage": {"input_tokens": "many", "output_tokens": "few"}
-        })) == (0, 0)
+        })) == (0, 0, True)
 
     def test_plain_text_stdout_returns_zeros(self):
-        assert _parse_token_usage("Synthesis complete. Files updated.") == (0, 0)
+        assert _parse_token_usage("Synthesis complete. Files updated.") == (0, 0, True)
 
 
 class TestAppendStats:
@@ -648,6 +656,7 @@ class TestAppendStats:
         assert record["output_tokens"] == 512
         assert record["status"] == "ok"
         assert "error" not in record
+        assert "token_parse_failed" not in record
         assert "T" in record["ts"]
 
     def test_appends_to_existing_file(self, tmp_path):
@@ -678,6 +687,13 @@ class TestAppendStats:
         with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
             _append_stats("prompt-x", "sonnet", 1.0, (10, 5), "ok")
         assert stats_file.exists()
+
+    def test_token_parse_failed_flag_written(self, tmp_path):
+        stats_file = tmp_path / ".synthesis-stats.jsonl"
+        with patch("synthesis_cron.get_synthesis_stats_file", return_value=stats_file):
+            _append_stats("prompt-x", "sonnet", 14.2, (0, 0), "ok", token_parse_failed=True)
+        record = json.loads(stats_file.read_text().strip())
+        assert record["token_parse_failed"] is True
 
 
 class TestRotateLog:

@@ -51,6 +51,10 @@ def rotate_log_if_needed() -> None:
     macOS only -- the log path comes from launchd StandardOutPath. On other
     platforms get_synthesis_log_file() returns None and this is a no-op.
     Single-backup rotation: synthesis.log -> synthesis.log.1 (overwrites).
+
+    Note: launchd binds stdout to the log file's inode at agent launch. After
+    rotation, the current process still writes to the renamed synthesis.log.1.
+    The new synthesis.log is created on the next launchd invocation.
     """
     log_path = get_synthesis_log_file()
     if log_path is None or not log_path.exists():
@@ -63,30 +67,33 @@ def rotate_log_if_needed() -> None:
         pass
 
 
-def _log(message: str) -> None:
-    """Print a timestamped log message to stdout.
+def _log(message: str, file=None) -> None:
+    """Print a timestamped log message to stdout (default) or a given file.
 
     launchd captures stdout to synthesis.log via StandardOutPath.
     Format: [YYYY-MM-DDTHH:MM:SSZ] message
     """
+    if file is None:
+        file = sys.stdout
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"[{timestamp}] {message}")
+    print(f"[{timestamp}] {message}", file=file)
 
 
-def _parse_token_usage(stdout: str) -> tuple[int, int]:
+def _parse_token_usage(stdout: str) -> tuple[int, int, bool]:
     """Parse token usage from claude --output-format json response.
 
     Expected shape: {"usage": {"input_tokens": N, "output_tokens": M}, ...}
 
     Returns:
-        (input_tokens, output_tokens); (0, 0) on any parse failure.
+        (input_tokens, output_tokens, parse_failed); on any parse failure
+        returns (0, 0, True).
     """
     try:
         data = json.loads(stdout)
         usage = data["usage"]
-        return (int(usage["input_tokens"]), int(usage["output_tokens"]))
+        return (int(usage["input_tokens"]), int(usage["output_tokens"]), False)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return (0, 0)
+        return (0, 0, True)
 
 
 def _append_stats(
@@ -96,6 +103,7 @@ def _append_stats(
     tokens: tuple[int, int],
     status: str,
     error: str | None = None,
+    token_parse_failed: bool = False,
 ) -> None:
     """Append one JSON record to the synthesis stats file.
 
@@ -106,6 +114,7 @@ def _append_stats(
         tokens: (input_tokens, output_tokens) tuple.
         status: "ok" or "error".
         error: Error description (only when status="error").
+        token_parse_failed: True if --output-format json parsing failed.
     """
     stats_file = get_synthesis_stats_file()
     stats_file.parent.mkdir(parents=True, exist_ok=True)
@@ -118,8 +127,10 @@ def _append_stats(
         "output_tokens": tokens[1],
         "status": status,
     }
-    if error:
+    if error is not None:
         record["error"] = error
+    if token_parse_failed:
+        record["token_parse_failed"] = True
     with open(stats_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
@@ -208,7 +219,9 @@ def run_synthesis(force: bool = False) -> int:
                 prompt_files.append(path)
 
     if not prompt_files:
-        print("Error: No prompt files generated", file=sys.stderr)
+        msg = "No prompt files generated"
+        _log(f"Error: {msg}", file=sys.stderr)
+        _log_error(msg)
         return 1
 
     get_last_synthesis_file().write_text(
@@ -238,9 +251,12 @@ def run_synthesis(force: bool = False) -> int:
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             duration = time.monotonic() - t0
             msg = f"Synthesis failed for {date_label}: {exc}"
-            print(f"Error: {msg}", file=sys.stderr)
+            _log(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
-            _append_stats(date_label, model, duration, (0, 0), "error", error=str(exc))
+            try:
+                _append_stats(date_label, model, duration, (0, 0), "error", error=str(exc))
+            except OSError:
+                pass
             failed = True
             continue
 
@@ -249,18 +265,25 @@ def run_synthesis(force: bool = False) -> int:
             msg = f"claude -p exited {result.returncode} for {date_label}"
             if result.stderr:
                 msg += f": {result.stderr[:200]}"
-            print(f"Error: {msg}", file=sys.stderr)
+            _log(f"Error: {msg}", file=sys.stderr)
             _log_error(msg)
-            _append_stats(date_label, model, duration, (0, 0), "error", error=msg)
+            try:
+                _append_stats(date_label, model, duration, (0, 0), "error", error=msg)
+            except OSError:
+                pass
             failed = True
             continue
 
-        tokens = _parse_token_usage(result.stdout)
-        _append_stats(date_label, model, duration, tokens, "ok")
-        if tokens == (0, 0):
+        in_tok, out_tok, parse_failed = _parse_token_usage(result.stdout)
+        try:
+            _append_stats(date_label, model, duration, (in_tok, out_tok), "ok",
+                          token_parse_failed=parse_failed)
+        except OSError:
+            pass
+        if parse_failed:
             _log(f"Synthesis complete for {date_label} ({duration:.1f}s, in=? out=?)")
         else:
-            _log(f"Synthesis complete for {date_label} ({duration:.1f}s, in={tokens[0]}, out={tokens[1]})")
+            _log(f"Synthesis complete for {date_label} ({duration:.1f}s, in={in_tok}, out={out_tok})")
 
     if failed:
         return 1

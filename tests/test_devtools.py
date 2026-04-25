@@ -292,7 +292,7 @@ class TestStatsCommand:
             result = cmd_stats(argparse.Namespace())
         assert result == 0
         output = capsys.readouterr().out
-        runs_line = [l for l in output.strip().splitlines() if l.strip().startswith("Runs:")][0]
+        runs_line = next(l for l in output.strip().splitlines() if l.strip().startswith("Runs:"))
         parts = runs_line.split()
         assert parts[1] == "1"
         assert parts[2] == "2"
@@ -309,7 +309,7 @@ class TestStatsCommand:
             result = cmd_stats(argparse.Namespace())
         assert result == 0
         output = capsys.readouterr().out
-        errors_line = [l for l in output.strip().splitlines() if l.strip().startswith("Errors:")][0]
+        errors_line = next(l for l in output.strip().splitlines() if l.strip().startswith("Errors:"))
         parts = errors_line.split()
         assert parts[1] == "2"
         assert parts[2] == "2"
@@ -325,7 +325,7 @@ class TestStatsCommand:
             result = cmd_stats(argparse.Namespace())
         assert result == 0
         output = capsys.readouterr().out
-        runs_line = [l for l in output.strip().splitlines() if l.strip().startswith("Runs:")][0]
+        runs_line = next(l for l in output.strip().splitlines() if l.strip().startswith("Runs:"))
         parts = runs_line.split()
         assert parts[1] == "1"
         assert parts[2] == "1"

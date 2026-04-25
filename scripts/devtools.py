@@ -442,17 +442,21 @@ def cmd_stats(args: argparse.Namespace) -> int:
     records_24h: list[dict] = []
     records_7d: list[dict] = []
 
-    for line in stats_file.read_text(encoding="utf-8").strip().splitlines():
-        try:
-            record = json.loads(line)
-            ts = datetime.fromisoformat(record["ts"].replace("Z", "+00:00"))
-        except (json.JSONDecodeError, KeyError, ValueError):
-            continue
-        age_hours = (now - ts).total_seconds() / 3600
-        if age_hours <= 24:
-            records_24h.append(record)
-        if age_hours <= 168:  # 7 days
-            records_7d.append(record)
+    with stats_file.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                ts = datetime.fromisoformat(record["ts"].replace("Z", "+00:00"))
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+            age_hours = (now - ts).total_seconds() / 3600
+            if age_hours <= 24:
+                records_24h.append(record)
+            if age_hours <= 168:  # 7 days
+                records_7d.append(record)
 
     def _summarize(records: list[dict]) -> dict:
         if not records:
