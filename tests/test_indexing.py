@@ -909,6 +909,111 @@ class TestSuggestPathCorrection:
         assert strategy == "JSONL cwd"
 
 
+class TestExtractFromJsonlMultilineScan:
+    """Tests that _extract_from_jsonl scans beyond the first line for cwd/timestamp."""
+
+    def test_cwd_on_second_line(self, tmp_path):
+        """cwd found on line 2 when line 1 is a preamble record without cwd."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps({"type": "file-history-snapshot", "data": "..."}),
+            json.dumps({"type": "attachment", "cwd": "/Users/me/myproject", "timestamp": "2026-04-25T12:00:00Z"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/myproject"
+        assert "2026-04-25" in work_days
+
+    def test_timestamp_on_first_line_cwd_on_later_line(self, tmp_path):
+        """timestamp captured from first line even when cwd is on a later line."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps({"type": "pr-link", "timestamp": "2026-04-21T18:00:00Z"}),
+            json.dumps({"type": "pr-link", "timestamp": "2026-04-21T19:00:00Z"}),
+            json.dumps({"type": "system", "cwd": "/Users/me/repo", "timestamp": "2026-04-21T20:00:00Z"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/repo"
+        assert "2026-04-21" in work_days
+
+    def test_no_cwd_in_scan_limit_returns_empty_path_but_captures_timestamp(self, tmp_path):
+        """When cwd not found within scan limit, path is empty but timestamp is captured."""
+        from indexing import _JSONL_SCAN_LIMIT, _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = []
+        for i in range(_JSONL_SCAN_LIMIT):
+            lines.append(json.dumps({"type": "pr-link", "timestamp": f"2026-04-25T{10 + i}:00:00Z"}))
+        lines.append(json.dumps({"type": "system", "cwd": "/Users/me/repo", "timestamp": "2026-04-25T23:00:00Z"}))
+
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == ""
+        assert "2026-04-25" in work_days
+
+    def test_all_lines_no_cwd_no_timestamp(self, tmp_path):
+        """File with no cwd or timestamp returns empty results."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        (folder / "session.jsonl").write_text(json.dumps({"type": "unknown"}) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == ""
+        assert work_days == set()
+
+    def test_corrupt_line_does_not_discard_earlier_captures(self, tmp_path):
+        """A corrupt JSON line mid-file preserves cwd/timestamp from earlier valid lines."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps({"type": "pr-link", "timestamp": "2026-04-25T18:00:00Z"}),
+            "this is not json {{{",
+            json.dumps({"type": "system", "cwd": "/Users/me/repo"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/repo"
+        assert "2026-04-25" in work_days
+
+    def test_non_dict_json_line_is_skipped(self, tmp_path):
+        """A valid JSON line that is not a dict (e.g., a list) is skipped without crashing."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps([1, 2, 3]),
+            json.dumps({"type": "system", "cwd": "/Users/me/repo", "timestamp": "2026-04-25T18:00:00Z"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/repo"
+        assert "2026-04-25" in work_days
+
+
 class TestExtractFromJsonlMtimeOrdering:
     """Tests that _extract_from_jsonl prefers the newest file's cwd."""
 
