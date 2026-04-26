@@ -318,23 +318,28 @@ def _extract_from_jsonl(folder: Path) -> tuple[str, set[str]]:
                     line = line.strip()
                     if not line:
                         continue
-                    data = json.loads(line)
+                    try:
+                        data = json.loads(line)
+                        if not file_cwd:
+                            file_cwd = data.get("cwd", "")
+                        if not file_timestamp:
+                            file_timestamp = data.get("timestamp", "")
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        continue
 
-                    if not file_cwd:
-                        file_cwd = data.get("cwd", "")
-                    if not file_timestamp:
-                        file_timestamp = data.get("timestamp", "")
-
-                    if file_cwd and file_timestamp:
+                    if file_timestamp and (file_cwd or original_path):
                         break
 
             if file_cwd and not original_path:
                 original_path = file_cwd
 
             if file_timestamp:
-                dt = from_iso_z(file_timestamp)
-                work_days.add(utc_to_local_datestr(dt))
-        except (json.JSONDecodeError, IOError, ValueError):
+                try:
+                    dt = from_iso_z(file_timestamp)
+                    work_days.add(utc_to_local_datestr(dt))
+                except ValueError:
+                    pass
+        except IOError:
             continue
 
     return original_path, work_days

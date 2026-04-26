@@ -956,7 +956,7 @@ class TestExtractFromJsonlMultilineScan:
 
         lines = []
         for i in range(_JSONL_SCAN_LIMIT):
-            lines.append(json.dumps({"type": "pr-link", "timestamp": f"2026-04-25T{18 + i // 10:02d}:{i % 10}0:00Z"}))
+            lines.append(json.dumps({"type": "pr-link", "timestamp": f"2026-04-25T{10 + i}:00:00Z"}))
         lines.append(json.dumps({"type": "system", "cwd": "/Users/me/repo", "timestamp": "2026-04-25T23:00:00Z"}))
 
         (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
@@ -977,6 +977,41 @@ class TestExtractFromJsonlMultilineScan:
         original_path, work_days = _extract_from_jsonl(folder)
         assert original_path == ""
         assert work_days == set()
+
+    def test_corrupt_line_does_not_discard_earlier_captures(self, tmp_path):
+        """A corrupt JSON line mid-file preserves cwd/timestamp from earlier valid lines."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps({"type": "pr-link", "timestamp": "2026-04-25T18:00:00Z"}),
+            "this is not json {{{",
+            json.dumps({"type": "system", "cwd": "/Users/me/repo"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/repo"
+        assert "2026-04-25" in work_days
+
+    def test_non_dict_json_line_is_skipped(self, tmp_path):
+        """A valid JSON line that is not a dict (e.g., a list) is skipped without crashing."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "project"
+        folder.mkdir()
+
+        lines = [
+            json.dumps([1, 2, 3]),
+            json.dumps({"type": "system", "cwd": "/Users/me/repo", "timestamp": "2026-04-25T18:00:00Z"}),
+        ]
+        (folder / "session.jsonl").write_text("\n".join(lines) + "\n")
+
+        original_path, work_days = _extract_from_jsonl(folder)
+        assert original_path == "/Users/me/repo"
+        assert "2026-04-25" in work_days
 
 
 class TestExtractFromJsonlMtimeOrdering:
