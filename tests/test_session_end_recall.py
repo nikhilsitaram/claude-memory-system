@@ -182,14 +182,55 @@ class TestWriteRecallFile:
         content = (recall_dir / "force-test.md").read_text()
         assert "BIGMSG" in content
 
-    def test_zero_token_limit_respected_not_silent_fallback(self, tmp_path):
-        """tokenLimit: 0 is respected literally (no silent fallback to default)."""
+    def test_oldest_head_message_force_included(self, tmp_path):
+        """Oldest head message is force-included even if it alone exceeds head budget.
+
+        Mirrors the tail force-include: empty head on tight budgets defeats the
+        1/3 head + 2/3 tail intent. With several large messages and a budget
+        that can't fit them all, the oldest must still appear in head.
+        """
+        def big(label: str) -> str:
+            return f"{label}: " + "x" * 2000  # ~500 tokens each
+
         transcript = tmp_path / "session.jsonl"
         transcript.write_text(make_jsonl_content([
             ("user", "start"),
-            ("assistant", "should-not-appear-1"),
-            ("assistant", "should-not-appear-2"),
-            ("assistant", "FORCE_INCLUDED"),
+            ("assistant", big("OLDEST_HEAD")),
+            ("assistant", big("MID1")),
+            ("assistant", big("MID2")),
+            ("assistant", big("MID3")),
+            ("assistant", big("NEWEST_TAIL")),
+        ]))
+        recall_dir = tmp_path / "pending-recall"
+
+        from session_end_recall import write_recall_file
+        write_recall_file(
+            session_id="head-force-test",
+            transcript_path=transcript,
+            cwd="/test",
+            recall_dir=recall_dir,
+            token_limit=1000,
+        )
+
+        content = (recall_dir / "head-force-test.md").read_text()
+        assert "OLDEST_HEAD" in content
+        assert "NEWEST_TAIL" in content
+        assert "messages omitted" in content
+        # Oldest precedes the omission marker; newest follows it
+        assert content.index("OLDEST_HEAD") < content.index("messages omitted") < content.index("NEWEST_TAIL")
+
+    def test_zero_token_limit_respected_not_silent_fallback(self, tmp_path):
+        """tokenLimit: 0 is respected literally (no silent fallback to default).
+
+        Force-include emits the oldest head message and the latest tail message;
+        the middle message must still be omitted under a zero budget.
+        """
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("user", "start"),
+            ("assistant", "OLDEST_HEAD_FORCED"),
+            ("assistant", "MIDDLE_OMITTED"),
+            ("assistant", "NEWEST_TAIL_FORCED"),
         ]))
         recall_dir = tmp_path / "pending-recall"
 
@@ -204,12 +245,12 @@ class TestWriteRecallFile:
             )
 
         content = (recall_dir / "zero-test.md").read_text()
-        # First user prompt always emitted; force-include guarantees latest assistant
+        # First user prompt always emitted; force-include guarantees both ends
         assert "> start" in content
-        assert "FORCE_INCLUDED" in content
-        # Earlier messages must be omitted under zero budget
-        assert "should-not-appear-1" not in content
-        assert "should-not-appear-2" not in content
+        assert "OLDEST_HEAD_FORCED" in content
+        assert "NEWEST_TAIL_FORCED" in content
+        # Middle message must be omitted under zero budget
+        assert "MIDDLE_OMITTED" not in content
 
     def test_no_marker_when_head_meets_tail(self, tmp_path):
         """When head and tail together cover all messages with no gap, no marker."""

@@ -265,7 +265,7 @@ DEFAULT_SETTINGS = {
     },
     "previousSessionRecall": {
         "enabled": True,
-        "tokenLimit": 500,
+        "tokenLimit": 1000,
     },
     # totalTokenBudget calculated as sum of 4 components
 }

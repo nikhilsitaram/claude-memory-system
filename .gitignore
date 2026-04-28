@@ -9,6 +9,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 .coverage
+.venv/
+uv.lock
 
 # OS files
 .DS_Store
