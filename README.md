@@ -59,6 +59,10 @@ The installer detects your Python command and configures hooks with absolute pat
 
 ### Memory Architecture
 
+**Modes** (`mode` setting):
+- `full` (default): loads recall + global LTM + project LTM + project STM + global STM.
+- `light`: loads only recall + global LTM. Useful when Claude Code's native project-scoped memory covers project context — this system then handles only cross-project memory and last-session continuity.
+
 **Long-term memory** (curated, persistent):
 
 | Tier | File | Loaded | Content |
@@ -132,6 +136,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 
 ```json
 {
+  "mode": "full",
   "globalShortTerm": { "workingDays": 2 },
   "globalLongTerm": { "tokenLimit": 3000 },
   "projectShortTerm": { "workingDays": 5 },
@@ -151,6 +156,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `mode` | `full` | `full` loads all sections; `light` loads only previous-session recall + global LTM (skips project LTM/STM and global STM — useful when relying on Claude Code's native project-scoped memory) |
 | `globalShortTerm.workingDays` | 2 | Recent days of global daily summaries to load |
 | `globalLongTerm.tokenLimit` | 3,000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 5 | Project-specific days to load |

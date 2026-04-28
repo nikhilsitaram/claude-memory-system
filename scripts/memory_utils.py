@@ -238,6 +238,7 @@ SHORT_TERM_TOKENS_PER_DAY = 750  # With scope filtering, ~400-600 observed per d
 # Default settings (tokenLimit for short-term calculated dynamically)
 DEFAULT_SETTINGS = {
     "version": 3,
+    "mode": "full",
     "globalShortTerm": {
         "workingDays": 2,
         # tokenLimit calculated: workingDays × SHORT_TERM_TOKENS_PER_DAY

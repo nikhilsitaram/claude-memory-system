@@ -97,6 +97,8 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 **Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles full memory to stdout for SessionStart hook injection. Output order: read instruction → timestamp → recall → global LTM → project LTM → project STM → global STM. When output exceeds ~10K chars, Claude Code saves it to a session-specific file and shows the path + 2KB preview; the read instruction in the first 2KB prompts Claude to read the full file.
 
+**Mode**: `mode: "full"` (default) emits all sections. `mode: "light"` emits only recall + global LTM, skipping project LTM/STM and global STM — for users who rely on Claude Code's native project-scoped memory and only want this system for cross-project memory plus last-session continuity.
+
 **Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → inject scopes from CWD metadata → LLM summarizes → programmatic daily merge → LTM routing with keyword-overlap dedup (threshold 0.6) + route cap (5/file) → update `.synthesis-state.json` offsets.
 
 **Decay** (`decay.py`): Scan LTM files for `(YYYY-MM-DD)` dated entries → archive entries older than threshold → purge expired archives. `## Pinned` section protected.
@@ -133,6 +135,7 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 
 | Setting | Default |
 |---------|---------|
+| `mode` | `full` (alt: `light`) |
 | `globalShortTerm.workingDays` | 2 |
 | `globalLongTerm.tokenLimit` | 3,000 |
 | `projectShortTerm.workingDays` | 5 |

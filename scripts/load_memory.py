@@ -4,12 +4,17 @@ SessionStart hook - loads memory context for Claude Code.
 
 This script runs on: startup, resume, clear, compact
 
-It performs:
-1. Loads global long-term memory
-2. Loads project-specific long-term memory (if applicable)
-3. Loads global short-term memory (recent daily summaries, filtered to [global/*] tags)
-4. Loads project short-term memory (project history, filtered to [project/*] tags)
-5. Checks for pending transcripts and prompts for synthesis
+Output sections (in order):
+1. Read instruction (for truncated-output recovery)
+2. Timestamp + synthesis errors
+3. Previous session recall
+4. Global long-term memory
+5. Project long-term memory (if applicable)        — full mode only
+6. Project short-term memory (filtered [project/*]) — full mode only
+7. Global short-term memory (filtered [global/*])  — full mode only
+
+In `mode: light`, only sections 1-4 are emitted; project LTM/STM and global STM
+are skipped (rely on Claude Code's native project-scoped memory).
 
 Output is printed to stdout and injected into Claude Code's context.
 
@@ -833,6 +838,7 @@ def main() -> None:
     short_term_days = settings["globalShortTerm"]["workingDays"]
     project_days = settings["projectShortTerm"]["workingDays"]
     total_budget = settings["totalTokenBudget"]
+    mode = settings.get("mode", "full")
 
     # Track total bytes for token estimation
     total_bytes = 0
@@ -880,39 +886,43 @@ def main() -> None:
         print(global_content)
         print()
 
-    # Load project-specific long-term memory
-    if project_name:
-        project_content, project_bytes = load_project_memory(project_name)
-        total_bytes += project_bytes
+    # In light mode, stop after global LTM — skip project LTM, project STM, global STM.
+    # Native Claude Code memory handles project-scoped context; global LTM is the unique
+    # cross-project value of this system.
+    if mode == "full":
+        # Load project-specific long-term memory
+        if project_name:
+            project_content, project_bytes = load_project_memory(project_name)
+            total_bytes += project_bytes
 
-        if project_content:
-            print(f"## Project Long-Term Memory: {project_name}")
-            print(project_content)
-            print()
+            if project_content:
+                print(f"## Project Long-Term Memory: {project_name}")
+                print(project_content)
+                print()
 
-    # Load project short-term memory (project history, filtered to [project/*] tags)
-    if current_project:
-        project_history, history_bytes = load_project_history(current_project, project_days)
-        total_bytes += history_bytes
+        # Load project short-term memory (project history, filtered to [project/*] tags)
+        if current_project:
+            project_history, history_bytes = load_project_history(current_project, project_days)
+            total_bytes += history_bytes
 
-        if project_history:
-            print(f"## Project Short-Term Memory: {project_name}")
-            print()
-            for date, content in project_history:
+            if project_history:
+                print(f"## Project Short-Term Memory: {project_name}")
+                print()
+                for date, content in project_history:
+                    print(f"### {date}")
+                    print(content)
+                    print()
+
+        # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
+        global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
+        total_bytes += global_daily_bytes
+
+        if global_summaries:
+            print("## Global Short-Term Memory")
+            for date, content in global_summaries:
                 print(f"### {date}")
                 print(content)
                 print()
-
-    # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
-    global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
-    total_bytes += global_daily_bytes
-
-    if global_summaries:
-        print("## Global Short-Term Memory")
-        for date, content in global_summaries:
-            print(f"### {date}")
-            print(content)
-            print()
 
     print("</memory>")
 

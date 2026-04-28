@@ -1,6 +1,8 @@
 {
   "version": 3,
   "_templateVersion": "2026-02-07",
+  "mode": "full",
+  "_modeComment": "full = recall + global LTM + project LTM + project STM + global STM. light = recall + global LTM only (skip project sections + global STM; rely on native Claude Code memory for project scope).",
   "globalShortTerm": {
     "workingDays": 2,
     "_comment": "Global short-term filtered to [global/*] tags - tokenLimit: workingDays × 750"
