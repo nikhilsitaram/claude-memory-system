@@ -45,6 +45,7 @@
     }
   },
   "_defaults": {
+    "mode": "full",
     "globalShortTerm.workingDays": 2,
     "globalLongTerm.tokenLimit": 3000,
     "projectShortTerm.workingDays": 5,

@@ -1629,7 +1629,7 @@ class TestMainOutputOrder:
 
     def _run_main(self, monkeypatch, *, global_ltm="", project_ltm="",
                   global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT,
-                  mode="full"):
+                  mode=None):
         """Run main() with mocked memory sources, return captured stdout.
 
         Pass current_project=None to simulate no project found (find_current_project returns None).
@@ -1657,9 +1657,10 @@ class TestMainOutputOrder:
         monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
         effective_project = {"name": "testproject"} if current_project is _DEFAULT_PROJECT else current_project
         monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: effective_project)
+        effective_mode = DEFAULT_SETTINGS["mode"] if mode is None else mode
         monkeypatch.setattr("load_memory.load_settings", lambda: {
             **DEFAULT_SETTINGS,
-            "mode": mode,
+            "mode": effective_mode,
             "globalShortTerm": {"workingDays": 2, "tokenLimit": 1500},
             "projectShortTerm": {"workingDays": 5, "tokenLimit": 3750},
             "totalTokenBudget": 6000,
@@ -1809,6 +1810,21 @@ class TestMainOutputOrder:
     def test_default_settings_mode_is_full(self):
         """DEFAULT_SETTINGS.mode is 'full' so existing installs unchanged."""
         assert DEFAULT_SETTINGS["mode"] == "full"
+
+    @pytest.mark.parametrize("bad_mode", ["Full", "lite", "FULL", "", "unknown"])
+    def test_unknown_mode_fails_safe_to_full(self, monkeypatch, bad_mode):
+        """Unknown/typo mode values emit all sections (fail-safe to full)."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- project ltm content",
+            project_stm=[("2026-04-21", "- [testproject/implement] project stm content")],
+            global_stm=[("2026-04-20", "- [global/implement] global stm content")],
+            mode=bad_mode,
+        )
+        assert "project ltm content" in output
+        assert "project stm content" in output
+        assert "global stm content" in output
 
     def test_light_mode_with_recall_disabled(self, monkeypatch):
         """Light mode + no recall section emits only global LTM (no project, no STM)."""

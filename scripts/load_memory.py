@@ -889,7 +889,9 @@ def main() -> None:
     # In light mode, stop after global LTM — skip project LTM, project STM, global STM.
     # Native Claude Code memory handles project-scoped context; global LTM is the unique
     # cross-project value of this system.
-    if mode == "full":
+    # Fail-safe to full on unknown values (typos like "Full"/"lite") so users don't
+    # silently lose project context from a config mistake.
+    if mode != "light":
         # Load project-specific long-term memory
         if project_name:
             project_content, project_bytes = load_project_memory(project_name)
