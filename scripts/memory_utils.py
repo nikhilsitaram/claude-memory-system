@@ -254,7 +254,7 @@ DEFAULT_SETTINGS = {
         "tokenLimit": 3000,
     },
     "synthesis": {
-        "intervalHours": 2,
+        "intervalHours": 1,
         "model": "sonnet",
         "minSessionMessages": 5,
     },
