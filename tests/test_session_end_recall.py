@@ -182,6 +182,35 @@ class TestWriteRecallFile:
         content = (recall_dir / "force-test.md").read_text()
         assert "BIGMSG" in content
 
+    def test_zero_token_limit_respected_not_silent_fallback(self, tmp_path):
+        """tokenLimit: 0 is respected literally (no silent fallback to default)."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("user", "start"),
+            ("assistant", "should-not-appear-1"),
+            ("assistant", "should-not-appear-2"),
+            ("assistant", "FORCE_INCLUDED"),
+        ]))
+        recall_dir = tmp_path / "pending-recall"
+
+        zero_settings = {**DEFAULT_SETTINGS, "previousSessionRecall": {"enabled": True, "tokenLimit": 0}}
+        from session_end_recall import write_recall_file
+        with patch("session_end_recall.load_settings", return_value=zero_settings):
+            write_recall_file(
+                session_id="zero-test",
+                transcript_path=transcript,
+                cwd="/test",
+                recall_dir=recall_dir,
+            )
+
+        content = (recall_dir / "zero-test.md").read_text()
+        # First user prompt always emitted; force-include guarantees latest assistant
+        assert "> start" in content
+        assert "FORCE_INCLUDED" in content
+        # Earlier messages must be omitted under zero budget
+        assert "should-not-appear-1" not in content
+        assert "should-not-appear-2" not in content
+
     def test_no_marker_when_head_meets_tail(self, tmp_path):
         """When head and tail together cover all messages with no gap, no marker."""
         msgs = [("user", "start")]

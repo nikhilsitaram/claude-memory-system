@@ -122,10 +122,8 @@ def write_recall_file(
     if token_limit is None:
         settings = load_settings()
         default_limit = DEFAULT_SETTINGS["previousSessionRecall"]["tokenLimit"]
-        token_limit = int(
-            settings.get("previousSessionRecall", {}).get("tokenLimit", default_limit)
-            or default_limit
-        )
+        configured = settings.get("previousSessionRecall", {}).get("tokenLimit")
+        token_limit = configured if isinstance(configured, int) else default_limit
 
     first_prompt = extract_first_user_prompt(transcript_path)
     messages = parse_jsonl_file(transcript_path)
