@@ -28,6 +28,7 @@ from pathlib import Path
 # Import shared utilities from scripts/memory_utils.py (same repo, no symlink needed)
 sys.path.insert(0, str(Path(__file__).parent / "scripts"))
 from memory_utils import (  # noqa: E402
+    DEFAULT_SETTINGS,
     MIN_PYTHON,
     get_claude_dir,
     get_memory_dir,
@@ -299,7 +300,7 @@ def install_launchd_agent(python_cmd: str) -> None:
     plist = {
         "Label": LAUNCHD_LABEL,
         "ProgramArguments": [python_path, str(scripts_dir / "synthesis_cron.py")],
-        "StartInterval": 7200,  # Every 2 hours (matches systemd timer)
+        "StartInterval": int(DEFAULT_SETTINGS["synthesis"]["intervalHours"] * 3600),
         "StandardOutPath": str(log_dir / "synthesis.log"),
         "StandardErrorPath": str(log_dir / "synthesis.err"),
         "EnvironmentVariables": {

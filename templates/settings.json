@@ -20,7 +20,7 @@
     "_comment": "project-memory/{project}-long-term-memory.md - project-specific learnings"
   },
   "synthesis": {
-    "intervalHours": 0.5,
+    "intervalHours": 1,
     "model": "sonnet",
     "minSessionMessages": 5,
     "_comment": "Minimum hours between auto-synthesis runs. Model: sonnet (default)|haiku|opus. minSessionMessages: skip sessions with fewer messages during synthesis."
@@ -50,7 +50,7 @@
     "globalLongTerm.tokenLimit": 3000,
     "projectShortTerm.workingDays": 5,
     "projectLongTerm.tokenLimit": 3000,
-    "synthesis.intervalHours": 0.5,
+    "synthesis.intervalHours": 1,
     "synthesis.model": "sonnet",
     "synthesis.minSessionMessages": 5,
     "decay.ageDays": 30,
