@@ -1450,6 +1450,7 @@ class TestCheckSynthesisErrors:
         with mock.patch("load_memory.SYNTHESIS_ERROR_LOG", error_log):
             result = check_synthesis_errors()
         # Should contain errors 5-9 (last 5), not 0-4
+        assert result is not None
         assert "error 5" in result
         assert "error 9" in result
         assert "error 0" not in result

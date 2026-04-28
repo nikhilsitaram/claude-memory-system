@@ -99,6 +99,8 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 
 **Mode**: `mode: "full"` (default) emits all sections. `mode: "light"` emits only recall + global LTM, skipping project LTM/STM and global STM — for users who rely on Claude Code's native project-scoped memory and only want this system for cross-project memory plus last-session continuity.
 
+**Recall** (`session_end_recall.py`): SessionEnd hook writes `pending-recall/{session_id}.md` for the next session. Each assistant message is per-message-truncated (head/tail split at `MAX_MESSAGE_LINES = 30`), then the budget is allocated 1/3 to oldest messages (head) and 2/3 to newest (tail). The latest message is force-included even if it alone overruns the tail allocation. When messages are skipped, a `... [N messages omitted] ...` marker is inserted between head and tail.
+
 **Synthesis** (`synthesis.py` + `synthesis_cron.py`): Extract transcripts → inject scopes from CWD metadata → LLM summarizes → programmatic daily merge → LTM routing with keyword-overlap dedup (threshold 0.6) + route cap (5/file) → update `.synthesis-state.json` offsets.
 
 **Decay** (`decay.py`): Scan LTM files for `(YYYY-MM-DD)` dated entries → archive entries older than threshold → purge expired archives. `## Pinned` section protected.
@@ -146,5 +148,6 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |
 | `decay.archiveRetentionDays` | 365 |
+| `previousSessionRecall.tokenLimit` | 500 |
 
 Short-term token limits: `workingDays × 750` (calculated in `_calculate_token_limits()`).

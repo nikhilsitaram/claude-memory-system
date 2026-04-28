@@ -6,8 +6,9 @@ Reads {session_id, transcript_path, cwd} from stdin JSON (delivered by Claude Co
 Writes ~/.claude/memory/pending-recall/{session_id}.md with:
 - YAML-like frontmatter (session_id, project, timestamp, cwd)
 - First user prompt as blockquote
-- Assistant messages in chronological order (newest-first token budgeting,
-  oldest-first output)
+- Assistant messages with head/tail budget split: oldest-first (1/3 of remaining
+  budget) + newest-last (2/3), with "[N messages omitted]" marker for the
+  skipped middle. Always emits chronological order.
 
 No LLM involved. Targets <5s execution time.
 
@@ -24,6 +25,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from memory_utils import (
+    DEFAULT_SETTINGS,
     find_current_project,
     get_pending_recall_dir,
     get_projects_index_file,
@@ -33,7 +35,7 @@ from memory_utils import (
 )
 from transcript_ops import extract_first_user_prompt, parse_jsonl_file
 
-MAX_MESSAGE_LINES = 50
+MAX_MESSAGE_LINES = 30
 
 
 def _truncate_message(text: str) -> str:
@@ -49,6 +51,54 @@ def _truncate_message(text: str) -> str:
         + [f"\n... [{truncated} lines truncated] ...\n"]
         + lines[-tail:]
     )
+
+
+def _select_messages(
+    messages: list[dict], remaining_budget: int
+) -> tuple[list[str], list[str], int]:
+    """Select head + tail assistant messages within remaining_budget tokens.
+
+    Per-message truncation is applied to all candidates first. The tail (newest)
+    is always primary; if everything fits, it all goes in tail_texts and
+    head_texts is empty. When the budget is tight, allocates 2/3 to tail
+    (newest) and 1/3 to head (oldest); head and tail are disjoint contiguous
+    slices and omitted_count is the gap between them.
+
+    The latest message is always force-included even if it alone exceeds the
+    tail allocation — empty recall is worse than a small overshoot.
+    """
+    truncated = [_truncate_message(m["content"]) for m in messages]
+    n = len(truncated)
+    if n == 0:
+        return [], [], 0
+
+    total_tokens = sum(len(t) // 4 for t in truncated)
+    if total_tokens <= remaining_budget:
+        return [], truncated, 0
+
+    tail_budget = (remaining_budget * 2) // 3
+    head_budget = remaining_budget - tail_budget
+
+    tail_start = n
+    used = 0
+    for i in range(n - 1, -1, -1):
+        msg_tokens = len(truncated[i]) // 4
+        if tail_start < n and used + msg_tokens > tail_budget:
+            break
+        tail_start = i
+        used += msg_tokens
+
+    head_end = 0
+    used = 0
+    for i in range(tail_start):
+        msg_tokens = len(truncated[i]) // 4
+        if used + msg_tokens > head_budget:
+            break
+        head_end = i + 1
+        used += msg_tokens
+
+    omitted = tail_start - head_end
+    return truncated[:head_end], truncated[tail_start:], omitted
 
 
 def write_recall_file(
@@ -71,30 +121,21 @@ def write_recall_file(
         recall_dir = get_pending_recall_dir()
     if token_limit is None:
         settings = load_settings()
-        token_limit = settings.get("previousSessionRecall", {}).get("tokenLimit", 1500)
+        default_limit = DEFAULT_SETTINGS["previousSessionRecall"]["tokenLimit"]
+        token_limit = int(
+            settings.get("previousSessionRecall", {}).get("tokenLimit", default_limit)
+            or default_limit
+        )
 
     first_prompt = extract_first_user_prompt(transcript_path)
-
     messages = parse_jsonl_file(transcript_path)
 
-    collected = []
-    running_tokens = 0
+    prompt_tokens = len(first_prompt) // 4 + 5 if first_prompt else 0
+    remaining_budget = max(0, token_limit - prompt_tokens)
+    head_texts, tail_texts, omitted_count = _select_messages(messages, remaining_budget)
 
-    if first_prompt:
-        running_tokens += len(first_prompt) // 4 + 5
-
-    for msg in reversed(messages):
-        text = _truncate_message(msg["content"])
-        msg_tokens = len(text) // 4
-        if running_tokens + msg_tokens > token_limit:
-            break
-        collected.append(text)
-        running_tokens += msg_tokens
-
-    if not collected and not first_prompt:
+    if not head_texts and not tail_texts and not first_prompt:
         return
-
-    collected.reverse()
 
     resolved_cwd = resolve_session_path(cwd)
     projects_index = load_json_file(get_projects_index_file(), {})
@@ -114,7 +155,15 @@ def write_recall_file(
         parts.extend(f"> {line}" for line in first_prompt.splitlines())
         parts.append("")
 
-    parts.extend("\n\n".join(collected).split("\n"))
+    sections = []
+    if head_texts:
+        sections.append("\n\n".join(head_texts))
+    if omitted_count > 0:
+        sections.append(f"... [{omitted_count} messages omitted] ...")
+    if tail_texts:
+        sections.append("\n\n".join(tail_texts))
+    if sections:
+        parts.extend("\n\n".join(sections).split("\n"))
     parts.append("")
 
     recall_dir.mkdir(parents=True, exist_ok=True)

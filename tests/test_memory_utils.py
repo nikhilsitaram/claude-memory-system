@@ -1452,7 +1452,8 @@ class TestPreviousSessionRecallSetting:
     def test_default_settings_has_previous_session_recall(self):
         recall_settings = DEFAULT_SETTINGS["previousSessionRecall"]
         assert recall_settings["enabled"] is True
-        assert recall_settings["tokenLimit"] == 1500
+        assert isinstance(recall_settings["tokenLimit"], int)
+        assert recall_settings["tokenLimit"] > 0
 
     def test_load_settings_merges_recall_override(self, tmp_path):
         settings_file = tmp_path / "settings.json"

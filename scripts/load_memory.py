@@ -25,7 +25,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add scripts directory to path for local imports
@@ -861,7 +861,8 @@ def main() -> None:
 
     # Include current local time for context
     now = datetime.now(timezone.utc).astimezone()
-    utc_offset_hours = now.utcoffset().total_seconds() / 3600
+    offset = now.utcoffset() or timedelta(0)
+    utc_offset_hours = offset.total_seconds() / 3600
     offset_sign = "+" if utc_offset_hours >= 0 else ""
     print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
     print()

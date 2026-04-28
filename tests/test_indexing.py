@@ -863,7 +863,7 @@ class TestSuggestPathCorrection:
                 "/some/other/path/myproject", project_data, {},
             )
         assert suggested == str(live_dir)
-        assert "basename match" in strategy
+        assert strategy is not None and "basename match" in strategy
 
     def test_basename_scan_strategy_grandchild(self, tmp_path):
         """Strategy 3: basename found as grandchild of $HOME."""
@@ -878,7 +878,7 @@ class TestSuggestPathCorrection:
                 "/some/other/path/myproject", project_data, {},
             )
         assert suggested == str(live_dir)
-        assert "basename match" in strategy
+        assert strategy is not None and "basename match" in strategy
 
     def test_no_match_returns_none(self, tmp_path):
         """No strategies match -> (None, None)."""

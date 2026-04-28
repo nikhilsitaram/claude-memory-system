@@ -167,6 +167,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `decay.ageDays` | 30 | Archive global LTM entries older than N days |
 | `decay.projectWorkingDays` | 20 | Archive project LTM entries after N project work days |
 | `decay.archiveRetentionDays` | 365 | Purge archived items after N days |
+| `previousSessionRecall.tokenLimit` | 500 | Token budget for previous-session recall; 1/3 head + 2/3 tail allocation |
 
 **Calculated token limits** (short-term): `workingDays × 750 tokens/day`
 
