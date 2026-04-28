@@ -20,6 +20,7 @@ import io
 import json
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -457,7 +458,7 @@ _SCOPED_ENTRY = re.compile(r"^\s*-\s*(?:\[routed\])?\s*\[[a-z0-9-]+(?:\|[a-z0-9-
 
 def inject_scopes(
     dailies: list[DailyFile],
-    session_projects: dict[str, str | None],
+    session_projects: Mapping[str, str | None],
 ) -> list[DailyFile]:
     """Inject project scope tags into daily entries based on session metadata.
 

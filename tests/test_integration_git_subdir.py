@@ -18,23 +18,25 @@ Run with: python -m pytest tests/test_integration_git_subdir.py -v
 
 import copy
 import json
-import os
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
+
 
 # ---------------------------------------------------------------------------
 # Attempt to import not-yet-existing functions.
 # Tests that need them are marked xfail so the file itself doesn't crash.
 # ---------------------------------------------------------------------------
+def _missing_resolver(*_args, **_kwargs):
+    raise NotImplementedError("resolve_session_path not yet implemented")
+
+
 try:
     from memory_utils import resolve_git_subdir_to_root, resolve_session_path
     _RESOLVE_SESSION_PATH_EXISTS = True
 except ImportError:
-    resolve_git_subdir_to_root = None  # type: ignore[assignment]
-    resolve_session_path = None        # type: ignore[assignment]
+    resolve_git_subdir_to_root = _missing_resolver  # type: ignore[assignment]
+    resolve_session_path = _missing_resolver        # type: ignore[assignment]
     _RESOLVE_SESSION_PATH_EXISTS = False
 
 # These exist today and must always import cleanly.
@@ -42,7 +44,6 @@ from memory_utils import (  # noqa: E402
     DEFAULT_SETTINGS,
     _calculate_token_limits,
     find_current_project,
-    resolve_worktree_to_main_repo,
 )
 
 # =============================================================================
@@ -57,6 +58,7 @@ needs_resolve_session_path = pytest.mark.xfail(
 
 # find_current_project must accept exactly 2 args
 import inspect as _inspect
+
 _FCP_TWO_ARGS = len(_inspect.signature(find_current_project).parameters) == 2
 
 # Wiring checks: callers must import resolve_session_path (not just that it exists)

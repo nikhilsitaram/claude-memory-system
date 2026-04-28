@@ -1,7 +1,4 @@
 import json
-import textwrap
-from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 from helpers import make_jsonl_content
@@ -75,8 +72,10 @@ class TestWriteRecallFile:
         assert body_tokens <= token_limit + 100
 
     def test_per_message_truncation(self, tmp_path):
-        """Messages over 50 lines get head/tail truncated."""
-        long_msg = "\n".join(f"line {i}" for i in range(100))
+        """Messages over MAX_MESSAGE_LINES get head/tail truncated."""
+        from session_end_recall import MAX_MESSAGE_LINES, write_recall_file
+
+        long_msg = "\n".join(f"line {i}" for i in range(MAX_MESSAGE_LINES * 2))
         transcript = tmp_path / "session.jsonl"
         transcript.write_text(make_jsonl_content([
             ("user", "start"),
@@ -84,7 +83,6 @@ class TestWriteRecallFile:
         ]))
         recall_dir = tmp_path / "pending-recall"
 
-        from session_end_recall import write_recall_file
         write_recall_file(
             session_id="truncate-test",
             transcript_path=transcript,
@@ -93,7 +91,7 @@ class TestWriteRecallFile:
         )
 
         content = (recall_dir / "truncate-test.md").read_text()
-        assert "[" in content and "truncated" in content.lower() or "..." in content
+        assert "lines truncated" in content
 
     def test_empty_transcript(self, tmp_path):
         """Empty transcript produces no recall file."""
@@ -110,6 +108,128 @@ class TestWriteRecallFile:
         )
 
         assert not (recall_dir / "empty-test.md").exists()
+
+    def test_head_tail_split_with_omitted_marker(self, tmp_path):
+        """Tight budget keeps oldest + newest messages and inserts omission marker."""
+        msgs = [("user", "start")]
+        msgs.extend(("assistant", f"MSG{i}: " + "x" * 200) for i in range(10))
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content(msgs))
+        recall_dir = tmp_path / "pending-recall"
+
+        from session_end_recall import write_recall_file
+        write_recall_file(
+            session_id="split-test",
+            transcript_path=transcript,
+            cwd="/test",
+            recall_dir=recall_dir,
+            token_limit=200,
+        )
+
+        content = (recall_dir / "split-test.md").read_text()
+        assert "messages omitted" in content
+        assert "MSG0" in content
+        assert "MSG9" in content
+        marker_pos = content.index("messages omitted")
+        msg0_pos = content.index("MSG0")
+        msg9_pos = content.index("MSG9")
+        assert msg0_pos < marker_pos < msg9_pos
+
+    def test_no_marker_when_everything_fits(self, tmp_path):
+        """Generous budget includes all messages with no omission marker."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("user", "start"),
+            ("assistant", "first"),
+            ("assistant", "second"),
+            ("assistant", "third"),
+        ]))
+        recall_dir = tmp_path / "pending-recall"
+
+        from session_end_recall import write_recall_file
+        write_recall_file(
+            session_id="fits-test",
+            transcript_path=transcript,
+            cwd="/test",
+            recall_dir=recall_dir,
+            token_limit=500,
+        )
+
+        content = (recall_dir / "fits-test.md").read_text()
+        assert "messages omitted" not in content
+        assert all(s in content for s in ("first", "second", "third"))
+
+    def test_latest_message_force_included(self, tmp_path):
+        """Single message exceeding tail budget is still included."""
+        big_msg = "BIGMSG: " + "y" * 4000
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("user", "start"),
+            ("assistant", "earlier"),
+            ("assistant", big_msg),
+        ]))
+        recall_dir = tmp_path / "pending-recall"
+
+        from session_end_recall import write_recall_file
+        write_recall_file(
+            session_id="force-test",
+            transcript_path=transcript,
+            cwd="/test",
+            recall_dir=recall_dir,
+            token_limit=100,
+        )
+
+        content = (recall_dir / "force-test.md").read_text()
+        assert "BIGMSG" in content
+
+    def test_zero_token_limit_respected_not_silent_fallback(self, tmp_path):
+        """tokenLimit: 0 is respected literally (no silent fallback to default)."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content([
+            ("user", "start"),
+            ("assistant", "should-not-appear-1"),
+            ("assistant", "should-not-appear-2"),
+            ("assistant", "FORCE_INCLUDED"),
+        ]))
+        recall_dir = tmp_path / "pending-recall"
+
+        zero_settings = {**DEFAULT_SETTINGS, "previousSessionRecall": {"enabled": True, "tokenLimit": 0}}
+        from session_end_recall import write_recall_file
+        with patch("session_end_recall.load_settings", return_value=zero_settings):
+            write_recall_file(
+                session_id="zero-test",
+                transcript_path=transcript,
+                cwd="/test",
+                recall_dir=recall_dir,
+            )
+
+        content = (recall_dir / "zero-test.md").read_text()
+        # First user prompt always emitted; force-include guarantees latest assistant
+        assert "> start" in content
+        assert "FORCE_INCLUDED" in content
+        # Earlier messages must be omitted under zero budget
+        assert "should-not-appear-1" not in content
+        assert "should-not-appear-2" not in content
+
+    def test_no_marker_when_head_meets_tail(self, tmp_path):
+        """When head and tail together cover all messages with no gap, no marker."""
+        msgs = [("user", "start")]
+        msgs.extend(("assistant", f"M{i}") for i in range(4))
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(make_jsonl_content(msgs))
+        recall_dir = tmp_path / "pending-recall"
+
+        from session_end_recall import write_recall_file
+        write_recall_file(
+            session_id="nogap-test",
+            transcript_path=transcript,
+            cwd="/test",
+            recall_dir=recall_dir,
+            token_limit=50,
+        )
+
+        content = (recall_dir / "nogap-test.md").read_text()
+        assert "messages omitted" not in content
 
     def test_chronological_output_order(self, tmp_path):
         """Assistant messages appear oldest-to-newest in output."""
@@ -208,6 +328,7 @@ class TestMainEntryPoint:
         })
 
         import io
+
         from session_end_recall import main as recall_main
         with patch("sys.stdin", io.StringIO(stdin_data)), \
              patch("session_end_recall.get_pending_recall_dir", return_value=recall_dir), \

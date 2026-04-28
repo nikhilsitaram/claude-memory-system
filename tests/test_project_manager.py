@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-
 from project_manager import (  # noqa: I001
     backup_files,
     decode_path_best_effort,
