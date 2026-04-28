@@ -48,6 +48,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 
 | Path | Type | Range | Default | Notes |
 |------|------|-------|---------|-------|
+| `mode` | string | full/light | full | light skips project LTM/STM and global STM (recall + global LTM only) |
 | `globalLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
 | `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
@@ -72,6 +73,8 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 **Estimation**: 1 token ~ 4 characters. 750 tokens/day based on ~400-600 observed after scope filtering.
 
 ## Setting Details
+
+**Mode**: `full` loads all five sections (recall, global LTM, project LTM, project STM, global STM). `light` loads only recall and global LTM — useful when Claude Code's native project-scoped memory covers project context and you want the custom system to handle only cross-project memory plus session continuity.
 
 **Working days**: Both tiers use "working days" — days that have matching tagged content (`[global/*]` or `[project-name/*]`). Days without matching content are skipped.
 

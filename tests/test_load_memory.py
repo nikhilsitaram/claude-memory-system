@@ -1628,13 +1628,15 @@ class TestMainOutputOrder:
     """Verify main() outputs sections in the correct order with read instruction first."""
 
     def _run_main(self, monkeypatch, *, global_ltm="", project_ltm="",
-                  global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT):
+                  global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT,
+                  mode=None):
         """Run main() with mocked memory sources, return captured stdout.
 
         Pass current_project=None to simulate no project found (find_current_project returns None).
         Omit current_project to use the default {"name": "testproject"} mock.
         """
         import io
+
         from load_memory import main
 
         monkeypatch.delenv("CLAUDE_SKIP_MEMORY", raising=False)
@@ -1655,8 +1657,10 @@ class TestMainOutputOrder:
         monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
         effective_project = {"name": "testproject"} if current_project is _DEFAULT_PROJECT else current_project
         monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: effective_project)
+        effective_mode = DEFAULT_SETTINGS["mode"] if mode is None else mode
         monkeypatch.setattr("load_memory.load_settings", lambda: {
             **DEFAULT_SETTINGS,
+            "mode": effective_mode,
             "globalShortTerm": {"workingDays": 2, "tokenLimit": 1500},
             "projectShortTerm": {"workingDays": 5, "tokenLimit": 3750},
             "totalTokenBudget": 6000,
@@ -1759,6 +1763,111 @@ class TestMainOutputOrder:
         assert "global ltm only" in output
         assert "Project Long-Term Memory" not in output
         assert "Project Short-Term Memory" not in output
+
+    def test_light_mode_emits_recall_and_global_ltm(self, monkeypatch):
+        """Light mode keeps recall and global LTM."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            recall="recall content here",
+            mode="light",
+        )
+        assert "recall content here" in output
+        assert "global ltm content" in output
+
+    def test_light_mode_skips_project_and_global_stm(self, monkeypatch):
+        """Light mode omits project LTM, project STM, and global STM."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- project ltm content",
+            global_stm=[("2026-04-20", "- [global/implement] global stm content")],
+            project_stm=[("2026-04-21", "- [testproject/implement] project stm content")],
+            recall="recall content here",
+            mode="light",
+        )
+        assert "project ltm content" not in output
+        assert "project stm content" not in output
+        assert "global stm content" not in output
+        assert "Project Long-Term Memory" not in output
+        assert "Project Short-Term Memory" not in output
+        assert "Global Short-Term Memory" not in output
+
+    def test_full_mode_default_matches_existing_behavior(self, monkeypatch):
+        """Full mode (default) emits all sections."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- project ltm content",
+            global_stm=[("2026-04-20", "- [global/implement] global stm content")],
+            project_stm=[("2026-04-21", "- [testproject/implement] project stm content")],
+        )
+        assert "global ltm content" in output
+        assert "project ltm content" in output
+        assert "project stm content" in output
+        assert "global stm content" in output
+
+    def test_default_settings_mode_is_full(self):
+        """DEFAULT_SETTINGS.mode is 'full' so existing installs unchanged."""
+        assert DEFAULT_SETTINGS["mode"] == "full"
+
+    @pytest.mark.parametrize("bad_mode", ["Full", "lite", "FULL", "", "unknown"])
+    def test_unknown_mode_fails_safe_to_full(self, monkeypatch, bad_mode):
+        """Unknown/typo mode values emit all sections (fail-safe to full)."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- project ltm content",
+            project_stm=[("2026-04-21", "- [testproject/implement] project stm content")],
+            global_stm=[("2026-04-20", "- [global/implement] global stm content")],
+            mode=bad_mode,
+        )
+        assert "project ltm content" in output
+        assert "project stm content" in output
+        assert "global stm content" in output
+
+    def test_light_mode_with_recall_disabled(self, monkeypatch):
+        """Light mode + no recall section emits only global LTM (no project, no STM)."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- should not appear",
+            project_stm=[("2026-04-21", "- [testproject/implement] should not appear")],
+            recall="",
+            mode="light",
+        )
+        assert "global ltm content" in output
+        assert "Previous Session Recall" not in output
+        assert "Project Long-Term Memory" not in output
+        assert "Project Short-Term Memory" not in output
+        assert "Global Short-Term Memory" not in output
+
+    def test_light_mode_with_no_current_project(self, monkeypatch):
+        """Light mode + no current project still emits recall + global LTM."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="- global ltm content",
+            project_ltm="- should not appear",
+            recall="recall content here",
+            current_project=None,
+            mode="light",
+        )
+        assert "global ltm content" in output
+        assert "recall content here" in output
+        assert "Project Long-Term Memory" not in output
+
+    def test_light_mode_with_empty_global_ltm(self, monkeypatch):
+        """Light mode + empty global LTM still produces well-formed output with recall."""
+        output = self._run_main(
+            monkeypatch,
+            global_ltm="",
+            recall="recall content here",
+            mode="light",
+        )
+        assert output.startswith("<memory>")
+        assert output.rstrip().endswith("</memory>")
+        assert "recall content here" in output
+        assert "## Long-Term Memory" not in output
 
 
 if __name__ == "__main__":
