@@ -64,8 +64,9 @@ def _select_messages(
     (newest) and 1/3 to head (oldest); head and tail are disjoint contiguous
     slices and omitted_count is the gap between them.
 
-    The latest message is always force-included even if it alone exceeds the
-    tail allocation — empty recall is worse than a small overshoot.
+    Both the latest message (tail) and the oldest message before tail (head)
+    are force-included even if they alone exceed their share — empty recall
+    on either side is worse than a bounded overshoot.
     """
     truncated = [_truncate_message(m["content"]) for m in messages]
     n = len(truncated)
@@ -92,7 +93,7 @@ def _select_messages(
     used = 0
     for i in range(tail_start):
         msg_tokens = len(truncated[i]) // 4
-        if used + msg_tokens > head_budget:
+        if head_end > 0 and used + msg_tokens > head_budget:
             break
         head_end = i + 1
         used += msg_tokens

@@ -148,6 +148,6 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `decay.ageDays` | 30 |
 | `decay.projectWorkingDays` | 20 |
 | `decay.archiveRetentionDays` | 365 |
-| `previousSessionRecall.tokenLimit` | 500 |
+| `previousSessionRecall.tokenLimit` | 1000 |
 
 Short-term token limits: `workingDays × 750` (calculated in `_calculate_token_limits()`).

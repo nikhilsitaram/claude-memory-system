@@ -93,6 +93,8 @@ def should_skip_message(content: str) -> bool:
         return True
     if "<command-name>" in content[:200]:
         return True
+    if "<local-command-caveat>" in content[:200]:
+        return True
     if "<system-reminder>" in content:
         return True
     if content.strip() == "[Request interrupted by user]":
