@@ -596,6 +596,7 @@ def print_success_message() -> None:
     print("  /settings   - View/modify memory settings & token usage")
     print("  /projects   - Manage projects (move, merge orphans, cleanup)")
     print("  /audit      - Audit long-term memory for stale or incorrect entries")
+    print("  /load-project-memory [name] - Load a project's LTM + STM on demand (useful in light mode)")
     print()
     print("Memory location: ~/.claude/memory/")
     print("  - global-long-term-memory.md  (loaded every session)")
