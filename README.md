@@ -48,7 +48,7 @@ The installer detects your Python command and configures hooks with absolute pat
 | `/recall [query]` | Search through all historical daily memory files |
 | `/settings` | View/modify memory settings and check token usage |
 | `/projects` | Manage project data — list status, merge orphans, cleanup stale entries |
-| `/load-project-memory [name]` | Inject a project's LTM + STM into the current session (useful in light mode or when switching projects) |
+| `/load-project-memory [name]` | Inject a project's LTM + STM into the current session, then report counts, date ranges, relevant entries, and a verdict (useful in light mode or when switching projects) |
 
 ## How It Works
 
