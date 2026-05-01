@@ -20,13 +20,17 @@ Inject a project's long-term memory and recent short-term history into the curre
 ## Instructions
 
 1. Parse the optional project name argument from the user's invocation.
-2. Run the loader script via Bash:
+2. Run the loader script via Bash. Use **one of the two forms below** — do not pass the literal string `<name>` as argv. Always quote the project name to prevent shell metacharacter interpretation:
 
    ```bash
-   python3 $HOME/.claude/scripts/load_memory.py --project-memory [name]
+   # No argument — uses cwd-based project detection
+   python3 $HOME/.claude/scripts/load_memory.py --project-memory
    ```
 
-   Omit `[name]` to use cwd-based detection.
+   ```bash
+   # Explicit project name (substitute the user's argument; keep it quoted)
+   python3 $HOME/.claude/scripts/load_memory.py --project-memory "swyfft"
+   ```
 
 3. The script prints a `<project-memory>...</project-memory>` block containing:
    - `## Project Long-Term Memory: <name>` (the project's LTM file)

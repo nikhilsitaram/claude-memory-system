@@ -1895,10 +1895,7 @@ class TestEmitProjectMemory:
         monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
         monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
         monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: current_project)
-        monkeypatch.setattr("load_memory.load_settings", lambda: {
-            **DEFAULT_SETTINGS,
-            "projectShortTerm": {"workingDays": 5, "tokenLimit": 3750},
-        })
+        monkeypatch.setattr("load_memory.load_settings", lambda: dict(DEFAULT_SETTINGS))
 
         out = io.StringIO()
         err = io.StringIO()
