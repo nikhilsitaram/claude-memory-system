@@ -17,7 +17,7 @@ claude-memory-system/
 │   ├── project_manager.py      # Project lifecycle management library
 │   ├── devtools.py             # Dev diagnostics + mark-routed dedup migration
 │   └── synthesis_cron.py       # Deferred synthesis runner (systemd timer entry point)
-├── skills/                     # /remember, /synthesize, /recall, /settings, /projects
+├── skills/                     # /remember, /synthesize, /recall, /settings, /projects, /audit, /load-project-memory
 ├── systemd/                    # Systemd user units for deferred synthesis
 ├── tests/                      # Unit tests
 └── templates/                  # Memory file templates + default settings.json
@@ -98,6 +98,8 @@ python3 ~/.claude/scripts/decay.py --dry-run # Test decay
 **Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles full memory to stdout for SessionStart hook injection. Output order: read instruction → timestamp → recall → global LTM → project LTM → project STM → global STM. When output exceeds ~10K chars, Claude Code saves it to a session-specific file and shows the path + 2KB preview; the read instruction in the first 2KB prompts Claude to read the full file.
 
 **Mode**: `mode: "full"` (default) emits all sections. `mode: "light"` emits only recall + global LTM, skipping project LTM/STM and global STM — for users who rely on Claude Code's native project-scoped memory and only want this system for cross-project memory plus last-session continuity.
+
+**On-demand project loading** (`emit_project_memory()` in `load_memory.py`, exposed via `--project-memory [name]` and the `/load-project-memory` skill): Emits project LTM + project STM for the cwd-detected project or an explicit name. Used to recover project context mid-session, primarily under `mode: "light"`. The skill instructs the agent to summarize counts/date ranges and surface relevant entries — not just dump them.
 
 **Recall** (`session_end_recall.py`): SessionEnd hook writes `pending-recall/{session_id}.md` for the next session. Each assistant message is per-message-truncated (head/tail split at `MAX_MESSAGE_LINES = 30`), then the budget is allocated 1/3 to oldest messages (head) and 2/3 to newest (tail). The latest message is force-included even if it alone overruns the tail allocation. When messages are skipped, a `... [N messages omitted] ...` marker is inserted between head and tail.
 

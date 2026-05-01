@@ -36,7 +36,25 @@ Inject a project's long-term memory and recent short-term history into the curre
    - `## Project Long-Term Memory: <name>` (the project's LTM file)
    - `## Project Short-Term Memory: <name>` (recent daily entries scoped to the project)
 
-4. The output flows directly into context — no further action is needed. Acknowledge briefly to the user that the project's memory has been loaded.
+4. The output flows directly into context. After it loads, **do not stop at "memory loaded"** — read it and report back to the user with the following structure:
+
+   **a. Counts and date ranges.** Count the number of memory entries (lines starting with `- `, including those nested under section headers) in each block, and find the oldest and newest dates. LTM entries are dated inline as `(YYYY-MM-DD)`; STM entries are grouped under `### YYYY-MM-DD` headers. Open with one line in this format:
+
+   > 5 days of STM memory loaded (20 entries, 2026-04-26 to 2026-04-30). 20 days of LTM memory loaded (50 entries, 2025-09-15 to 2026-04-30).
+
+   If a section is missing (LTM-only or STM-only output), only report the section that loaded.
+
+   **b. Relevance scan.** Review what's been discussed in the current session and pick out 3–5 specific memory entries that look most relevant — gotchas about files you're touching, prior design decisions on the same subsystem, patterns that contradict or confirm the current approach, etc. Quote them verbatim. If nothing stands out as relevant, say so — don't pad.
+
+   > Here are some selected memories which may be relevant to what we're working on:
+   > - (2026-02-04) [pattern] PreToolUse hooks for subagent permissions — ...
+   > - ...
+
+   **c. Verdict.** Close with one of:
+   - **Actionable suggestions** if memory reveals a conflict, missed gotcha, or better approach: state what to change and why, citing the memory entry.
+   - **Confirmation** if memory aligns with the current direction: "The memory confirms what we're doing — looks good."
+
+   Do not skip the verdict. The whole point of the skill is to surface what the user can't see.
 
 ## Notes
 
