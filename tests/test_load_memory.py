@@ -1871,5 +1871,122 @@ class TestMainOutputOrder:
         assert "## Long-Term Memory" not in output
 
 
+# =============================================================================
+# emit_project_memory Tests
+# =============================================================================
+
+
+class TestEmitProjectMemory:
+    """Verify the on-demand project memory emitter (used by /load-project-memory)."""
+
+    def _run(self, monkeypatch, *, project_ltm="", project_stm=None,
+             current_project=None, project_name_arg=None):
+        import io
+
+        from load_memory import emit_project_memory
+
+        project_stm = project_stm or []
+
+        monkeypatch.setattr("load_memory.load_project_memory", lambda name: (project_ltm, len(project_ltm)))
+        monkeypatch.setattr(
+            "load_memory.load_project_history",
+            lambda proj, days: (project_stm, sum(len(c) for _, c in project_stm)),
+        )
+        monkeypatch.setattr("load_memory.resolve_session_path", lambda p: p)
+        monkeypatch.setattr("load_memory.load_json_file", lambda *a, **kw: {})
+        monkeypatch.setattr("load_memory.find_current_project", lambda idx, pwd: current_project)
+        monkeypatch.setattr("load_memory.load_settings", lambda: {
+            **DEFAULT_SETTINGS,
+            "projectShortTerm": {"workingDays": 5, "tokenLimit": 3750},
+        })
+
+        out = io.StringIO()
+        err = io.StringIO()
+        monkeypatch.setattr("sys.stdout", out)
+        monkeypatch.setattr("sys.stderr", err)
+        rc = emit_project_memory(project_name_arg)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_explicit_name_emits_ltm_and_stm(self, monkeypatch):
+        rc, stdout, _ = self._run(
+            monkeypatch,
+            project_ltm="- (2026-01-01) [pattern] ltm-line",
+            project_stm=[("2026-04-21", "- [swyfft/implement] stm-line")],
+            project_name_arg="swyfft",
+        )
+        assert rc == 0
+        assert "<project-memory>" in stdout
+        assert stdout.rstrip().endswith("</project-memory>")
+        assert "Project: swyfft" in stdout
+        assert "## Project Long-Term Memory: swyfft" in stdout
+        assert "ltm-line" in stdout
+        assert "## Project Short-Term Memory: swyfft" in stdout
+        assert "2026-04-21" in stdout
+        assert "stm-line" in stdout
+
+    def test_uses_cwd_when_no_arg(self, monkeypatch):
+        rc, stdout, _ = self._run(
+            monkeypatch,
+            project_ltm="- (2026-01-01) [pattern] cwd-ltm",
+            current_project={"name": "cwdproject"},
+        )
+        assert rc == 0
+        assert "Project: cwdproject" in stdout
+        assert "cwd-ltm" in stdout
+
+    def test_no_project_detected_returns_error(self, monkeypatch):
+        rc, stdout, stderr = self._run(
+            monkeypatch,
+            current_project=None,
+        )
+        assert rc == 1
+        assert stdout == ""
+        assert "No project detected" in stderr
+
+    def test_empty_project_returns_error(self, monkeypatch):
+        rc, stdout, stderr = self._run(
+            monkeypatch,
+            project_name_arg="ghost",
+        )
+        assert rc == 1
+        assert stdout == ""
+        assert "No project memory found" in stderr
+        assert "ghost" in stderr
+
+    def test_emits_ltm_only(self, monkeypatch):
+        rc, stdout, _ = self._run(
+            monkeypatch,
+            project_ltm="- (2026-01-01) [pattern] only-ltm",
+            project_name_arg="proj",
+        )
+        assert rc == 0
+        assert "## Project Long-Term Memory: proj" in stdout
+        assert "only-ltm" in stdout
+        assert "## Project Short-Term Memory" not in stdout
+
+    def test_emits_stm_only(self, monkeypatch):
+        rc, stdout, _ = self._run(
+            monkeypatch,
+            project_stm=[("2026-04-21", "- [proj/implement] only-stm")],
+            project_name_arg="proj",
+        )
+        assert rc == 0
+        assert "## Project Short-Term Memory: proj" in stdout
+        assert "only-stm" in stdout
+        assert "## Project Long-Term Memory" not in stdout
+
+    def test_explicit_arg_overrides_cwd_project(self, monkeypatch):
+        """Passing a name should bypass cwd detection entirely."""
+        rc, stdout, _ = self._run(
+            monkeypatch,
+            project_ltm="- (2026-01-01) [pattern] arg-ltm",
+            project_name_arg="explicit",
+            current_project={"name": "shouldnotmatter"},
+        )
+        assert rc == 0
+        assert "Project: explicit" in stdout
+        assert "Project: shouldnotmatter" not in stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

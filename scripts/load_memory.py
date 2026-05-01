@@ -796,6 +796,73 @@ def write_synthesis_prompt(exclude_session_id: str | None = None) -> None:
         print(f"prompt_file={prompt_path}")
 
 
+def emit_project_memory(project_name_arg: str | None = None) -> int:
+    """Emit project LTM + project STM sections to stdout.
+
+    Used by the /load-project-memory skill to inject project-scoped memory
+    on demand mid-session (most useful in light mode, where these sections
+    are skipped at SessionStart).
+
+    Args:
+        project_name_arg: Explicit project name. If None, detect from cwd via
+            the projects index.
+
+    Returns:
+        Exit code (0 on success, 1 if requested project has no memory).
+    """
+    check_python_version()
+
+    settings = load_settings()
+    project_days = settings["projectShortTerm"]["workingDays"]
+
+    if project_name_arg:
+        project_name = project_name_arg
+        project = {"name": project_name}
+    else:
+        pwd = resolve_session_path(os.getcwd())
+        projects_index = load_json_file(get_projects_index_file(), {})
+        current_project = find_current_project(projects_index, pwd)
+        if not current_project:
+            print(
+                f"No project detected for cwd: {pwd}\n"
+                "Pass an explicit project name (e.g. /load-project-memory <name>).",
+                file=sys.stderr,
+            )
+            return 1
+        project = current_project
+        project_name = project.get("name", "")
+
+    project_content, _ = load_project_memory(project_name)
+    project_history, _ = load_project_history(project, project_days)
+
+    if not project_content and not project_history:
+        print(
+            f"No project memory found for: {project_name}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("<project-memory>")
+    print(f"Project: {project_name}")
+    print()
+
+    if project_content:
+        print(f"## Project Long-Term Memory: {project_name}")
+        print(project_content)
+        print()
+
+    if project_history:
+        print(f"## Project Short-Term Memory: {project_name}")
+        print()
+        for date, content in project_history:
+            print(f"### {date}")
+            print(content)
+            print()
+
+    print("</project-memory>")
+    return 0
+
+
 def main() -> None:
     """Main entry point - outputs memory context to stdout.
 
@@ -943,5 +1010,9 @@ if __name__ == "__main__":
         if len(sys.argv) > 3 and sys.argv[2] == "--exclude-session":
             exclude_id = sys.argv[3]
         write_synthesis_prompt(exclude_session_id=exclude_id)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--project-memory":
+        # --project-memory [name]: emit project LTM + project STM (for /load-project-memory skill)
+        name_arg = sys.argv[2] if len(sys.argv) > 2 else None
+        sys.exit(emit_project_memory(name_arg))
     else:
         main()

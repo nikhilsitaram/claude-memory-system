@@ -198,7 +198,7 @@ def link_skills(script_dir: Path) -> None:
     """Symlink skill directories to ~/.claude/skills/."""
     skills_dir = get_claude_dir() / "skills"
 
-    skills = ["remember", "synthesize", "recall", "settings", "projects", "audit"]
+    skills = ["remember", "synthesize", "recall", "settings", "projects", "audit", "load-project-memory"]
 
     for skill in skills:
         src_dir = script_dir / "skills" / skill
