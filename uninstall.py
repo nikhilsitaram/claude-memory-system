@@ -233,7 +233,13 @@ def purge_memory_data() -> None:
 
     removed = []
     for item in items_to_remove:
-        if item.exists():
+        # is_symlink() must be checked before is_dir(): is_dir() follows symlinks
+        # and rmtree() refuses to remove a symlink-to-directory. Skills and scripts
+        # are installed as symlinks by install.py.
+        if item.is_symlink():
+            item.unlink()
+            removed.append(str(item.relative_to(Path.home())))
+        elif item.exists():
             if item.is_dir():
                 shutil.rmtree(item)
             else:

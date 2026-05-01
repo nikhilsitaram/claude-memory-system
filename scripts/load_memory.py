@@ -808,7 +808,8 @@ def emit_project_memory(project_name_arg: str | None = None) -> int:
             the projects index.
 
     Returns:
-        Exit code (0 on success, 1 if requested project has no memory).
+        Exit code (0 on success, 1 on failure — either no project detected
+        for the cwd or no memory found for the requested project).
     """
     check_python_version()
 
