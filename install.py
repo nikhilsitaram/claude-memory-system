@@ -384,14 +384,14 @@ def remove_obsolete_hooks(settings: dict) -> dict:
     return settings
 
 
-def merge_hooks(settings: dict, uv_cmd: str) -> dict:
+def merge_hooks(settings: dict, uv_path: str) -> dict:
     """Merge memory system hooks into settings."""
     home = str(Path.home())
     scripts_dir = f"{home}/.claude/scripts"
     hooks_dir = f"{home}/.claude/hooks"
 
-    load_cmd = f"{uv_cmd} run {scripts_dir}/load_memory.py"
-    recall_cmd = f"{uv_cmd} run {scripts_dir}/session_end_recall.py"
+    load_cmd = f"{uv_path} run {scripts_dir}/load_memory.py"
+    recall_cmd = f"{uv_path} run {scripts_dir}/session_end_recall.py"
 
     hooks_to_add = {
         # PreToolUse hook auto-allows memory operations for subagents
@@ -546,7 +546,7 @@ def merge_permissions(settings: dict) -> dict:
     return settings
 
 
-def build_project_index(uv_cmd: str) -> None:
+def build_project_index(uv_path: str) -> None:
     """Build initial project index."""
     scripts_dir = get_claude_dir() / "scripts"
     indexing_script = scripts_dir / "indexing.py"
@@ -557,7 +557,7 @@ def build_project_index(uv_cmd: str) -> None:
 
     try:
         result = subprocess.run(
-            [uv_cmd, "run", str(indexing_script), "build-index"],
+            [uv_path, "run", str(indexing_script), "build-index"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -613,8 +613,8 @@ def main() -> int:
         return 1
 
     # Detect uv (required) for hooks and scheduled units
-    uv_cmd = detect_uv_command()
-    print(f"Using uv: {uv_cmd}")
+    uv_path = detect_uv_command()
+    print(f"Using uv: {uv_path}")
 
     # Get script directory
     script_dir = get_script_dir()
@@ -625,9 +625,9 @@ def main() -> int:
     # Link scripts, hooks, and skills (symlinks for auto-apply on repo changes)
     link_scripts(script_dir)
     if sys.platform == "darwin":
-        install_launchd_agent(uv_cmd)
+        install_launchd_agent(uv_path)
     else:
-        install_systemd_units(script_dir, uv_cmd)
+        install_systemd_units(script_dir, uv_path)
     link_hooks(script_dir)
     link_skills(script_dir)
     copy_templates(script_dir)
@@ -643,7 +643,7 @@ def main() -> int:
     settings = remove_obsolete_hooks(settings)
 
     # Add hooks
-    settings = merge_hooks(settings, uv_cmd)
+    settings = merge_hooks(settings, uv_path)
 
     # Add permissions
     settings = merge_permissions(settings)
@@ -655,7 +655,7 @@ def main() -> int:
     # Build project index
     print()
     print("Building project index...")
-    build_project_index(uv_cmd)
+    build_project_index(uv_path)
 
     # Success message
     print_success_message()

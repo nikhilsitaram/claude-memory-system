@@ -834,3 +834,43 @@ class TestInstallLaunchdAgent:
 
         output = capsys.readouterr().out
         assert "Warning: launchctl bootstrap failed" in output
+
+
+# ---------------------------------------------------------------------------
+# Repo-level constant consistency — guard against drift between
+# DEFAULT_SETTINGS and the files that get copied/installed verbatim.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultsConsistency:
+    """Catch drift like the kind that motivated this test class:
+    DEFAULT_SETTINGS bumped to 2h, but templates/settings.json still said 1
+    and systemd .timer still fired hourly.
+    """
+
+    @staticmethod
+    def _repo_root():
+        from pathlib import Path
+        return Path(__file__).parent.parent
+
+    def test_template_settings_match_default_intervalhours(self):
+        """templates/settings.json (copied to ~/.claude/memory/settings.json
+        on first install) must agree with DEFAULT_SETTINGS so fresh installs
+        and the launchd StartInterval don't disagree."""
+        template = json.loads((self._repo_root() / "templates" / "settings.json").read_text())
+        expected = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+        assert template["synthesis"]["intervalHours"] == expected
+        # /settings reset reads from this _defaults block
+        assert template["_defaults"]["synthesis.intervalHours"] == expected
+
+    def test_systemd_timer_cadence_matches_default_intervalhours(self):
+        """systemd .timer's OnCalendar hour-step must agree with the launchd
+        StartInterval (which is derived from DEFAULT_SETTINGS), otherwise
+        Linux and macOS users get asymmetric cadences for the same default."""
+        import re
+        timer = (self._repo_root() / "systemd" / "claude-memory-synthesis.timer").read_text()
+        match = re.search(r"OnCalendar=\*-\*-\* 0/(\d+):00:00", timer)
+        assert match is not None, "OnCalendar line not found or malformed"
+        hour_step = int(match.group(1))
+        expected = int(DEFAULT_SETTINGS["synthesis"]["intervalHours"])
+        assert hour_step == expected
