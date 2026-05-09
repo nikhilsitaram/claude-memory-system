@@ -144,7 +144,7 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `globalLongTerm.tokenLimit` | 3,000 |
 | `projectShortTerm.workingDays` | 5 |
 | `projectLongTerm.tokenLimit` | 3,000 |
-| `synthesis.intervalHours` | 0.5 |
+| `synthesis.intervalHours` | 2 |
 | `synthesis.model` | sonnet |
 | `synthesis.minSessionMessages` | 5 |
 | `decay.ageDays` | 30 |

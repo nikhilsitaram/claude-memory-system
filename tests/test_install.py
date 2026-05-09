@@ -315,10 +315,9 @@ class TestInstallSystemdUnits:
         systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
-             mock.patch("install.shutil.which", return_value="/home/user/.local/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         installed = (systemd_user_dir / "claude-memory-synthesis.service").read_text()
         assert "__UV_PATH__" not in installed
@@ -335,10 +334,9 @@ class TestInstallSystemdUnits:
         systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
-             mock.patch("install.shutil.which", return_value="/home/user/.local/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         assert (systemd_user_dir / "claude-memory-synthesis.timer").exists()
         assert (systemd_user_dir / "claude-memory-synthesis.timer").read_text() == "[Timer]\nOnCalendar=*:0/15"
@@ -352,10 +350,9 @@ class TestInstallSystemdUnits:
         (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]")
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
-             mock.patch("install.shutil.which", return_value="/home/user/.local/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         # Expect 3 calls: version check, daemon-reload, enable --now
         assert mock_run.call_count == 3
@@ -376,7 +373,7 @@ class TestInstallSystemdUnits:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         output = capsys.readouterr().out
         assert "systemctl not available" in output
@@ -391,7 +388,7 @@ class TestInstallSystemdUnits:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run", side_effect=subprocess.TimeoutExpired("systemctl", 5)):
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         output = capsys.readouterr().out
         assert "systemctl not available" in output
@@ -402,10 +399,9 @@ class TestInstallSystemdUnits:
         # No systemd dir at all
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
-             mock.patch("install.shutil.which", return_value="/home/user/.local/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir, "uv")
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         # Systemd user dir created (mkdir) but no files copied
         systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
@@ -764,10 +760,9 @@ class TestInstallLaunchdAgent:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("uv")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
         assert plist_path.exists()
@@ -786,10 +781,9 @@ class TestInstallLaunchdAgent:
         """Calls launchctl bootout (cleanup) then bootstrap (load)."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("uv")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         calls = mock_run.call_args_list
         assert len(calls) == 2
@@ -804,23 +798,21 @@ class TestInstallLaunchdAgent:
         """Creates ~/Library/Logs/claude-memory/ for output."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("uv")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         assert (tmp_path / "Library" / "Logs" / "claude-memory").is_dir()
 
-    def test_uses_resolved_uv_path(self, tmp_path):
-        """ProgramArguments uses shutil.which resolved path for uv."""
+    def test_uses_passed_uv_path(self, tmp_path):
+        """ProgramArguments uses the absolute uv path passed in."""
         import plistlib
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("uv")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
         with open(plist_path, "rb") as f:
@@ -832,14 +824,13 @@ class TestInstallLaunchdAgent:
         """Prints warning if launchctl bootstrap fails."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"), \
              mock.patch("install.subprocess.run") as mock_run:
             # bootout succeeds, bootstrap fails
             mock_run.side_effect = [
                 mock.Mock(returncode=0),
                 mock.Mock(returncode=1),
             ]
-            install.install_launchd_agent("uv")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         output = capsys.readouterr().out
         assert "Warning: launchctl bootstrap failed" in output

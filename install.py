@@ -241,8 +241,12 @@ def copy_templates(script_dir: Path) -> None:
 
 
 
-def install_systemd_units(script_dir: Path, uv_cmd: str) -> None:
-    """Install systemd user units for deferred synthesis."""
+def install_systemd_units(script_dir: Path, uv_path: str) -> None:
+    """Install systemd user units for deferred synthesis.
+
+    `uv_path` must be an absolute path (as returned by `detect_uv_command`)
+    so the templated .service file gets a self-contained ExecStart.
+    """
     systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
 
     # Check if systemctl is available
@@ -254,8 +258,6 @@ def install_systemd_units(script_dir: Path, uv_cmd: str) -> None:
         return
 
     systemd_user_dir.mkdir(parents=True, exist_ok=True)
-
-    uv_path = shutil.which(uv_cmd) or uv_cmd
 
     units = ["claude-memory-synthesis.service", "claude-memory-synthesis.timer"]
     for unit in units:
@@ -275,8 +277,12 @@ def install_systemd_units(script_dir: Path, uv_cmd: str) -> None:
     print("Installed systemd units (timer enabled)")
 
 
-def install_launchd_agent(uv_cmd: str) -> None:
-    """Install a launchd user agent for periodic synthesis on macOS."""
+def install_launchd_agent(uv_path: str) -> None:
+    """Install a launchd user agent for periodic synthesis on macOS.
+
+    `uv_path` must be an absolute path (as returned by `detect_uv_command`)
+    since launchd has minimal default PATH and won't find `uv` by name.
+    """
     import plistlib
 
     launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
@@ -287,9 +293,6 @@ def install_launchd_agent(uv_cmd: str) -> None:
     log_dir = Path.home() / "Library" / "Logs" / "claude-memory"
     log_dir.mkdir(parents=True, exist_ok=True)
     home = str(Path.home())
-
-    # Resolve full path (launchd has minimal default PATH)
-    uv_path = shutil.which(uv_cmd) or uv_cmd
 
     plist = {
         "Label": LAUNCHD_LABEL,
