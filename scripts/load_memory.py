@@ -569,7 +569,7 @@ Every output uses ===PROJECT:name=== blocks and ends with ===END===. Nothing els
 Only use the Write and Bash tools — no other tools.
 
 1. Write(`{output_filename}`, <your structured output>)
-2. Bash: `uv run $HOME/.claude/scripts/synthesis.py apply {output_filename} --extracts {extracts_arg}`
+2. Bash: `uv run --no-project $HOME/.claude/scripts/synthesis.py apply {output_filename} --extracts {extracts_arg}`
 
 ## Synthesis Instructions
 

@@ -24,12 +24,12 @@ Inject a project's long-term memory and recent short-term history into the curre
 
    ```bash
    # No argument — uses cwd-based project detection
-   uv run $HOME/.claude/scripts/load_memory.py --project-memory
+   uv run --no-project $HOME/.claude/scripts/load_memory.py --project-memory
    ```
 
    ```bash
    # Explicit project name (substitute the user's argument; keep it quoted)
-   uv run $HOME/.claude/scripts/load_memory.py --project-memory "swyfft"
+   uv run --no-project $HOME/.claude/scripts/load_memory.py --project-memory "swyfft"
    ```
 
 3. The script prints a `<project-memory>...</project-memory>` block containing:

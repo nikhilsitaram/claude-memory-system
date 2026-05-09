@@ -308,7 +308,7 @@ class TestInstallSystemdUnits:
         systemd_src = script_dir / "systemd"
         systemd_src.mkdir(parents=True)
         (systemd_src / "claude-memory-synthesis.service").write_text(
-            "[Service]\nExecStart=__UV_PATH__ run %h/.claude/scripts/synthesis_cron.py"
+            "[Service]\nExecStart=__UV_PATH__ run --no-project %h/.claude/scripts/synthesis_cron.py"
         )
         (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]\nOnCalendar=*:0/15")
 
@@ -321,7 +321,7 @@ class TestInstallSystemdUnits:
 
         installed = (systemd_user_dir / "claude-memory-synthesis.service").read_text()
         assert "__UV_PATH__" not in installed
-        assert "ExecStart=/home/user/.local/bin/uv run" in installed
+        assert "ExecStart=/home/user/.local/bin/uv run --no-project" in installed
 
     def test_copies_timer_file(self, tmp_path):
         """Timer unit is installed verbatim to ~/.config/systemd/user/."""
@@ -527,6 +527,46 @@ class TestSessionEndHook:
         assert not any(c.startswith("python3 ") for c in commands)
         # All four matchers (startup/resume/clear/compact) added with uv run
         assert sum(1 for c in commands if "uv run" in c and "load_memory.py" in c) == 4
+
+    def test_migration_preserves_user_hook_bundled_with_memory_hook(self):
+        """A user-added hook in the same matcher entry as a memory-script hook
+        must survive the migration. The migration filters at the inner-hook
+        level — entry-level filtering would silently delete the user's hook."""
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [
+                            # User's hook — has nothing to do with the memory system.
+                            {
+                                "type": "command",
+                                "command": "echo hello from user",
+                                "timeout": 5,
+                            },
+                            # Stale memory-script invocation that migration must drop.
+                            {
+                                "type": "command",
+                                "command": "python3 /home/u/.claude/scripts/load_memory.py",
+                                "timeout": 30,
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "uv")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["SessionStart"]
+            for h in entry.get("hooks", [])
+        ]
+        # User's hook is intact.
+        assert any("echo hello from user" in c for c in commands)
+        # Old python3-based memory hook is gone.
+        assert not any("python3" in c and "load_memory.py" in c for c in commands)
+        # New uv-based memory hook(s) added.
+        assert any("uv run" in c and "load_memory.py" in c for c in commands)
 
     def test_migration_removes_old_systemctl_hook(self):
         """On macOS, old systemctl hook is replaced with launchctl."""
@@ -773,9 +813,9 @@ class TestInstallLaunchdAgent:
         assert plist["Label"] == install.LAUNCHD_LABEL
         assert plist["StartInterval"] == int(DEFAULT_SETTINGS["synthesis"]["intervalHours"] * 3600)
         assert plist["EnvironmentVariables"]["CLAUDECODE"] == ""
-        # ProgramArguments = [uv_path, "run", script_path]
-        assert plist["ProgramArguments"][1] == "run"
-        assert "synthesis_cron.py" in plist["ProgramArguments"][2]
+        # ProgramArguments = [uv_path, "run", "--no-project", script_path]
+        assert plist["ProgramArguments"][1:3] == ["run", "--no-project"]
+        assert "synthesis_cron.py" in plist["ProgramArguments"][3]
 
     def test_calls_bootout_then_bootstrap(self, tmp_path):
         """Calls launchctl bootout (cleanup) then bootstrap (load)."""
@@ -818,7 +858,7 @@ class TestInstallLaunchdAgent:
         with open(plist_path, "rb") as f:
             plist = plistlib.load(f)
         assert plist["ProgramArguments"][0] == "/opt/homebrew/bin/uv"
-        assert plist["ProgramArguments"][1] == "run"
+        assert plist["ProgramArguments"][1:3] == ["run", "--no-project"]
 
     def test_warns_on_bootstrap_failure(self, tmp_path, capsys):
         """Prints warning if launchctl bootstrap fails."""

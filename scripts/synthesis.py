@@ -8,8 +8,8 @@ Parses structured output from the synthesis subagent and applies results:
 - Marks [routed] entries in daily files
 - Runs post-processing (state pruning, decay, validation, timestamp)
 
-Usage:
-    uv run synthesis.py apply <output_file> --extracts <path1> [<path2>...]
+Usage (after install — these scripts live in ~/.claude/scripts/):
+    uv run --no-project $HOME/.claude/scripts/synthesis.py apply <output_file> --extracts <path1> [<path2>...]
 
 Requirements: Python 3.9+ (uv-managed)
 """

@@ -296,7 +296,8 @@ def install_launchd_agent(uv_path: str) -> None:
 
     plist = {
         "Label": LAUNCHD_LABEL,
-        "ProgramArguments": [uv_path, "run", str(scripts_dir / "synthesis_cron.py")],
+        # See merge_hooks for why `--no-project` matters.
+        "ProgramArguments": [uv_path, "run", "--no-project", str(scripts_dir / "synthesis_cron.py")],
         "StartInterval": int(DEFAULT_SETTINGS["synthesis"]["intervalHours"] * 3600),
         "StandardOutPath": str(log_dir / "synthesis.log"),
         "StandardErrorPath": str(log_dir / "synthesis.err"),
@@ -390,8 +391,13 @@ def merge_hooks(settings: dict, uv_path: str) -> dict:
     scripts_dir = f"{home}/.claude/scripts"
     hooks_dir = f"{home}/.claude/hooks"
 
-    load_cmd = f"{uv_path} run {scripts_dir}/load_memory.py"
-    recall_cmd = f"{uv_path} run {scripts_dir}/session_end_recall.py"
+    # `--no-project` is critical: without it, `uv run` walks up from the
+    # current working directory looking for a pyproject.toml. When a hook
+    # fires while Claude Code is open in a Python project, uv would
+    # create a `.venv` and sync that project's dependencies as a side
+    # effect of every memory hook. The flag pins uv to an ephemeral env.
+    load_cmd = f"{uv_path} run --no-project {scripts_dir}/load_memory.py"
+    recall_cmd = f"{uv_path} run --no-project {scripts_dir}/session_end_recall.py"
 
     hooks_to_add = {
         # PreToolUse hook auto-allows memory operations for subagents
@@ -462,37 +468,27 @@ def merge_hooks(settings: dict, uv_path: str) -> dict:
     if "hooks" not in settings:
         settings["hooks"] = {}
 
-    # Migration: drop every existing hook entry that references our memory
-    # scripts so we can re-add canonical entries below. This is what keeps
-    # repeat installs idempotent — without it, prior `python3 …` invocations
-    # or differently-flagged `uv run …` invocations accumulate as duplicates.
-    memory_scripts = ("load_memory.py", "session_end_recall.py")
+    # Migration: strip every existing inner hook that references our memory
+    # scripts or the synthesis scheduler before re-adding canonical entries.
+    # Filter at the inner-hook level (not the entry level) so a user-added
+    # hook that happens to share a matcher with one of ours survives.
+    # `memory-synthesis` matches both systemd and launchd commands and
+    # subsumes the prior platform-migration pass.
+    memory_substrings = ("load_memory.py", "session_end_recall.py", "memory-synthesis")
     for event in ("SessionStart", "SessionEnd", "PreCompact"):
         if event not in settings.get("hooks", {}):
             continue
+        for entry in settings["hooks"][event]:
+            entry["hooks"] = [
+                h for h in entry.get("hooks", [])
+                if not any(s in h.get("command", "") for s in memory_substrings)
+            ]
+        # Drop entries left empty after stripping
         settings["hooks"][event] = [
-            entry for entry in settings["hooks"][event]
-            if not any(
-                any(s in h.get("command", "") for s in memory_scripts)
-                for h in entry.get("hooks", [])
-            )
+            entry for entry in settings["hooks"][event] if entry.get("hooks")
         ]
         if not settings["hooks"][event]:
             del settings["hooks"][event]
-
-    # Remove existing synthesis SessionEnd/PreCompact hooks (handles platform migration)
-    # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
-    for event in ("SessionEnd", "PreCompact"):
-        if event in settings.get("hooks", {}):
-            settings["hooks"][event] = [
-                entry for entry in settings["hooks"][event]
-                if not any(
-                    "memory-synthesis" in h.get("command", "")
-                    for h in entry.get("hooks", [])
-                )
-            ]
-            if not settings["hooks"][event]:
-                del settings["hooks"][event]
 
     for event, new_entries in hooks_to_add.items():
         if event not in settings["hooks"]:
@@ -557,7 +553,7 @@ def build_project_index(uv_path: str) -> None:
 
     try:
         result = subprocess.run(
-            [uv_path, "run", str(indexing_script), "build-index"],
+            [uv_path, "run", "--no-project", str(indexing_script), "build-index"],
             capture_output=True,
             text=True,
             timeout=30,

@@ -10,9 +10,9 @@ Invoked by:
 - launchd agent (macOS): com.claude.memory-synthesis
 - SessionEnd hook: fires on every session exit
 
-Usage:
-    uv run synthesis_cron.py           # Normal run (checks schedule)
-    uv run synthesis_cron.py --force   # Skip schedule check
+Usage (after install — these scripts live in ~/.claude/scripts/):
+    uv run --no-project $HOME/.claude/scripts/synthesis_cron.py           # Normal run (checks schedule)
+    uv run --no-project $HOME/.claude/scripts/synthesis_cron.py --force   # Skip schedule check
 """
 
 import argparse

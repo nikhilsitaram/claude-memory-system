@@ -47,13 +47,15 @@ claude-memory-system/
 Tests live in `tests/test_<module>.py` matching the script they test.
 
 ```bash
-uv run -m pytest tests/ -q                  # Run all (do this first)
-uv run -m pytest tests/ -v                  # Verbose for debugging
-uv run install.py                           # Apply changes
-uv run ~/.claude/scripts/load_memory.py     # Test memory loading
-uv run ~/.claude/scripts/indexing.py list-recent  # Test session listing
-uv run ~/.claude/scripts/decay.py --dry-run # Test decay
+uv run --with pytest -m pytest tests/ -q                          # Run all (do this first)
+uv run --with pytest -m pytest tests/ -v                          # Verbose for debugging
+uv run install.py                                                  # Apply changes
+uv run --no-project ~/.claude/scripts/load_memory.py               # Test memory loading
+uv run --no-project ~/.claude/scripts/indexing.py list-recent      # Test session listing
+uv run --no-project ~/.claude/scripts/decay.py --dry-run           # Test decay
 ```
+
+**`--no-project`** is required for any `uv run` that targets a script outside the repo (the installed scripts under `~/.claude/scripts/`). Without it, uv discovers a pyproject.toml from the current working directory and creates a `.venv` there as a side effect. The hooks, launchd ProgramArguments, and systemd ExecStart all use `--no-project` for the same reason.
 
 **Conventions:**
 - Class per function/feature: `class TestFunctionName`

@@ -4,10 +4,10 @@ Developer tools for Claude Code Memory System.
 
 Dev diagnostics and mark-routed dedup migration. Installed to ~/.claude/scripts/ via symlink.
 
-Usage:
-    uv run scripts/devtools.py verify-install [--mode all|install-only|verify-only|smoke-test]
-    uv run scripts/devtools.py memory-status [--mode all|pending|tokens|synthesis|decay|daily]
-    uv run scripts/devtools.py extract-debug [DAY] [--mode all|sessions|extract|state|content]
+Usage (after install — these scripts live in ~/.claude/scripts/):
+    uv run --no-project $HOME/.claude/scripts/devtools.py verify-install [--mode all|install-only|verify-only|smoke-test]
+    uv run --no-project $HOME/.claude/scripts/devtools.py memory-status [--mode all|pending|tokens|synthesis|decay|daily]
+    uv run --no-project $HOME/.claude/scripts/devtools.py extract-debug [DAY] [--mode all|sessions|extract|state|content]
 
 Requirements: Python 3.9+ (uv-managed)
 """
