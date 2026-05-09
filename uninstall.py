@@ -8,10 +8,10 @@ This script:
 3. Optionally deletes all memory data with --purge flag
 
 Usage:
-    python3 uninstall.py           # Remove hooks/permissions, keep data
-    python3 uninstall.py --purge   # Remove everything including memory data
+    uv run uninstall.py           # Remove hooks/permissions, keep data
+    uv run uninstall.py --purge   # Remove everything including memory data
 
-Requirements: Python 3.9+
+Requirements: Python 3.9+ (uninstaller), uv (https://docs.astral.sh/uv/)
 """
 
 import argparse
@@ -268,7 +268,7 @@ def print_cleanup_instructions() -> None:
     print("Memory data preserved at: ~/.claude/memory/")
     print()
     print("To fully remove all files, run:")
-    print("  python3 uninstall.py --purge")
+    print("  uv run uninstall.py --purge")
     print()
     print("Or manually:")
     print()

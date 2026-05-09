@@ -9,9 +9,9 @@ Parses structured output from the synthesis subagent and applies results:
 - Runs post-processing (state pruning, decay, validation, timestamp)
 
 Usage:
-    python3 synthesis.py apply <output_file> --extracts <path1> [<path2>...]
+    uv run synthesis.py apply <output_file> --extracts <path1> [<path2>...]
 
-Requirements: Python 3.9+
+Requirements: Python 3.9+ (uv-managed)
 """
 
 import argparse

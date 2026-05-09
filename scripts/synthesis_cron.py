@@ -11,8 +11,8 @@ Invoked by:
 - SessionEnd hook: fires on every session exit
 
 Usage:
-    python3 synthesis_cron.py           # Normal run (checks schedule)
-    python3 synthesis_cron.py --force   # Skip schedule check
+    uv run synthesis_cron.py           # Normal run (checks schedule)
+    uv run synthesis_cron.py --force   # Skip schedule check
 """
 
 import argparse

@@ -26,7 +26,7 @@ View, modify, and analyze the memory system configuration.
 
 Run the token usage script and display results:
 ```bash
-python3 $HOME/.claude/scripts/token_usage.py
+uv run $HOME/.claude/scripts/token_usage.py
 ```
 
 Display as a usage table with ~Tokens, Limit, % Used, and status indicator (within limit vs over limit).

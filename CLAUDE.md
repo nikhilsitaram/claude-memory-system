@@ -47,12 +47,12 @@ claude-memory-system/
 Tests live in `tests/test_<module>.py` matching the script they test.
 
 ```bash
-python3 -m pytest tests/ -q                  # Run all (do this first)
-python3 -m pytest tests/ -v                  # Verbose for debugging
-python3 install.py                           # Apply changes
-python3 ~/.claude/scripts/load_memory.py     # Test memory loading
-python3 ~/.claude/scripts/indexing.py list-recent  # Test session listing
-python3 ~/.claude/scripts/decay.py --dry-run # Test decay
+uv run -m pytest tests/ -q                  # Run all (do this first)
+uv run -m pytest tests/ -v                  # Verbose for debugging
+uv run install.py                           # Apply changes
+uv run ~/.claude/scripts/load_memory.py     # Test memory loading
+uv run ~/.claude/scripts/indexing.py list-recent  # Test session listing
+uv run ~/.claude/scripts/decay.py --dry-run # Test decay
 ```
 
 **Conventions:**

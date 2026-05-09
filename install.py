@@ -3,20 +3,19 @@
 Cross-platform installer for Claude Code Memory System.
 
 This script:
-1. Checks Python version (requires 3.9+)
-2. Detects available Python command (python3 vs python)
+1. Checks Python version (requires 3.9+) for the installer itself
+2. Detects `uv` (required — used to run all hook/script commands)
 3. Backs up existing settings.json
 4. Creates directory structure
 5. Symlinks scripts, hooks, and skills (auto-applies repo changes)
-6. Merges hooks into settings.json (with absolute paths)
+6. Merges hooks into settings.json with `uv run` invocations
 7. Adds permissions
 8. Builds project index
 
 Usage:
-    python3 install.py
-    python install.py
+    uv run install.py
 
-Requirements: Python 3.9+
+Requirements: Python 3.9+ (installer), uv (https://docs.astral.sh/uv/)
 """
 
 import os
@@ -52,33 +51,25 @@ def check_python_version() -> None:
         sys.exit(1)
 
 
-def detect_python_command() -> str:
+def detect_uv_command() -> str:
     """
-    Detect which Python command to use in hooks.
+    Locate the `uv` executable. Exits with an install hint if missing.
 
-    Checks python3 first (preferred on Unix), then python.
-    Returns the command that points to Python 3.9+.
+    Returns the absolute path to `uv` so hooks and launchd/systemd units
+    don't depend on PATH at trigger time.
     """
-    for cmd in ["python3", "python"]:
-        try:
-            result = subprocess.run(
-                [cmd, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                version_str = result.stdout.strip()
-                parts = version_str.split(".")
-                if len(parts) >= 2:
-                    major, minor = int(parts[0]), int(parts[1])
-                    if major >= 3 and minor >= 9:
-                        return cmd
-        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-            continue
+    uv_path = shutil.which("uv")
+    if uv_path:
+        return uv_path
 
-    # Fall back to current executable
-    return sys.executable
+    print("Error: `uv` not found on PATH.")
+    print()
+    print("This installer uses uv to manage Python for all hooks and scripts.")
+    print("Install uv: https://docs.astral.sh/uv/getting-started/installation/")
+    print()
+    print("Quick install:")
+    print("  curl -LsSf https://astral.sh/uv/install.sh | sh")
+    sys.exit(1)
 
 
 def get_script_dir() -> Path:
@@ -250,7 +241,7 @@ def copy_templates(script_dir: Path) -> None:
 
 
 
-def install_systemd_units(script_dir: Path) -> None:
+def install_systemd_units(script_dir: Path, uv_cmd: str) -> None:
     """Install systemd user units for deferred synthesis."""
     systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
 
@@ -264,12 +255,15 @@ def install_systemd_units(script_dir: Path) -> None:
 
     systemd_user_dir.mkdir(parents=True, exist_ok=True)
 
+    uv_path = shutil.which(uv_cmd) or uv_cmd
+
     units = ["claude-memory-synthesis.service", "claude-memory-synthesis.timer"]
     for unit in units:
         src = script_dir / "systemd" / unit
         if src.exists():
             dest = systemd_user_dir / unit
-            shutil.copy2(src, dest)
+            content = src.read_text(encoding="utf-8").replace("__UV_PATH__", uv_path)
+            dest.write_text(content, encoding="utf-8")
 
     # Reload and enable timer
     subprocess.run(["systemctl", "--user", "daemon-reload"],
@@ -281,7 +275,7 @@ def install_systemd_units(script_dir: Path) -> None:
     print("Installed systemd units (timer enabled)")
 
 
-def install_launchd_agent(python_cmd: str) -> None:
+def install_launchd_agent(uv_cmd: str) -> None:
     """Install a launchd user agent for periodic synthesis on macOS."""
     import plistlib
 
@@ -295,11 +289,11 @@ def install_launchd_agent(python_cmd: str) -> None:
     home = str(Path.home())
 
     # Resolve full path (launchd has minimal default PATH)
-    python_path = shutil.which(python_cmd) or python_cmd
+    uv_path = shutil.which(uv_cmd) or uv_cmd
 
     plist = {
         "Label": LAUNCHD_LABEL,
-        "ProgramArguments": [python_path, str(scripts_dir / "synthesis_cron.py")],
+        "ProgramArguments": [uv_path, "run", str(scripts_dir / "synthesis_cron.py")],
         "StartInterval": int(DEFAULT_SETTINGS["synthesis"]["intervalHours"] * 3600),
         "StandardOutPath": str(log_dir / "synthesis.log"),
         "StandardErrorPath": str(log_dir / "synthesis.err"),
@@ -387,11 +381,14 @@ def remove_obsolete_hooks(settings: dict) -> dict:
     return settings
 
 
-def merge_hooks(settings: dict, python_cmd: str) -> dict:
+def merge_hooks(settings: dict, uv_cmd: str) -> dict:
     """Merge memory system hooks into settings."""
     home = str(Path.home())
     scripts_dir = f"{home}/.claude/scripts"
     hooks_dir = f"{home}/.claude/hooks"
+
+    load_cmd = f"{uv_cmd} run {scripts_dir}/load_memory.py"
+    recall_cmd = f"{uv_cmd} run {scripts_dir}/session_end_recall.py"
 
     hooks_to_add = {
         # PreToolUse hook auto-allows memory operations for subagents
@@ -410,45 +407,16 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
         ],
         "SessionStart": [
             {
-                "matcher": "startup",
+                "matcher": matcher,
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/load_memory.py",
+                        "command": load_cmd,
                         "timeout": 30,
                     }
                 ],
-            },
-            {
-                "matcher": "resume",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/load_memory.py",
-                        "timeout": 30,
-                    }
-                ],
-            },
-            {
-                "matcher": "clear",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/load_memory.py",
-                        "timeout": 30,
-                    }
-                ],
-            },
-            {
-                "matcher": "compact",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/load_memory.py",
-                        "timeout": 30,
-                    }
-                ],
-            },
+            }
+            for matcher in ("startup", "resume", "clear", "compact")
         ],
         # SessionEnd: recall writer first, then deferred synthesis trigger
         "SessionEnd": [
@@ -457,7 +425,7 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/session_end_recall.py",
+                        "command": recall_cmd,
                         "timeout": 10,
                     },
                     {
@@ -475,7 +443,7 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{python_cmd} {scripts_dir}/session_end_recall.py",
+                        "command": recall_cmd,
                         "timeout": 10,
                     },
                     {
@@ -490,6 +458,24 @@ def merge_hooks(settings: dict, python_cmd: str) -> dict:
 
     if "hooks" not in settings:
         settings["hooks"] = {}
+
+    # Migration: drop every existing hook entry that references our memory
+    # scripts so we can re-add canonical entries below. This is what keeps
+    # repeat installs idempotent — without it, prior `python3 …` invocations
+    # or differently-flagged `uv run …` invocations accumulate as duplicates.
+    memory_scripts = ("load_memory.py", "session_end_recall.py")
+    for event in ("SessionStart", "SessionEnd", "PreCompact"):
+        if event not in settings.get("hooks", {}):
+            continue
+        settings["hooks"][event] = [
+            entry for entry in settings["hooks"][event]
+            if not any(
+                any(s in h.get("command", "") for s in memory_scripts)
+                for h in entry.get("hooks", [])
+            )
+        ]
+        if not settings["hooks"][event]:
+            del settings["hooks"][event]
 
     # Remove existing synthesis SessionEnd/PreCompact hooks (handles platform migration)
     # Match both systemd ("claude-memory-synthesis") and launchd ("com.claude.memory-synthesis")
@@ -557,7 +543,7 @@ def merge_permissions(settings: dict) -> dict:
     return settings
 
 
-def build_project_index(python_cmd: str) -> None:
+def build_project_index(uv_cmd: str) -> None:
     """Build initial project index."""
     scripts_dir = get_claude_dir() / "scripts"
     indexing_script = scripts_dir / "indexing.py"
@@ -568,7 +554,7 @@ def build_project_index(python_cmd: str) -> None:
 
     try:
         result = subprocess.run(
-            [python_cmd, str(indexing_script), "build-index"],
+            [uv_cmd, "run", str(indexing_script), "build-index"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -623,9 +609,9 @@ def main() -> int:
         print("Run Claude Code at least once before installing the memory system.")
         return 1
 
-    # Detect Python command for hooks
-    python_cmd = detect_python_command()
-    print(f"Using Python command: {python_cmd}")
+    # Detect uv (required) for hooks and scheduled units
+    uv_cmd = detect_uv_command()
+    print(f"Using uv: {uv_cmd}")
 
     # Get script directory
     script_dir = get_script_dir()
@@ -636,9 +622,9 @@ def main() -> int:
     # Link scripts, hooks, and skills (symlinks for auto-apply on repo changes)
     link_scripts(script_dir)
     if sys.platform == "darwin":
-        install_launchd_agent(python_cmd)
+        install_launchd_agent(uv_cmd)
     else:
-        install_systemd_units(script_dir)
+        install_systemd_units(script_dir, uv_cmd)
     link_hooks(script_dir)
     link_skills(script_dir)
     copy_templates(script_dir)
@@ -654,7 +640,7 @@ def main() -> int:
     settings = remove_obsolete_hooks(settings)
 
     # Add hooks
-    settings = merge_hooks(settings, python_cmd)
+    settings = merge_hooks(settings, uv_cmd)
 
     # Add permissions
     settings = merge_permissions(settings)
@@ -666,7 +652,7 @@ def main() -> int:
     # Build project index
     print()
     print("Building project index...")
-    build_project_index(python_cmd)
+    build_project_index(uv_cmd)
 
     # Success message
     print_success_message()
