@@ -6,11 +6,11 @@ Processes long-term memory files and:
 1. Archives learnings older than decay.ageDays (default: 30)
 2. Purges archive entries older than decay.archiveRetentionDays (default: 365)
 
-Usage:
-    python decay.py              # Run decay on all memory files
-    python decay.py --dry-run    # Show what would be archived/purged
+Usage (after install — these scripts live in ~/.claude/scripts/):
+    uv run --no-project $HOME/.claude/scripts/decay.py              # Run decay on all memory files
+    uv run --no-project $HOME/.claude/scripts/decay.py --dry-run    # Show what would be archived/purged
 
-Requirements: Python 3.9+
+Requirements: Python 3.9+ (uv-managed)
 """
 
 import argparse

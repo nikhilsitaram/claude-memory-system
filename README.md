@@ -14,30 +14,30 @@ A markdown-based memory system for Claude Code that persists context across sess
 - **Error surfacing**: Synthesis failures logged and surfaced as alerts on next session start
 - **Configurable**: Token budgets, working days, synthesis scheduling, and decay via settings.json
 - **Manual tools**: `/remember` for notes, `/recall` for historical search, `/synthesize` for on-demand processing
-- **Cross-platform**: Works on Windows, macOS, and Linux (Python 3.9+)
+- **Cross-platform**: Works on Windows, macOS, and Linux (uv-managed Python)
 
 ## Installation
 
 ```bash
 git clone https://github.com/nikhilsitaram/claude-memory-system.git
 cd claude-memory-system
-python3 install.py    # or: python install.py
+uv run install.py
 ```
 
 Start a new Claude Code session to activate the memory system.
 
 ## Requirements
 
-- **Python 3.9+**
+- **uv** — install from https://docs.astral.sh/uv/getting-started/installation/ (manages the Python interpreter for all hooks and scripts)
 - **Claude Code CLI** — must be installed and run at least once (`~/.claude` must exist)
 
 | Platform | Notes |
 |----------|-------|
-| **Linux** | Fully supported. Use `python3 install.py`. |
-| **macOS** | Fully supported. Use `python3 install.py`. |
-| **Windows** | Best-effort. Use `python install.py`. Recommended: WSL for full compatibility. |
+| **Linux** | Fully supported. Use `uv run install.py`. |
+| **macOS** | Fully supported. Use `uv run install.py`. |
+| **Windows** | Best-effort. Use `uv run install.py`. Recommended: WSL for full compatibility. |
 
-The installer detects your Python command and configures hooks with absolute paths.
+The installer locates `uv` and bakes its absolute path into hooks, the launchd agent, and the systemd service file.
 
 ## Commands
 
@@ -143,7 +143,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "projectShortTerm": { "workingDays": 5 },
   "projectLongTerm": { "tokenLimit": 3000 },
   "synthesis": {
-    "intervalHours": 0.5,
+    "intervalHours": 2,
     "model": "sonnet",
     "minSessionMessages": 5
   },
@@ -162,7 +162,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `globalLongTerm.tokenLimit` | 3,000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 5 | Project-specific days to load |
 | `projectLongTerm.tokenLimit` | 3,000 | Token limit for project long-term memory |
-| `synthesis.intervalHours` | 0.5 | Hours between auto-synthesis checks |
+| `synthesis.intervalHours` | 2 | Hours between auto-synthesis checks |
 | `synthesis.model` | sonnet | Model for synthesis LLM calls |
 | `synthesis.minSessionMessages` | 5 | Skip sessions with fewer messages |
 | `decay.ageDays` | 30 | Archive global LTM entries older than N days |
@@ -221,8 +221,8 @@ The memory system uses a **PreToolUse hook** to auto-approve memory operations w
 
 ```bash
 cd claude-memory-system
-python3 uninstall.py           # Remove hooks/permissions, keep memory data
-python3 uninstall.py --purge   # Remove everything including memory data
+uv run uninstall.py           # Remove hooks/permissions, keep memory data
+uv run uninstall.py --purge   # Remove everything including memory data
 ```
 
 ## Updates
@@ -230,7 +230,7 @@ python3 uninstall.py --purge   # Remove everything including memory data
 ```bash
 cd claude-memory-system
 git pull
-python3 install.py
+uv run install.py
 ```
 
 The installer is idempotent and preserves existing memory data.

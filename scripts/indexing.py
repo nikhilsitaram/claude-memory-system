@@ -8,14 +8,14 @@ Provides:
 
 Transcript extraction is in transcript_ops.py (split for smaller reads).
 
-Usage:
+Usage (after install — these scripts live in ~/.claude/scripts/):
     # Build/rebuild project index
-    python indexing.py build-index
+    uv run --no-project $HOME/.claude/scripts/indexing.py build-index
 
     # List days with recent transcripts
-    python indexing.py list-recent
+    uv run --no-project $HOME/.claude/scripts/indexing.py list-recent
 
-Requirements: Python 3.9+
+Requirements: Python 3.9+ (uv-managed)
 """
 
 import argparse
@@ -79,7 +79,7 @@ __all__ = [
 #   get_session_date(session) -> str
 # Project index:
 #   build_projects_index() -> dict
-# CLI: python indexing.py {build-index,list-recent}
+# CLI: uv run --no-project $HOME/.claude/scripts/indexing.py {build-index,list-recent}
 # =============================================================================
 
 
@@ -602,7 +602,7 @@ def build_projects_index(fix_paths: bool = False) -> dict:
                 else:
                     print("    No suggestion found", file=sys.stderr)
             if any(s["suggested_path"] for s in unfixed):
-                print("  Run `python indexing.py build-index --fix-paths` to apply suggestions.\n", file=sys.stderr)
+                print("  Run `uv run --no-project $HOME/.claude/scripts/indexing.py build-index --fix-paths` to apply suggestions.\n", file=sys.stderr)
             else:
                 print("  Consider using /projects to migrate or cleanup stale data.\n", file=sys.stderr)
 

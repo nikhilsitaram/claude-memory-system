@@ -26,7 +26,7 @@ View, modify, and analyze the memory system configuration.
 
 Run the token usage script and display results:
 ```bash
-python3 $HOME/.claude/scripts/token_usage.py
+uv run --no-project $HOME/.claude/scripts/token_usage.py
 ```
 
 Display as a usage table with ~Tokens, Limit, % Used, and status indicator (within limit vs over limit).
@@ -53,7 +53,7 @@ Reset to defaults from `_defaults` section of settings.json. Omit path to reset 
 | `globalShortTerm.workingDays` | int | 1-30 | 2 | Also updates tokenLimit |
 | `projectLongTerm.tokenLimit` | int | 1000-50000 | 3,000 | Fixed limit |
 | `projectShortTerm.workingDays` | int | 1-30 | 5 | Also updates tokenLimit |
-| `synthesis.intervalHours` | float | 0.25-24 | 0.5 | Hours between auto-synthesis |
+| `synthesis.intervalHours` | float | 0.25-24 | 2 | Hours between auto-synthesis |
 | `synthesis.model` | string | haiku/sonnet/opus | sonnet | Model for synthesis subagent |
 | `synthesis.minSessionMessages` | int | 0-100 | 5 | Skip sessions with fewer messages during synthesis |
 | `decay.ageDays` | int | 7-365 | 30 | Archive learnings older than this |

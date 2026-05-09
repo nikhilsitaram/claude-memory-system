@@ -21,6 +21,7 @@ from memory_utils import load_json_file as utils_load_json_file
 from memory_utils import save_json_file as utils_save_json_file
 
 import install
+from memory_utils import DEFAULT_SETTINGS
 
 # ---------------------------------------------------------------------------
 # Shared import tests — install.py re-exports from memory_utils
@@ -72,21 +73,22 @@ class TestCheckPythonVersion:
 
 
 # ---------------------------------------------------------------------------
-# detect_python_command
+# detect_uv_command
 # ---------------------------------------------------------------------------
 
 
-class TestDetectPythonCommand:
-    def test_returns_string(self):
-        result = install.detect_python_command()
-        assert isinstance(result, str)
-        assert len(result) > 0
+class TestDetectUvCommand:
+    def test_returns_path_when_uv_present(self):
+        with mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/uv"):
+            assert install.detect_uv_command() == "/opt/homebrew/bin/uv"
 
-    def test_fallback_to_executable(self):
-        """When no python3/python found, falls back to sys.executable."""
-        with mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
-            result = install.detect_python_command()
-            assert result == sys.executable
+    def test_exits_when_uv_missing(self, capsys):
+        with mock.patch("install.shutil.which", return_value=None):
+            with pytest.raises(SystemExit):
+                install.detect_uv_command()
+        output = capsys.readouterr().out
+        assert "uv" in output
+        assert "astral.sh/uv" in output
 
 
 # ---------------------------------------------------------------------------
@@ -179,14 +181,14 @@ class TestHookEntryKey:
 
 class TestMergeHooks:
     def test_adds_hooks_to_empty_settings(self):
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         assert "PreToolUse" in settings["hooks"]
         assert "SessionStart" in settings["hooks"]
 
     def test_does_not_duplicate_existing_hooks(self):
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         count_before = len(settings["hooks"]["SessionStart"])
-        settings = install.merge_hooks(settings, "python3")
+        settings = install.merge_hooks(settings, "uv")
         count_after = len(settings["hooks"]["SessionStart"])
         assert count_before == count_after
 
@@ -300,12 +302,14 @@ class TestCopyTemplates:
 
 
 class TestInstallSystemdUnits:
-    def test_copies_service_file(self, tmp_path):
-        """Service unit is installed to ~/.config/systemd/user/."""
+    def test_copies_service_file_with_uv_path_substituted(self, tmp_path):
+        """Service unit is installed with __UV_PATH__ replaced by the resolved uv path."""
         script_dir = tmp_path / "repo"
         systemd_src = script_dir / "systemd"
         systemd_src.mkdir(parents=True)
-        (systemd_src / "claude-memory-synthesis.service").write_text("[Service]\nExecStart=/bin/true")
+        (systemd_src / "claude-memory-synthesis.service").write_text(
+            "[Service]\nExecStart=__UV_PATH__ run --no-project %h/.claude/scripts/synthesis_cron.py"
+        )
         (systemd_src / "claude-memory-synthesis.timer").write_text("[Timer]\nOnCalendar=*:0/15")
 
         systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
@@ -313,13 +317,14 @@ class TestInstallSystemdUnits:
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
-        assert (systemd_user_dir / "claude-memory-synthesis.service").exists()
-        assert (systemd_user_dir / "claude-memory-synthesis.service").read_text() == "[Service]\nExecStart=/bin/true"
+        installed = (systemd_user_dir / "claude-memory-synthesis.service").read_text()
+        assert "__UV_PATH__" not in installed
+        assert "ExecStart=/home/user/.local/bin/uv run --no-project" in installed
 
     def test_copies_timer_file(self, tmp_path):
-        """Timer unit is installed to ~/.config/systemd/user/."""
+        """Timer unit is installed verbatim to ~/.config/systemd/user/."""
         script_dir = tmp_path / "repo"
         systemd_src = script_dir / "systemd"
         systemd_src.mkdir(parents=True)
@@ -331,7 +336,7 @@ class TestInstallSystemdUnits:
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         assert (systemd_user_dir / "claude-memory-synthesis.timer").exists()
         assert (systemd_user_dir / "claude-memory-synthesis.timer").read_text() == "[Timer]\nOnCalendar=*:0/15"
@@ -347,7 +352,7 @@ class TestInstallSystemdUnits:
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         # Expect 3 calls: version check, daemon-reload, enable --now
         assert mock_run.call_count == 3
@@ -368,7 +373,7 @@ class TestInstallSystemdUnits:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run", side_effect=FileNotFoundError):
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         output = capsys.readouterr().out
         assert "systemctl not available" in output
@@ -383,7 +388,7 @@ class TestInstallSystemdUnits:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run", side_effect=subprocess.TimeoutExpired("systemctl", 5)):
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         output = capsys.readouterr().out
         assert "systemctl not available" in output
@@ -396,7 +401,7 @@ class TestInstallSystemdUnits:
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_systemd_units(script_dir)
+            install.install_systemd_units(script_dir, "/home/user/.local/bin/uv")
 
         # Systemd user dir created (mkdir) but no files copied
         systemd_user_dir = tmp_path / ".config" / "systemd" / "user"
@@ -438,14 +443,14 @@ class TestSessionEndHook:
     def test_session_end_hook_added_to_settings(self):
         """merge_hooks adds a SessionEnd hook."""
         settings = {"hooks": {}}
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         assert "SessionEnd" in result["hooks"]
         hooks = result["hooks"]["SessionEnd"]
         assert len(hooks) >= 1
 
     def test_session_end_hook_has_short_timeout(self):
         """SessionEnd hook has a short timeout since it's fire-and-forget."""
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         hooks = settings["hooks"]["SessionEnd"]
         for entry in hooks:
             for h in entry.get("hooks", []):
@@ -455,11 +460,113 @@ class TestSessionEndHook:
 
     def test_session_end_hook_not_duplicated(self):
         """Running merge_hooks twice does not duplicate SessionEnd entries."""
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         count_before = len(settings["hooks"]["SessionEnd"])
-        settings = install.merge_hooks(settings, "python3")
+        settings = install.merge_hooks(settings, "uv")
         count_after = len(settings["hooks"]["SessionEnd"])
         assert count_before == count_after
+
+    def test_migration_removes_old_python3_recall_hook(self):
+        """Old `python3 .../session_end_recall.py` entries are removed on re-install."""
+        settings = {
+            "hooks": {
+                "SessionEnd": [
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "python3 /home/u/.claude/scripts/session_end_recall.py",
+                                "timeout": 10,
+                            },
+                            {
+                                "type": "command",
+                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                                "timeout": 5,
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "uv")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["SessionEnd"]
+            for h in entry.get("hooks", [])
+        ]
+        # Old python3-invoked recall is gone
+        assert not any(c.startswith("python3 ") for c in commands)
+        # New uv-invoked recall is present
+        assert any("uv run" in c and "session_end_recall.py" in c for c in commands)
+
+    def test_migration_removes_old_python3_session_start_hook(self):
+        """Old `python3 .../load_memory.py` SessionStart entries are removed on re-install."""
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "python3 /home/u/.claude/scripts/load_memory.py",
+                                "timeout": 30,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "uv")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["SessionStart"]
+            for h in entry.get("hooks", [])
+        ]
+        assert not any(c.startswith("python3 ") for c in commands)
+        # All four matchers (startup/resume/clear/compact) added with uv run
+        assert sum(1 for c in commands if "uv run" in c and "load_memory.py" in c) == 4
+
+    def test_migration_preserves_user_hook_bundled_with_memory_hook(self):
+        """A user-added hook in the same matcher entry as a memory-script hook
+        must survive the migration. The migration filters at the inner-hook
+        level — entry-level filtering would silently delete the user's hook."""
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "startup",
+                        "hooks": [
+                            # User's hook — has nothing to do with the memory system.
+                            {
+                                "type": "command",
+                                "command": "echo hello from user",
+                                "timeout": 5,
+                            },
+                            # Stale memory-script invocation that migration must drop.
+                            {
+                                "type": "command",
+                                "command": "python3 /home/u/.claude/scripts/load_memory.py",
+                                "timeout": 30,
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+        result = install.merge_hooks(settings, "uv")
+        commands = [
+            h.get("command", "")
+            for entry in result["hooks"]["SessionStart"]
+            for h in entry.get("hooks", [])
+        ]
+        # User's hook is intact.
+        assert any("echo hello from user" in c for c in commands)
+        # Old python3-based memory hook is gone.
+        assert not any("python3" in c and "load_memory.py" in c for c in commands)
+        # New uv-based memory hook(s) added.
+        assert any("uv run" in c and "load_memory.py" in c for c in commands)
 
     def test_migration_removes_old_systemctl_hook(self):
         """On macOS, old systemctl hook is replaced with launchctl."""
@@ -483,7 +590,7 @@ class TestSessionEndHook:
              mock.patch("install.os") as mock_os:
             mock_sys.platform = "darwin"
             mock_os.getuid.return_value = 501
-            result = install.merge_hooks(settings, "python3")
+            result = install.merge_hooks(settings, "uv")
 
         hooks = result["hooks"]["SessionEnd"]
         commands = [
@@ -514,7 +621,7 @@ class TestSessionEndHook:
         }
         with mock.patch("install.sys") as mock_sys:
             mock_sys.platform = "linux"
-            result = install.merge_hooks(settings, "python3")
+            result = install.merge_hooks(settings, "uv")
 
         hooks = result["hooks"]["SessionEnd"]
         commands = [
@@ -546,7 +653,7 @@ class TestSessionEndHook:
                 ]
             }
         }
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["SessionEnd"]
@@ -561,7 +668,7 @@ class TestSessionEndRecallHook:
     def test_session_end_has_two_hooks(self):
         """SessionEnd hook has recall script first, then deferred synthesis."""
         settings = {"hooks": {}}
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         session_end = result["hooks"]["SessionEnd"]
         assert len(session_end) == 1
         hooks = session_end[0]["hooks"]
@@ -587,14 +694,14 @@ class TestPreCompactHook:
     def test_precompact_hook_added_to_settings(self):
         """merge_hooks adds a PreCompact hook."""
         settings = {"hooks": {}}
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         assert "PreCompact" in result["hooks"]
         hooks = result["hooks"]["PreCompact"]
         assert len(hooks) >= 1
 
     def test_precompact_hook_has_short_timeout(self):
         """PreCompact synthesis trigger has a short timeout since it's fire-and-forget."""
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         hooks = settings["hooks"]["PreCompact"]
         for entry in hooks:
             for h in entry.get("hooks", []):
@@ -602,16 +709,16 @@ class TestPreCompactHook:
 
     def test_precompact_hook_not_duplicated(self):
         """Running merge_hooks twice does not duplicate PreCompact entries."""
-        settings = install.merge_hooks({}, "python3")
+        settings = install.merge_hooks({}, "uv")
         count_before = len(settings["hooks"]["PreCompact"])
-        settings = install.merge_hooks(settings, "python3")
+        settings = install.merge_hooks(settings, "uv")
         count_after = len(settings["hooks"]["PreCompact"])
         assert count_before == count_after
 
     def test_precompact_hook_has_two_hooks(self):
         """PreCompact hook has recall script first, then deferred synthesis."""
         settings = {"hooks": {}}
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         precompact = result["hooks"]["PreCompact"]
         assert len(precompact) == 1
         hooks = precompact[0]["hooks"]
@@ -643,7 +750,7 @@ class TestPreCompactHook:
              mock.patch("install.os") as mock_os:
             mock_sys.platform = "darwin"
             mock_os.getuid.return_value = 501
-            result = install.merge_hooks(settings, "python3")
+            result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["PreCompact"]
@@ -672,7 +779,7 @@ class TestPreCompactHook:
                 ]
             }
         }
-        result = install.merge_hooks(settings, "python3")
+        result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["PreCompact"]
@@ -693,10 +800,9 @@ class TestInstallLaunchdAgent:
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("python3")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
         assert plist_path.exists()
@@ -705,18 +811,19 @@ class TestInstallLaunchdAgent:
             plist = plistlib.load(f)
 
         assert plist["Label"] == install.LAUNCHD_LABEL
-        assert plist["StartInterval"] == 7200
+        assert plist["StartInterval"] == int(DEFAULT_SETTINGS["synthesis"]["intervalHours"] * 3600)
         assert plist["EnvironmentVariables"]["CLAUDECODE"] == ""
-        assert "synthesis_cron.py" in plist["ProgramArguments"][1]
+        # ProgramArguments = [uv_path, "run", "--no-project", script_path]
+        assert plist["ProgramArguments"][1:3] == ["run", "--no-project"]
+        assert "synthesis_cron.py" in plist["ProgramArguments"][3]
 
     def test_calls_bootout_then_bootstrap(self, tmp_path):
         """Calls launchctl bootout (cleanup) then bootstrap (load)."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("python3")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         calls = mock_run.call_args_list
         assert len(calls) == 2
@@ -731,41 +838,79 @@ class TestInstallLaunchdAgent:
         """Creates ~/Library/Logs/claude-memory/ for output."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("python3")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         assert (tmp_path / "Library" / "Logs" / "claude-memory").is_dir()
 
-    def test_uses_resolved_python_path(self, tmp_path):
-        """ProgramArguments uses shutil.which resolved path."""
+    def test_uses_passed_uv_path(self, tmp_path):
+        """ProgramArguments uses the absolute uv path passed in."""
         import plistlib
 
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/opt/homebrew/bin/python3"), \
              mock.patch("install.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0)
-            install.install_launchd_agent("python3")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         plist_path = tmp_path / "Library" / "LaunchAgents" / f"{install.LAUNCHD_LABEL}.plist"
         with open(plist_path, "rb") as f:
             plist = plistlib.load(f)
-        assert plist["ProgramArguments"][0] == "/opt/homebrew/bin/python3"
+        assert plist["ProgramArguments"][0] == "/opt/homebrew/bin/uv"
+        assert plist["ProgramArguments"][1:3] == ["run", "--no-project"]
 
     def test_warns_on_bootstrap_failure(self, tmp_path, capsys):
         """Prints warning if launchctl bootstrap fails."""
         with mock.patch("install.Path.home", return_value=tmp_path), \
              mock.patch("install.os.getuid", return_value=501), \
-             mock.patch("install.shutil.which", return_value="/usr/bin/python3"), \
              mock.patch("install.subprocess.run") as mock_run:
             # bootout succeeds, bootstrap fails
             mock_run.side_effect = [
                 mock.Mock(returncode=0),
                 mock.Mock(returncode=1),
             ]
-            install.install_launchd_agent("python3")
+            install.install_launchd_agent("/opt/homebrew/bin/uv")
 
         output = capsys.readouterr().out
         assert "Warning: launchctl bootstrap failed" in output
+
+
+# ---------------------------------------------------------------------------
+# Repo-level constant consistency — guard against drift between
+# DEFAULT_SETTINGS and the files that get copied/installed verbatim.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultsConsistency:
+    """Catch drift like the kind that motivated this test class:
+    DEFAULT_SETTINGS bumped to 2h, but templates/settings.json still said 1
+    and systemd .timer still fired hourly.
+    """
+
+    @staticmethod
+    def _repo_root():
+        from pathlib import Path
+        return Path(__file__).parent.parent
+
+    def test_template_settings_match_default_intervalhours(self):
+        """templates/settings.json (copied to ~/.claude/memory/settings.json
+        on first install) must agree with DEFAULT_SETTINGS so fresh installs
+        and the launchd StartInterval don't disagree."""
+        template = json.loads((self._repo_root() / "templates" / "settings.json").read_text())
+        expected = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+        assert template["synthesis"]["intervalHours"] == expected
+        # /settings reset reads from this _defaults block
+        assert template["_defaults"]["synthesis.intervalHours"] == expected
+
+    def test_systemd_timer_cadence_matches_default_intervalhours(self):
+        """systemd .timer's OnCalendar hour-step must agree with the launchd
+        StartInterval (which is derived from DEFAULT_SETTINGS), otherwise
+        Linux and macOS users get asymmetric cadences for the same default."""
+        import re
+        timer = (self._repo_root() / "systemd" / "claude-memory-synthesis.timer").read_text()
+        match = re.search(r"OnCalendar=\*-\*-\* 0/(\d+):00:00", timer)
+        assert match is not None, "OnCalendar line not found or malformed"
+        hour_step = int(match.group(1))
+        expected = int(DEFAULT_SETTINGS["synthesis"]["intervalHours"])
+        assert hour_step == expected

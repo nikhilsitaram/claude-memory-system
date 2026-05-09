@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 %h/.claude/scripts/synthesis_cron.py
+ExecStart=__UV_PATH__ run --no-project %h/.claude/scripts/synthesis_cron.py
 Environment=CLAUDECODE=
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 TimeoutStartSec=300

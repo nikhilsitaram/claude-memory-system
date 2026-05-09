@@ -14,7 +14,7 @@ Launch a subagent to process memory transcripts into daily summaries and selecti
 
 1. Get the synthesis prompt, model, and pre-extracted data:
    ```bash
-   python3 $HOME/.claude/scripts/load_memory.py --synthesis-prompt
+   uv run --no-project $HOME/.claude/scripts/load_memory.py --synthesis-prompt
    ```
    - If output says "No pending transcripts", inform the user and stop.
    - First line: `model=<model>`. Second line: `prompt_file=<path>`.
