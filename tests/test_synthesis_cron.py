@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+from memory_utils import DEFAULT_SETTINGS
 from synthesis_cron import (
     LOG_ROTATION_BYTES,
     _append_stats,
@@ -18,6 +19,8 @@ from synthesis_cron import (
     should_run_deferred_synthesis,
 )
 
+DEFAULT_INTERVAL_HOURS = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+
 
 class TestShouldRunDeferredSynthesis:
     """Tests for the scheduling check."""
@@ -27,7 +30,7 @@ class TestShouldRunDeferredSynthesis:
         last_synth = tmp_path / ".last-synthesis"
         last_synth.write_text(datetime.now(timezone.utc).isoformat())
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": 2}
+            "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is False
 
@@ -35,17 +38,17 @@ class TestShouldRunDeferredSynthesis:
         """If enough time passed, should run."""
         last_synth = tmp_path / ".last-synthesis"
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": 2}
+            "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is True
 
     def test_returns_true_when_old_timestamp(self, tmp_path):
         """If timestamp is old enough, should run."""
         last_synth = tmp_path / ".last-synthesis"
-        old_time = datetime.now(timezone.utc) - timedelta(hours=3)
+        old_time = datetime.now(timezone.utc) - timedelta(hours=DEFAULT_INTERVAL_HOURS * 2)
         last_synth.write_text(old_time.isoformat())
         with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": 2}
+            "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
             assert should_run_deferred_synthesis() is True
 
