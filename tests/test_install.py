@@ -534,8 +534,13 @@ class TestSessionEndHook:
         # New uv-based memory hook(s) added.
         assert any("uv run" in c and "load_memory.py" in c for c in commands)
 
-    def test_migration_removes_old_systemctl_kickstart_hook(self):
-        """Old systemctl kickstart entry is stripped on re-install (no replacement)."""
+    @pytest.mark.parametrize("legacy_command", [
+        "systemctl --user start --no-block claude-memory-synthesis.service",
+        "launchctl kickstart gui/501/com.claude.memory-synthesis",
+    ])
+    def test_migration_removes_old_kickstart_hook(self, legacy_command):
+        """Old SessionEnd kickstart entry (either platform variant) is stripped on
+        re-install with no replacement."""
         settings = {
             "hooks": {
                 "SessionEnd": [
@@ -544,7 +549,7 @@ class TestSessionEndHook:
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                                "command": legacy_command,
                                 "timeout": 5,
                             }
                         ],
@@ -560,33 +565,6 @@ class TestSessionEndHook:
         ]
         assert not any("systemctl" in c for c in commands)
         assert not any("launchctl" in c for c in commands)
-
-    def test_migration_removes_old_launchctl_kickstart_hook(self):
-        """Old launchctl kickstart entry is stripped on re-install (no replacement)."""
-        settings = {
-            "hooks": {
-                "SessionEnd": [
-                    {
-                        "matcher": "",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "launchctl kickstart gui/501/com.claude.memory-synthesis",
-                                "timeout": 5,
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-        result = install.merge_hooks(settings, "uv")
-        commands = [
-            h.get("command", "")
-            for entry in result["hooks"]["SessionEnd"]
-            for h in entry.get("hooks", [])
-        ]
-        assert not any("launchctl" in c for c in commands)
-        assert not any("systemctl" in c for c in commands)
 
     def test_preserves_non_synthesis_session_end_hooks(self):
         """Migration only removes synthesis hooks, not other SessionEnd hooks."""
@@ -858,26 +836,26 @@ class TestDefaultsConsistency:
         assert template["_defaults"]["synthesis.intervalHours"] == expected
 
     def test_systemd_timer_cadence_matches_default_intervalhours(self):
-        """systemd .timer's OnCalendar hour-step must agree with the launchd
+        """systemd .timer's OnUnitActiveSec interval must agree with the launchd
         StartInterval (which is derived from DEFAULT_SETTINGS), otherwise
         Linux and macOS users get asymmetric cadences for the same default.
 
         The .timer file is static (not templated at install time) and its
-        OnCalendar=*-*-* 0/N:00:00 can only express integer N, so the default
+        OnUnitActiveSec=Nh suffix can only express integer N, so the default
         must be a whole hour or the platforms will diverge silently. The
         macOS launchd plist uses StartInterval=hours*3600 which can encode
         sub-hour intervals, so this guard fails loudly on the .timer side.
         """
         import re
         default_hours = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
-        assert default_hours == int(default_hours), (
-            "synthesis.intervalHours default must be a whole hour because the "
-            "systemd .timer's OnCalendar field can't encode fractional hours. "
-            "Either change the default to an integer or template the .timer "
-            "file at install time."
+        assert isinstance(default_hours, int), (
+            "synthesis.intervalHours default must be a whole hour (int) because "
+            "the systemd .timer's OnUnitActiveSec field is static-text "
+            "Nh and can't encode fractional hours. Either change the default "
+            "to an integer or template the .timer file at install time."
         )
         timer = (self._repo_root() / "systemd" / "claude-memory-synthesis.timer").read_text()
-        match = re.search(r"OnCalendar=\*-\*-\* 0/(\d+):00:00", timer)
-        assert match is not None, "OnCalendar line not found or malformed"
-        hour_step = int(match.group(1))
-        assert hour_step == int(default_hours)
+        match = re.search(r"OnUnitActiveSec=(\d+)h", timer)
+        assert match is not None, "OnUnitActiveSec line not found or malformed"
+        interval_hours = int(match.group(1))
+        assert interval_hours == default_hours

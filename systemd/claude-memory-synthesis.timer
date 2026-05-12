@@ -2,8 +2,11 @@
 Description=Run Claude Memory Synthesis periodically
 
 [Timer]
-OnCalendar=*-*-* 0/1:00:00
-Persistent=true
+# Monotonic timer: fires 1h after each previous activation. Avoids the
+# OnCalendar race where a clock-aligned tick could fire <1h after the
+# eager `.last-synthesis` write, causing should_synthesize() to skip.
+OnBootSec=5min
+OnUnitActiveSec=1h
 RandomizedDelaySec=300
 
 [Install]

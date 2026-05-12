@@ -195,7 +195,7 @@ Entries with dates older than `decay.ageDays` (default: 30) are moved to `.decay
 
 ### Synthesis
 
-A launchd/systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`, on the cadence set by `synthesis.intervalHours`. When multiple dates are pending, each is processed as a separate LLM call.
+A launchd/systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`. The timer cadence is fixed at install time from the default `synthesis.intervalHours` (whole hours only — sub-hour values aren't expressible in the static systemd timer). `synthesis.intervalHours` in user settings then acts as an in-script floor that can lengthen the effective cadence (a value of 4 with a 1-hour timer makes synthesis run every ~4 hours); values below the install-time cadence have no additional effect. When multiple dates are pending, each is processed as a separate LLM call.
 
 **Error handling**: Failures are logged to `.synthesis-errors.log` and surfaced as an alert on next session start. Eager timestamps are cleared on failure so the next timer interval can retry.
 

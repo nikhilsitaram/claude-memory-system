@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from memory_utils import DEFAULT_SETTINGS
 from synthesis_cron import (
     LOG_ROTATION_BYTES,
@@ -25,32 +27,22 @@ DEFAULT_INTERVAL_HOURS = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
 class TestShouldRunDeferredSynthesis:
     """Tests for the scheduling check."""
 
-    def test_returns_false_when_recently_synthesized(self, tmp_path):
-        """If .last-synthesis is recent, should not run."""
+    # last_synth_age: hours-since-now to stamp into .last-synthesis.
+    # None = leave file missing (never synthesized).
+    @pytest.mark.parametrize("last_synth_age,expected", [
+        (0, False),  # just synthesized -> not due
+        (None, True),  # no timestamp file -> always due
+        (DEFAULT_INTERVAL_HOURS * 2, True),  # well past interval -> due
+    ])
+    def test_schedule_check(self, tmp_path, last_synth_age, expected):
         last_synth = tmp_path / ".last-synthesis"
-        last_synth.write_text(datetime.now(timezone.utc).isoformat())
+        if last_synth_age is not None:
+            stamp = datetime.now(timezone.utc) - timedelta(hours=last_synth_age)
+            last_synth.write_text(stamp.isoformat())
         with patch("synthesis_cron.load_settings", return_value={
             "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
         }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
-            assert should_run_deferred_synthesis() is False
-
-    def test_returns_true_when_due(self, tmp_path):
-        """If enough time passed, should run."""
-        last_synth = tmp_path / ".last-synthesis"
-        with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
-        }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
-            assert should_run_deferred_synthesis() is True
-
-    def test_returns_true_when_old_timestamp(self, tmp_path):
-        """If timestamp is old enough, should run."""
-        last_synth = tmp_path / ".last-synthesis"
-        old_time = datetime.now(timezone.utc) - timedelta(hours=DEFAULT_INTERVAL_HOURS * 2)
-        last_synth.write_text(old_time.isoformat())
-        with patch("synthesis_cron.load_settings", return_value={
-            "synthesis": {"intervalHours": DEFAULT_INTERVAL_HOURS}
-        }), patch("load_memory.get_last_synthesis_file", return_value=last_synth):
-            assert should_run_deferred_synthesis() is True
+            assert should_run_deferred_synthesis() is expected
 
 
 class TestBuildClaudeCommand:
