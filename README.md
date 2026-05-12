@@ -143,7 +143,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
   "projectShortTerm": { "workingDays": 5 },
   "projectLongTerm": { "tokenLimit": 3000 },
   "synthesis": {
-    "intervalHours": 2,
+    "intervalHours": 1,
     "model": "sonnet",
     "minSessionMessages": 5
   },
@@ -162,7 +162,7 @@ Configure via `~/.claude/memory/settings.json` or `/settings set <path> <value>`
 | `globalLongTerm.tokenLimit` | 3,000 | Token limit for global long-term memory |
 | `projectShortTerm.workingDays` | 5 | Project-specific days to load |
 | `projectLongTerm.tokenLimit` | 3,000 | Token limit for project long-term memory |
-| `synthesis.intervalHours` | 2 | Hours between auto-synthesis checks |
+| `synthesis.intervalHours` | 1 | Hours between auto-synthesis checks |
 | `synthesis.model` | sonnet | Model for synthesis LLM calls |
 | `synthesis.minSessionMessages` | 5 | Skip sessions with fewer messages |
 | `decay.ageDays` | 30 | Archive global LTM entries older than N days |
@@ -195,7 +195,7 @@ Entries with dates older than `decay.ageDays` (default: 30) are moved to `.decay
 
 ### Synthesis
 
-A launchd/systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`. SessionEnd hook triggers on session exit. When multiple dates are pending, each is processed as a separate LLM call.
+A launchd/systemd user timer runs `synthesis_cron.py` outside active sessions via `claude -p`. The timer cadence is fixed at install time from the default `synthesis.intervalHours` (whole hours only — sub-hour values aren't expressible in the static systemd timer). `synthesis.intervalHours` in user settings then acts as an in-script floor that can lengthen the effective cadence (a value of 4 with a 1-hour timer makes synthesis run every ~4 hours); values below the install-time cadence have no additional effect. When multiple dates are pending, each is processed as a separate LLM call.
 
 **Error handling**: Failures are logged to `.synthesis-errors.log` and surfaced as an alert on next session start. Eager timestamps are cleared on failure so the next timer interval can retry.
 

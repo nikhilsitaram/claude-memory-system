@@ -411,30 +411,6 @@ class TestInstallSystemdUnits:
 
 
 # ---------------------------------------------------------------------------
-# _session_end_command
-# ---------------------------------------------------------------------------
-
-
-class TestSessionEndCommand:
-    def test_returns_launchctl_on_darwin(self):
-        with mock.patch("install.sys") as mock_sys, \
-             mock.patch("install.os") as mock_os:
-            mock_sys.platform = "darwin"
-            mock_os.getuid.return_value = 501
-            result = install._session_end_command()
-        assert "launchctl kickstart" in result
-        assert "gui/501/" in result
-        assert install.LAUNCHD_LABEL in result
-
-    def test_returns_systemctl_on_linux(self):
-        with mock.patch("install.sys") as mock_sys:
-            mock_sys.platform = "linux"
-            result = install._session_end_command()
-        assert "systemctl" in result
-        assert "--no-block" in result
-
-
-# ---------------------------------------------------------------------------
 # SessionEnd hook
 # ---------------------------------------------------------------------------
 
@@ -447,16 +423,6 @@ class TestSessionEndHook:
         assert "SessionEnd" in result["hooks"]
         hooks = result["hooks"]["SessionEnd"]
         assert len(hooks) >= 1
-
-    def test_session_end_hook_has_short_timeout(self):
-        """SessionEnd hook has a short timeout since it's fire-and-forget."""
-        settings = install.merge_hooks({}, "uv")
-        hooks = settings["hooks"]["SessionEnd"]
-        for entry in hooks:
-            for h in entry.get("hooks", []):
-                cmd = h.get("command", "")
-                if "claude-memory-synthesis" in cmd:
-                    assert h.get("timeout", 999) <= 5
 
     def test_session_end_hook_not_duplicated(self):
         """Running merge_hooks twice does not duplicate SessionEnd entries."""
@@ -568,8 +534,13 @@ class TestSessionEndHook:
         # New uv-based memory hook(s) added.
         assert any("uv run" in c and "load_memory.py" in c for c in commands)
 
-    def test_migration_removes_old_systemctl_hook(self):
-        """On macOS, old systemctl hook is replaced with launchctl."""
+    @pytest.mark.parametrize("legacy_command", [
+        "systemctl --user start --no-block claude-memory-synthesis.service",
+        "launchctl kickstart gui/501/com.claude.memory-synthesis",
+    ])
+    def test_migration_removes_old_kickstart_hook(self, legacy_command):
+        """Old SessionEnd kickstart entry (either platform variant) is stripped on
+        re-install with no replacement."""
         settings = {
             "hooks": {
                 "SessionEnd": [
@@ -578,7 +549,7 @@ class TestSessionEndHook:
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "systemctl --user start --no-block claude-memory-synthesis.service",
+                                "command": legacy_command,
                                 "timeout": 5,
                             }
                         ],
@@ -586,51 +557,14 @@ class TestSessionEndHook:
                 ]
             }
         }
-        with mock.patch("install.sys") as mock_sys, \
-             mock.patch("install.os") as mock_os:
-            mock_sys.platform = "darwin"
-            mock_os.getuid.return_value = 501
-            result = install.merge_hooks(settings, "uv")
-
-        hooks = result["hooks"]["SessionEnd"]
+        result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
-            for entry in hooks
+            for entry in result["hooks"]["SessionEnd"]
             for h in entry.get("hooks", [])
         ]
         assert not any("systemctl" in c for c in commands)
-        assert any("launchctl" in c for c in commands)
-
-    def test_migration_removes_old_launchctl_hook(self):
-        """On Linux, old launchctl hook is replaced with systemctl."""
-        settings = {
-            "hooks": {
-                "SessionEnd": [
-                    {
-                        "matcher": "",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "launchctl kickstart gui/501/com.claude.memory-synthesis",
-                                "timeout": 5,
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-        with mock.patch("install.sys") as mock_sys:
-            mock_sys.platform = "linux"
-            result = install.merge_hooks(settings, "uv")
-
-        hooks = result["hooks"]["SessionEnd"]
-        commands = [
-            h.get("command", "")
-            for entry in hooks
-            for h in entry.get("hooks", [])
-        ]
         assert not any("launchctl" in c for c in commands)
-        assert any("systemctl" in c for c in commands)
 
     def test_preserves_non_synthesis_session_end_hooks(self):
         """Migration only removes synthesis hooks, not other SessionEnd hooks."""
@@ -665,18 +599,22 @@ class TestSessionEndHook:
 class TestSessionEndRecallHook:
     """Tests for the session_end_recall.py SessionEnd hook."""
 
-    def test_session_end_has_two_hooks(self):
-        """SessionEnd hook has recall script first, then deferred synthesis."""
+    def test_session_end_has_recall_hook_only(self):
+        """SessionEnd hook runs the recall writer only.
+
+        Synthesis is triggered by the launchd/systemd timer on its own
+        schedule, not by a SessionEnd kickstart — kickstart hooks got
+        cancelled when the CLI exited abruptly, and the timer covers the
+        same cadence anyway.
+        """
         settings = {"hooks": {}}
         result = install.merge_hooks(settings, "uv")
         session_end = result["hooks"]["SessionEnd"]
         assert len(session_end) == 1
         hooks = session_end[0]["hooks"]
-        assert len(hooks) == 2
+        assert len(hooks) == 1
         assert "session_end_recall.py" in hooks[0]["command"]
         assert hooks[0]["timeout"] == 10
-        assert "memory-synthesis" in hooks[1]["command"]
-        assert hooks[1]["timeout"] == 5
 
     def test_recall_script_in_link_scripts(self):
         """session_end_recall.py is in the scripts to link."""
@@ -700,7 +638,7 @@ class TestPreCompactHook:
         assert len(hooks) >= 1
 
     def test_precompact_hook_has_short_timeout(self):
-        """PreCompact synthesis trigger has a short timeout since it's fire-and-forget."""
+        """PreCompact recall hook caps at 10s to avoid blocking compaction."""
         settings = install.merge_hooks({}, "uv")
         hooks = settings["hooks"]["PreCompact"]
         for entry in hooks:
@@ -715,18 +653,16 @@ class TestPreCompactHook:
         count_after = len(settings["hooks"]["PreCompact"])
         assert count_before == count_after
 
-    def test_precompact_hook_has_two_hooks(self):
-        """PreCompact hook has recall script first, then deferred synthesis."""
+    def test_precompact_has_recall_hook_only(self):
+        """PreCompact hook runs the recall writer only (matches SessionEnd)."""
         settings = {"hooks": {}}
         result = install.merge_hooks(settings, "uv")
         precompact = result["hooks"]["PreCompact"]
         assert len(precompact) == 1
         hooks = precompact[0]["hooks"]
-        assert len(hooks) == 2
+        assert len(hooks) == 1
         assert "session_end_recall.py" in hooks[0]["command"]
         assert hooks[0]["timeout"] == 10
-        assert "memory-synthesis" in hooks[1]["command"]
-        assert hooks[1]["timeout"] == 5
 
     def test_migration_removes_old_synthesis_precompact_hook(self):
         """Existing PreCompact synthesis hooks are replaced on re-install."""
@@ -746,11 +682,7 @@ class TestPreCompactHook:
                 ]
             }
         }
-        with mock.patch("install.sys") as mock_sys, \
-             mock.patch("install.os") as mock_os:
-            mock_sys.platform = "darwin"
-            mock_os.getuid.return_value = 501
-            result = install.merge_hooks(settings, "uv")
+        result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["PreCompact"]
@@ -904,13 +836,26 @@ class TestDefaultsConsistency:
         assert template["_defaults"]["synthesis.intervalHours"] == expected
 
     def test_systemd_timer_cadence_matches_default_intervalhours(self):
-        """systemd .timer's OnCalendar hour-step must agree with the launchd
+        """systemd .timer's OnUnitActiveSec interval must agree with the launchd
         StartInterval (which is derived from DEFAULT_SETTINGS), otherwise
-        Linux and macOS users get asymmetric cadences for the same default."""
+        Linux and macOS users get asymmetric cadences for the same default.
+
+        The .timer file is static (not templated at install time) and its
+        OnUnitActiveSec=Nh suffix can only express integer N, so the default
+        must be a whole hour or the platforms will diverge silently. The
+        macOS launchd plist uses StartInterval=hours*3600 which can encode
+        sub-hour intervals, so this guard fails loudly on the .timer side.
+        """
         import re
+        default_hours = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+        assert isinstance(default_hours, int), (
+            "synthesis.intervalHours default must be a whole hour (int) because "
+            "the systemd .timer's OnUnitActiveSec field is static-text "
+            "Nh and can't encode fractional hours. Either change the default "
+            "to an integer or template the .timer file at install time."
+        )
         timer = (self._repo_root() / "systemd" / "claude-memory-synthesis.timer").read_text()
-        match = re.search(r"OnCalendar=\*-\*-\* 0/(\d+):00:00", timer)
-        assert match is not None, "OnCalendar line not found or malformed"
-        hour_step = int(match.group(1))
-        expected = int(DEFAULT_SETTINGS["synthesis"]["intervalHours"])
-        assert hour_step == expected
+        match = re.search(r"OnUnitActiveSec=(\d+)h", timer)
+        assert match is not None, "OnUnitActiveSec line not found or malformed"
+        interval_hours = int(match.group(1))
+        assert interval_hours == default_hours

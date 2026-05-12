@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deferred synthesis runner for systemd timer / launchd agent / SessionEnd hook.
+Deferred synthesis runner for systemd timer / launchd agent.
 
 Extracts transcripts, builds synthesis prompt, and invokes
 headless ``claude -p`` to run synthesis outside active sessions.
@@ -8,7 +8,6 @@ headless ``claude -p`` to run synthesis outside active sessions.
 Invoked by:
 - systemd timer (Linux): claude-memory-synthesis.timer
 - launchd agent (macOS): com.claude.memory-synthesis
-- SessionEnd hook: fires on every session exit
 
 Usage (after install — these scripts live in ~/.claude/scripts/):
     uv run --no-project $HOME/.claude/scripts/synthesis_cron.py           # Normal run (checks schedule)

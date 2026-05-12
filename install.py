@@ -328,13 +328,6 @@ def install_launchd_agent(uv_path: str) -> None:
     print(f"Installed launchd agent ({LAUNCHD_LABEL})")
 
 
-def _session_end_command() -> str:
-    """Return the platform-appropriate SessionEnd hook command."""
-    if sys.platform == "darwin":
-        return f"launchctl kickstart gui/{os.getuid()}/{LAUNCHD_LABEL}"
-    return "systemctl --user start --no-block claude-memory-synthesis.service"
-
-
 def hook_entry_key(entry: dict) -> tuple:
     """Generate a unique key for a hook entry based on matcher and commands."""
     matcher = entry.get("matcher", "")
@@ -427,7 +420,9 @@ def merge_hooks(settings: dict, uv_path: str) -> dict:
             }
             for matcher in ("startup", "resume", "clear", "compact")
         ],
-        # SessionEnd: recall writer first, then deferred synthesis trigger
+        # SessionEnd: recall writer only. Deferred synthesis runs on its own
+        # schedule (launchd StartInterval / systemd timer derived from
+        # synthesis.intervalHours), so no kickstart hook is needed.
         "SessionEnd": [
             {
                 "matcher": "",
@@ -437,15 +432,10 @@ def merge_hooks(settings: dict, uv_path: str) -> dict:
                         "command": recall_cmd,
                         "timeout": 10,
                     },
-                    {
-                        "type": "command",
-                        "command": _session_end_command(),
-                        "timeout": 5,
-                    },
                 ],
             }
         ],
-        # PreCompact: same as SessionEnd — synthesize and write recall before transcript is compacted
+        # PreCompact: same as SessionEnd — recall writer only.
         "PreCompact": [
             {
                 "matcher": "",
@@ -454,11 +444,6 @@ def merge_hooks(settings: dict, uv_path: str) -> dict:
                         "type": "command",
                         "command": recall_cmd,
                         "timeout": 10,
-                    },
-                    {
-                        "type": "command",
-                        "command": _session_end_command(),
-                        "timeout": 5,
                     },
                 ],
             }

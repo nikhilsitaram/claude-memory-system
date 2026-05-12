@@ -114,7 +114,7 @@ uv run --no-project ~/.claude/scripts/decay.py --dry-run           # Test decay
 ### Hooks (defined in `install.py` `merge_hooks()`)
 - `SessionStart` — loads memory context via `load_memory.py`
 - `PreToolUse` — auto-approves operations targeting `.claude/memory` paths
-- `SessionEnd` — triggers deferred synthesis via systemd
+- `SessionEnd` / `PreCompact` — writes pending-recall via `session_end_recall.py`. Synthesis is NOT triggered here; the launchd/systemd timer is the only synthesis trigger.
 
 Transcripts are read directly from `~/.claude/projects/` (source of truth), not copied via hooks.
 
@@ -146,7 +146,7 @@ Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.
 | `globalLongTerm.tokenLimit` | 3,000 |
 | `projectShortTerm.workingDays` | 5 |
 | `projectLongTerm.tokenLimit` | 3,000 |
-| `synthesis.intervalHours` | 2 |
+| `synthesis.intervalHours` | 1 |
 | `synthesis.model` | sonnet |
 | `synthesis.minSessionMessages` | 5 |
 | `decay.ageDays` | 30 |
