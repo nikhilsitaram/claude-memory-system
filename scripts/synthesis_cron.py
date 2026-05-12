@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deferred synthesis runner for systemd timer / launchd agent / SessionEnd hook.
+Deferred synthesis runner for systemd timer / launchd agent.
 
 Extracts transcripts, builds synthesis prompt, and invokes
 headless ``claude -p`` to run synthesis outside active sessions.

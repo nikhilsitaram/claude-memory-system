@@ -704,11 +704,7 @@ class TestPreCompactHook:
                 ]
             }
         }
-        with mock.patch("install.sys") as mock_sys, \
-             mock.patch("install.os") as mock_os:
-            mock_sys.platform = "darwin"
-            mock_os.getuid.return_value = 501
-            result = install.merge_hooks(settings, "uv")
+        result = install.merge_hooks(settings, "uv")
         commands = [
             h.get("command", "")
             for entry in result["hooks"]["PreCompact"]
@@ -864,11 +860,24 @@ class TestDefaultsConsistency:
     def test_systemd_timer_cadence_matches_default_intervalhours(self):
         """systemd .timer's OnCalendar hour-step must agree with the launchd
         StartInterval (which is derived from DEFAULT_SETTINGS), otherwise
-        Linux and macOS users get asymmetric cadences for the same default."""
+        Linux and macOS users get asymmetric cadences for the same default.
+
+        The .timer file is static (not templated at install time) and its
+        OnCalendar=*-*-* 0/N:00:00 can only express integer N, so the default
+        must be a whole hour or the platforms will diverge silently. The
+        macOS launchd plist uses StartInterval=hours*3600 which can encode
+        sub-hour intervals, so this guard fails loudly on the .timer side.
+        """
         import re
+        default_hours = DEFAULT_SETTINGS["synthesis"]["intervalHours"]
+        assert default_hours == int(default_hours), (
+            "synthesis.intervalHours default must be a whole hour because the "
+            "systemd .timer's OnCalendar field can't encode fractional hours. "
+            "Either change the default to an integer or template the .timer "
+            "file at install time."
+        )
         timer = (self._repo_root() / "systemd" / "claude-memory-synthesis.timer").read_text()
         match = re.search(r"OnCalendar=\*-\*-\* 0/(\d+):00:00", timer)
         assert match is not None, "OnCalendar line not found or malformed"
         hour_step = int(match.group(1))
-        expected = int(DEFAULT_SETTINGS["synthesis"]["intervalHours"])
-        assert hour_step == expected
+        assert hour_step == int(default_hours)
