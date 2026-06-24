@@ -291,13 +291,14 @@ class TestExtractSessionMetadata:
     def test_ai_title_preferred_as_summary(self, tmp_path):
         f = self._write(
             tmp_path,
-            {"type": "user", "timestamp": "2026-03-01T09:00:00Z",
+            {"type": "user", "timestamp": "2026-03-01T09:00:00Z", "cwd": "/home/u/proj",
              "message": {"role": "user", "content": "first prompt text"}},
             {"type": "ai-title", "aiTitle": "Refactor the indexer"},
         )
-        created, summary = _extract_session_metadata(f)
+        created, summary, cwd = _extract_session_metadata(f)
         assert created == datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
         assert summary == "Refactor the indexer"
+        assert cwd == "/home/u/proj"
 
     def test_falls_back_to_first_user_prompt(self, tmp_path):
         f = self._write(
@@ -305,9 +306,10 @@ class TestExtractSessionMetadata:
             {"type": "user", "timestamp": "2026-03-02T08:30:00Z",
              "message": {"role": "user", "content": "investigate gh issue 146"}},
         )
-        created, summary = _extract_session_metadata(f)
+        created, summary, cwd = _extract_session_metadata(f)
         assert created == datetime(2026, 3, 2, 8, 30, tzinfo=timezone.utc)
         assert summary == "investigate gh issue 146"
+        assert cwd is None  # no cwd field present
 
     def test_skips_meta_and_wrapper_prompts(self, tmp_path):
         f = self._write(
@@ -321,7 +323,7 @@ class TestExtractSessionMetadata:
             {"type": "user",
              "message": {"role": "user", "content": "the real question"}},
         )
-        _created, summary = _extract_session_metadata(f)
+        _created, summary, _cwd = _extract_session_metadata(f)
         assert summary == "the real question"
 
     def test_list_content_blocks_flattened(self, tmp_path):
@@ -332,13 +334,39 @@ class TestExtractSessionMetadata:
                          "content": [{"type": "text", "text": "block one"},
                                      {"type": "text", "text": "block two"}]}},
         )
-        _created, summary = _extract_session_metadata(f)
+        _created, summary, _cwd = _extract_session_metadata(f)
         assert summary == "block one block two"
+
+    def test_non_string_timestamp_does_not_raise(self, tmp_path):
+        """A malformed (non-string) timestamp is tolerated, not an AttributeError."""
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": 1770000000, "cwd": "/home/u/proj",
+             "message": {"role": "user", "content": "real prompt"}},
+        )
+        created, summary, cwd = _extract_session_metadata(f)
+        assert created is None  # bad timestamp ignored
+        assert summary == "real prompt"
+        assert cwd == "/home/u/proj"
+
+    def test_null_message_does_not_raise(self, tmp_path):
+        """A record with an explicit null `message` is tolerated (no AttributeError)."""
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": "2026-03-05T08:00:00Z",
+             "cwd": "/home/u/proj", "message": None},
+            {"type": "user",
+             "message": {"role": "user", "content": "the next prompt"}},
+        )
+        created, summary, cwd = _extract_session_metadata(f)
+        assert created == datetime(2026, 3, 5, 8, 0, tzinfo=timezone.utc)
+        assert summary == "the next prompt"
+        assert cwd == "/home/u/proj"
 
     def test_empty_file_returns_none(self, tmp_path):
         f = tmp_path / "sess.jsonl"
         f.write_text("", encoding="utf-8")
-        assert _extract_session_metadata(f) == (None, None)
+        assert _extract_session_metadata(f) == (None, None, None)
 
 
 # =============================================================================
@@ -369,6 +397,8 @@ class TestListAllSessions:
         assert s.session_id == "abc"
         assert s.created == datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
         assert s.summary == "Do the thing"
+        # project_path is recovered from the transcript cwd even with no index.
+        assert s.project_path == "/home/user/proj"
 
     def test_index_overrides_transcript_when_present(self, tmp_path):
         projects_dir = tmp_path / "projects"

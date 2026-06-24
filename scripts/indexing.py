@@ -152,10 +152,10 @@ def _content_to_text(content: object) -> str:
 
 def _extract_session_metadata(
     jsonl_file: Path,
-) -> tuple[Optional[datetime], Optional[str]]:
+) -> tuple[Optional[datetime], Optional[str], Optional[str]]:
     """
-    Recover a session's real created-date and a human-readable summary from its
-    transcript, head-scanning up to _METADATA_SCAN_LIMIT lines.
+    Recover a session's real created-date, summary, and cwd from its transcript,
+    head-scanning up to _METADATA_SCAN_LIMIT lines.
 
     Current Claude Code no longer writes sessions-index.json, so this is how we
     repopulate the metadata that used to come from the index:
@@ -165,12 +165,15 @@ def _extract_session_metadata(
         first substantive ``user`` message (skipping ``isMeta`` records and
         harness wrappers like ``<local-command…>`` / ``<command-name>`` /
         ``<system-reminder>``), truncated to 150 chars.
+      - cwd: the first record's ``cwd`` field (the project path — same signal
+        build_projects_index keys on).
 
-    Returns (created, summary); either element is None when unavailable.
+    Returns (created, summary, cwd); any element is None when unavailable.
     """
     created: Optional[datetime] = None
     ai_title: Optional[str] = None
     first_prompt: Optional[str] = None
+    cwd: Optional[str] = None
 
     try:
         with open(jsonl_file, "r", encoding="utf-8") as f:
@@ -191,10 +194,17 @@ def _extract_session_metadata(
                 if created is None:
                     ts = data.get("timestamp", "")
                     if ts:
+                        # A malformed (non-string) timestamp raises TypeError/
+                        # AttributeError inside from_iso_z; treat like a bad date.
                         try:
                             created = from_iso_z(ts)
-                        except ValueError:
+                        except (ValueError, TypeError, AttributeError):
                             pass
+
+                if cwd is None:
+                    folder = data.get("cwd")
+                    if isinstance(folder, str) and folder:
+                        cwd = folder
 
                 rec_type = data.get("type")
                 if rec_type == "ai-title" and ai_title is None:
@@ -202,7 +212,10 @@ def _extract_session_metadata(
                     if title:
                         ai_title = title
                 elif rec_type == "user" and first_prompt is None and not data.get("isMeta"):
-                    text = _content_to_text(data.get("message", {}).get("content")).strip()
+                    # `message` may be explicitly null (parses to None), so the
+                    # `{}` default on .get() isn't enough — coalesce before .get.
+                    message = data.get("message") or {}
+                    text = _content_to_text(message.get("content")).strip()
                     if text and not text.startswith(_PROMPT_SKIP_PREFIXES):
                         first_prompt = text[:150]
 
@@ -213,7 +226,7 @@ def _extract_session_metadata(
     except IOError:
         pass
 
-    return created, ai_title or first_prompt
+    return created, ai_title or first_prompt, cwd
 
 
 def _load_sessions_index(project_folder: Path) -> dict:
@@ -284,10 +297,10 @@ def list_all_sessions() -> list[SessionInfo]:
             except OSError:
                 continue
 
-            # Recover created-date + summary from the transcript (source of
-            # truth now that sessions-index.json is rarely written).
-            created, summary = _extract_session_metadata(jsonl_file)
-            project_path = None
+            # Recover created-date, summary, and path from the transcript
+            # (source of truth now that sessions-index.json is rarely written).
+            created, summary, cwd = _extract_session_metadata(jsonl_file)
+            project_path = resolve_session_path(cwd) if cwd else None
 
             # Override with sessions-index.json metadata when present (legacy).
             entry = index.get(session_id)
