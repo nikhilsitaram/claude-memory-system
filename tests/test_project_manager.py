@@ -477,13 +477,24 @@ class TestGetFolderOriginalPath:
         f.write_text(json.dumps({"cwd": cwd, "timestamp": "2026-06-23T10:00:00.000Z"}) + "\n")
         return f
 
-    def test_prefers_sessions_index(self, tmp_path):
+    def test_prefers_transcript_cwd_over_index(self, tmp_path):
+        """The transcript cwd wins over a (possibly stale) sessions-index.json,
+        matching build_projects_index so the rewrite anchor is the indexed path."""
         folder = tmp_path / "folder"
         folder.mkdir()
         (folder / "sessions-index.json").write_text(json.dumps({
             "originalPath": "/from/index", "entries": [],
         }))
         self._write_transcript(folder, "sess1", "/from/cwd")
+        assert get_folder_original_path(folder) == "/from/cwd"
+
+    def test_falls_back_to_index_when_no_transcript_cwd(self, tmp_path):
+        """With only a legacy sessions-index.json (no transcript), use its path."""
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/from/index", "entries": [],
+        }))
         assert get_folder_original_path(folder) == "/from/index"
 
     def test_falls_back_to_cwd_when_no_index(self, tmp_path):
@@ -610,6 +621,40 @@ class TestExecuteMergeOrphanEndToEnd:
         assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
         # We never write sessions-index.json — current Claude Code ignores it.
         assert not (projects_dir / target_enc / "sessions-index.json").exists()
+
+    def test_rewrites_cwd_when_legacy_index_path_diverges(self, tmp_path):
+        """Seam contract: when a legacy sessions-index.json holds a path that
+        DIFFERS from the transcript cwd, the rewrite anchor must still be the
+        transcript cwd (what build_projects_index keys on) — otherwise the
+        rewrite matches nothing and the merge reverts on the next synthesis."""
+        _claude, projects_dir, index_file, patches = _fake_claude_env(tmp_path)
+
+        orphan_path = tmp_path / "work" / "orphan-proj"   # gone from disk
+        target = tmp_path / "work" / "target-proj"
+        target.mkdir(parents=True)
+
+        orphan_enc = encode_path(str(orphan_path))
+        target_enc = encode_path(str(target))
+        # Transcript records the REAL old path...
+        _write_cwd_transcript(projects_dir / orphan_enc, "osess", str(orphan_path))
+        # ...but a stale legacy sessions-index.json claims a DIFFERENT path.
+        (projects_dir / orphan_enc / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/stale/divergent/orphan-proj", "entries": [],
+        }))
+        _write_cwd_transcript(projects_dir / target_enc, "tsess", str(target))
+        index_file.write_text(json.dumps({"projects": {str(orphan_path).lower(): {
+            "name": "orphan-proj", "originalPath": str(orphan_path),
+            "encodedPaths": [orphan_enc], "workDays": ["2026-06-23"],
+        }}}))
+
+        with patches:
+            result = execute_merge_orphan(orphan_enc, target, confirmed=True)
+
+        assert result["success"] is True
+        # Anchored on the transcript cwd, not the stale index path → rewrite fires.
+        assert result["cwd_files_rewritten"] == 1
+        merged = projects_dir / target_enc / "osess.jsonl"
+        assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
 
 
 class TestMoveDurabilityEndToEnd:

@@ -214,29 +214,29 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
 
 def get_folder_original_path(folder_path: Path) -> Optional[str]:
     """
-    Resolve a project folder's original path, preferring whatever still exists.
+    Resolve a project folder's original path the same way the index does.
 
-    Tries ``sessions-index.json`` first (legacy/authoritative when present), then
-    falls back to the ``cwd`` recorded in the folder's newest ``.jsonl``
-    transcript. Current Claude Code no longer writes ``sessions-index.json``, so
-    the transcript ``cwd`` is the real source of truth.
+    Prefers the ``cwd`` recorded in the folder's newest ``.jsonl`` transcript,
+    falling back to ``sessions-index.json`` only when no transcript cwd exists.
+    Current Claude Code no longer writes ``sessions-index.json``, so the
+    transcript ``cwd`` is the real source of truth.
 
-    The fallback delegates to ``indexing._extract_from_jsonl`` rather than
+    The cwd lookup delegates to ``indexing._extract_from_jsonl`` rather than
     re-scanning, so this resolver uses the exact same newest-mtime ordering, scan
     limit, and ``cwd`` field as ``build_projects_index`` -- guaranteeing the path
-    we rewrite is the one the index will actually be rebuilt from.
+    we rewrite is the one the index will actually be rebuilt from, even when a
+    legacy ``sessions-index.json`` lingers with a stale, divergent path.
 
     Returns the path string, or None if neither source yields one.
     """
-    path = get_original_path_from_folder(folder_path)
-    if path:
-        return path
-
     # Local import: indexing depends only on memory_utils, so no import cycle.
     from indexing import _extract_from_jsonl
 
     cwd, _ = _extract_from_jsonl(Path(folder_path))
-    return cwd or None
+    if cwd:
+        return cwd
+
+    return get_original_path_from_folder(folder_path)
 
 
 # =============================================================================

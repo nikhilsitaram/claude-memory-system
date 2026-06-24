@@ -123,4 +123,4 @@ See `reference.md` for full function reference, additional workflow examples, an
 Claude Code encodes paths by replacing `/` and `.` with `-`:
 - `/home/user/my-project` → `-home-user-my-project`
 
-**Important**: This encoding is LOSSY (you cannot reliably decode it back). The authoritative original path is the `cwd` field inside the folder's `.jsonl` transcripts (`get_original_path_from_folder()` reads `sessions-index.json` when present, but current Claude Code no longer writes it, so `cwd` is the real source of truth).
+**Important**: This encoding is LOSSY (you cannot reliably decode it back). The authoritative original path is the `cwd` field inside the folder's `.jsonl` transcripts. Use `get_folder_original_path()` — it prefers the transcript `cwd` (the same signal `build_projects_index` keys on) and only falls back to `sessions-index.json` when no transcript cwd exists. (`get_original_path_from_folder()` is the legacy index-only reader.)
