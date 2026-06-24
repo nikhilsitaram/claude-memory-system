@@ -14,7 +14,10 @@ from project_manager import (  # noqa: I001
     backup_files,
     decode_path_best_effort,
     encode_path,
+    execute_merge_orphan,
+    execute_move,
     find_orphaned_folders,
+    get_folder_original_path,
     get_original_path_from_folder,
     list_projects,
     merge_sessions_index,
@@ -444,6 +447,14 @@ class TestRewriteCwdInTranscripts:
         rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
         assert json.loads(f.read_text().splitlines()[0])["cwd"] == self.NEW + "/sub"
 
+    def test_leaves_sibling_prefix_untouched(self, tmp_path):
+        """A sibling project sharing a path prefix must NOT be rewritten."""
+        sibling = self.OLD + "-other"  # /home/user/old-project-other
+        f = self._write_transcript(tmp_path / "folder", "sess1", sibling)
+        result = rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
+        assert result["files_modified"] == 0
+        assert json.loads(f.read_text().splitlines()[0])["cwd"] == sibling
+
     def test_leaves_non_cwd_occurrences_untouched(self, tmp_path):
         """The old path inside message content must NOT be rewritten."""
         extra = {"type": "assistant", "content": f"see {self.OLD}/file.py"}
@@ -545,6 +556,148 @@ class TestRebuildAndVerifyIndex:
             result = rebuild_and_verify_index(str(proj))
         assert result["durable"] is False
         assert str(proj) in result["stale_paths"]
+
+
+class TestGetFolderOriginalPath:
+    """Tests for get_folder_original_path — cwd fallback when no sessions-index."""
+
+    def _write_transcript(self, folder, session_id, cwd):
+        folder.mkdir(parents=True, exist_ok=True)
+        f = folder / f"{session_id}.jsonl"
+        f.write_text(json.dumps({"cwd": cwd, "timestamp": "2026-06-23T10:00:00.000Z"}) + "\n")
+        return f
+
+    def test_prefers_sessions_index(self, tmp_path):
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/from/index", "entries": [],
+        }))
+        self._write_transcript(folder, "sess1", "/from/cwd")
+        assert get_folder_original_path(folder) == "/from/index"
+
+    def test_falls_back_to_cwd_when_no_index(self, tmp_path):
+        folder = tmp_path / "folder"
+        self._write_transcript(folder, "sess1", "/from/cwd")
+        assert get_folder_original_path(folder) == "/from/cwd"
+
+    def test_newest_transcript_cwd_wins(self, tmp_path):
+        import os
+
+        folder = tmp_path / "folder"
+        older = self._write_transcript(folder, "old", "/path/older")
+        newer = self._write_transcript(folder, "new", "/path/newer")
+        os.utime(older, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        assert get_folder_original_path(folder) == "/path/newer"
+
+    def test_returns_none_for_empty_folder(self, tmp_path):
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        assert get_folder_original_path(folder) is None
+
+    def test_returns_none_for_missing_folder(self, tmp_path):
+        assert get_folder_original_path(tmp_path / "nope") is None
+
+
+# =============================================================================
+# Execute Move / Merge-Orphan End-to-End Tests (cwd-rewrite wiring)
+# =============================================================================
+
+
+def _fake_claude_env(tmp_path):
+    """Build an isolated ~/.claude layout and the project_manager patch map."""
+    claude = tmp_path / ".claude"
+    projects_dir = claude / "projects"
+    memory_dir = claude / "memory"
+    proj_mem = memory_dir / "project-memory"
+    for d in (projects_dir, memory_dir, proj_mem):
+        d.mkdir(parents=True)
+    (claude / "history.jsonl").write_text("")
+    index_file = memory_dir / "projects-index.json"
+    patches = mock.patch.multiple(
+        "project_manager",
+        get_projects_dir=mock.MagicMock(return_value=projects_dir),
+        get_memory_dir=mock.MagicMock(return_value=memory_dir),
+        get_claude_dir=mock.MagicMock(return_value=claude),
+        get_project_memory_dir=mock.MagicMock(return_value=proj_mem),
+        get_projects_index_file=mock.MagicMock(return_value=index_file),
+        load_synthesis_state=mock.MagicMock(return_value={"sessions": {}}),
+    )
+    return claude, projects_dir, index_file, patches
+
+
+def _write_cwd_transcript(folder, session_id, cwd):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{session_id}.jsonl").write_text(
+        json.dumps({"type": "user", "cwd": cwd, "timestamp": "2026-06-23T10:00:00.000Z"}) + "\n"
+    )
+
+
+class TestExecuteMoveEndToEnd:
+    """End-to-end: execute_move must rewrite the destination transcript cwd."""
+
+    def test_rewrites_dest_cwd_and_updates_index(self, tmp_path):
+        _claude, projects_dir, index_file, patches = _fake_claude_env(tmp_path)
+
+        old = tmp_path / "work" / "old-project"
+        new = tmp_path / "work" / "new-project"
+        old.mkdir(parents=True)
+        old_enc = encode_path(str(old))
+        _write_cwd_transcript(projects_dir / old_enc, "sess1", str(old))
+        index_file.write_text(json.dumps({"projects": {str(old).lower(): {
+            "name": "old-project", "originalPath": str(old),
+            "encodedPaths": [old_enc], "workDays": ["2026-06-23"],
+        }}}))
+
+        with patches:
+            result = execute_move(old, new, confirmed=True)
+
+        assert result["success"] is True
+        assert result["cwd_files_rewritten"] == 1
+
+        new_enc = encode_path(str(new))
+        dest = projects_dir / new_enc / "sess1.jsonl"
+        assert dest.exists()
+        assert json.loads(dest.read_text().splitlines()[0])["cwd"] == str(new)
+
+        idx = json.loads(index_file.read_text())["projects"]
+        assert str(new).lower() in idx
+        assert str(old).lower() not in idx
+
+
+class TestExecuteMergeOrphanEndToEnd:
+    """End-to-end: merge-orphan must rewrite cwd even with no sessions-index.json."""
+
+    def test_rewrites_cwd_via_jsonl_fallback(self, tmp_path):
+        _claude, projects_dir, index_file, patches = _fake_claude_env(tmp_path)
+
+        orphan_path = tmp_path / "work" / "orphan-proj"   # gone from disk
+        target = tmp_path / "work" / "target-proj"
+        target.mkdir(parents=True)
+
+        orphan_enc = encode_path(str(orphan_path))
+        target_enc = encode_path(str(target))
+        # Orphan folder: only a transcript (no sessions-index.json) -> cwd fallback
+        _write_cwd_transcript(projects_dir / orphan_enc, "osess", str(orphan_path))
+        # Target folder already exists with its own transcript on the new path
+        _write_cwd_transcript(projects_dir / target_enc, "tsess", str(target))
+        index_file.write_text(json.dumps({"projects": {str(orphan_path).lower(): {
+            "name": "orphan-proj", "originalPath": str(orphan_path),
+            "encodedPaths": [orphan_enc], "workDays": ["2026-06-23"],
+        }}}))
+
+        with patches:
+            result = execute_merge_orphan(orphan_enc, target, confirmed=True)
+
+        assert result["success"] is True
+        # cwd rewrite fired despite no sessions-index.json (the bug we fixed)
+        assert result["cwd_files_rewritten"] == 1
+        assert result["orphan_project_name"] == "orphan-proj"
+
+        merged = projects_dir / target_enc / "osess.jsonl"
+        assert merged.exists()
+        assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
 
 
 # =============================================================================

@@ -60,6 +60,7 @@ __all__ = [
     "encode_path",
     "decode_path_best_effort",
     "get_original_path_from_folder",
+    "get_folder_original_path",
     # Discovery
     "list_projects",
     "find_orphaned_folders",
@@ -208,6 +209,51 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
     """
     data = load_sessions_index(folder_path)
     return get_sessions_original_path(data) or None
+
+
+def get_folder_original_path(folder_path: Path) -> Optional[str]:
+    """
+    Resolve a project folder's original path, preferring whatever still exists.
+
+    Tries ``sessions-index.json`` first (legacy/authoritative when present), then
+    falls back to the ``cwd`` recorded in the folder's newest ``.jsonl``
+    transcript. Current Claude Code no longer writes ``sessions-index.json``, so
+    the transcript ``cwd`` is the real source of truth -- mirrors how
+    ``indexing._extract_from_jsonl`` resolves the path (newest mtime wins).
+
+    Returns the path string, or None if neither source yields one.
+    """
+    path = get_original_path_from_folder(folder_path)
+    if path:
+        return path
+
+    folder_path = Path(folder_path)
+    if not folder_path.is_dir():
+        return None
+
+    # Newest transcript wins (matches indexing._extract_from_jsonl ordering).
+    transcripts = sorted(
+        folder_path.glob("*.jsonl"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        reverse=True,
+    )
+    for jsonl_file in transcripts:
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                for _ in range(50):  # cwd may trail prepended bookkeeping records
+                    line = f.readline()
+                    if not line:
+                        break
+                    try:
+                        cwd = json.loads(line).get("cwd")
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        continue
+                    if cwd:
+                        return cwd
+        except (IOError, UnicodeDecodeError):
+            continue
+
+    return None
 
 
 # =============================================================================
@@ -1070,9 +1116,11 @@ def rewrite_cwd_in_transcripts(folder: Path, old_path: str, new_path: str) -> di
     transcripts still record the old cwd, so the next index rebuild silently
     reverts the rename. Rewriting cwd here is what makes a move durable.
 
-    Only the ``cwd`` field is touched -- the old path as an exact value or as
-    the prefix of a deeper cwd (a session run in a subdirectory) -- so
-    conversation text and tool I/O elsewhere in the transcript are left intact.
+    Only the ``cwd`` field is touched, and only when ``old_path`` is followed by
+    a path boundary -- the exact value (closing quote follows) or a deeper cwd
+    for a session run in a subdirectory ("/" follows). A sibling project that
+    merely shares a prefix (``/p/old`` vs ``/p/old-other``) is left untouched, as
+    is conversation text and tool I/O elsewhere in the transcript.
 
     Returns ``{"files_modified": int, "session_ids": list[str]}`` (session_ids
     are the stems of the modified ``*.jsonl`` files, for offset bookkeeping).
@@ -1083,9 +1131,10 @@ def rewrite_cwd_in_transcripts(folder: Path, old_path: str, new_path: str) -> di
         return result
 
     # Anchor on the cwd field so only the working-directory value is rewritten.
-    # Captures any JSON spacing around the colon; matches old_path exactly or as
-    # a path prefix (the trailing "/" or closing quote is left untouched).
-    pattern = re.compile(r'("cwd"\s*:\s*")' + re.escape(old_path))
+    # Captures any JSON spacing around the colon; the trailing lookahead requires
+    # old_path to end at a path boundary ("/" for a subdir cwd, or the closing
+    # quote for an exact match) so a sibling project sharing a prefix is skipped.
+    pattern = re.compile(r'("cwd"\s*:\s*")' + re.escape(old_path) + r'(?=/|")')
 
     def _repl(m: "re.Match") -> str:
         return m.group(1) + new_path
@@ -1402,9 +1451,12 @@ def execute_merge_orphan(
             projects_dir = get_projects_dir()
             target_encoded = encode_path(str(target_path))
 
-            # Get original path from orphan for memory file lookup
+            # Get original path from orphan for memory file lookup and the cwd
+            # rewrite. Fall back to the transcript cwd when sessions-index.json
+            # is absent (current Claude Code no longer writes it) — otherwise the
+            # cwd rewrite below would be skipped and the merge would revert.
             orphan_folder = projects_dir / orphan_name
-            orphan_original_path = get_original_path_from_folder(orphan_folder)
+            orphan_original_path = get_folder_original_path(orphan_folder)
             orphan_project_name = Path(orphan_original_path).name if orphan_original_path else None
 
             # Execute merges
