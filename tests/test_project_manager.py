@@ -20,7 +20,6 @@ from project_manager import (  # noqa: I001
     get_folder_original_path,
     get_original_path_from_folder,
     list_projects,
-    merge_sessions_index,
     plan_cleanup,
     plan_merge_orphan,
     plan_move,
@@ -29,7 +28,6 @@ from project_manager import (  # noqa: I001
     restore_from_backup,
     rewrite_cwd_in_transcripts,
     rewrite_paths_in_file,
-    update_session_index_paths,
     validate_merge_orphan,
     validate_move,
 )
@@ -252,112 +250,6 @@ class TestPlanMergeOrphan:
 
         assert len(plan.merges) == 1, f"Expected 1 merge, got {plan.merges}"
         assert len(plan.renames) == 1, f"Expected 1 rename, got {plan.renames}"
-
-
-# =============================================================================
-# Merge Sessions Index Tests
-# =============================================================================
-
-
-class TestMergeSessionsIndex:
-    """Tests for merge_sessions_index function."""
-
-    def test_merge_disjoint_entries(self, tmp_path):
-        """Two files with different sessions should combine all."""
-        source = tmp_path / "source.json"
-        dest = tmp_path / "dest.json"
-
-        source.write_text(json.dumps({
-            "originalPath": "/old/path",
-            "entries": [
-                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-                {"id": "session-2", "created": "2026-01-02T10:00:00Z"},
-            ]
-        }))
-
-        dest.write_text(json.dumps({
-            "originalPath": "/new/path",
-            "entries": [
-                {"id": "session-3", "created": "2026-01-03T10:00:00Z"},
-            ]
-        }))
-
-        merged_count = merge_sessions_index(source, dest)
-        assert merged_count == 2
-
-        result = json.loads(dest.read_text())
-        assert len(result["entries"]) == 3
-
-    def test_merge_duplicate_sessions_keeps_newer(self, tmp_path):
-        """Duplicate session IDs should keep the one with newer timestamp."""
-        source = tmp_path / "source.json"
-        dest = tmp_path / "dest.json"
-
-        source.write_text(json.dumps({
-            "originalPath": "/old/path",
-            "entries": [
-                {"id": "session-1", "created": "2026-01-01T10:00:00Z",
-                 "lastActive": "2026-01-01T15:00:00Z"},  # Newer
-            ]
-        }))
-
-        dest.write_text(json.dumps({
-            "originalPath": "/new/path",
-            "entries": [
-                {"id": "session-1", "created": "2026-01-01T10:00:00Z",
-                 "lastActive": "2026-01-01T12:00:00Z"},  # Older
-            ]
-        }))
-
-        merged_count = merge_sessions_index(source, dest)
-        assert merged_count == 1
-
-        result = json.loads(dest.read_text())
-        assert len(result["entries"]) == 1
-        assert result["entries"][0]["lastActive"] == "2026-01-01T15:00:00Z"
-
-    def test_merge_into_empty(self, tmp_path):
-        """Merging into file with no entries should work."""
-        source = tmp_path / "source.json"
-        dest = tmp_path / "dest.json"
-
-        source.write_text(json.dumps({
-            "originalPath": "/old/path",
-            "entries": [
-                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-            ]
-        }))
-
-        dest.write_text(json.dumps({
-            "originalPath": "/new/path",
-            "entries": []
-        }))
-
-        merged_count = merge_sessions_index(source, dest)
-        assert merged_count == 1
-
-        result = json.loads(dest.read_text())
-        assert len(result["entries"]) == 1
-
-    def test_merge_empty_source(self, tmp_path):
-        """Merging from empty source should not change dest."""
-        source = tmp_path / "source.json"
-        dest = tmp_path / "dest.json"
-
-        source.write_text(json.dumps({
-            "originalPath": "/old/path",
-            "entries": []
-        }))
-
-        dest.write_text(json.dumps({
-            "originalPath": "/new/path",
-            "entries": [
-                {"id": "session-1", "created": "2026-01-01T10:00:00Z"},
-            ]
-        }))
-
-        merged_count = merge_sessions_index(source, dest)
-        assert merged_count == 0
 
 
 # =============================================================================
@@ -716,6 +608,8 @@ class TestExecuteMergeOrphanEndToEnd:
         merged = projects_dir / target_enc / "osess.jsonl"
         assert merged.exists()
         assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
+        # We never write sessions-index.json — current Claude Code ignores it.
+        assert not (projects_dir / target_enc / "sessions-index.json").exists()
 
 
 class TestMoveDurabilityEndToEnd:
@@ -1014,100 +908,6 @@ class TestListProjects:
 
 
 # =============================================================================
-# Update Session Index Paths Tests
-# =============================================================================
-
-
-class TestUpdateSessionIndexPaths:
-    """Tests for update_session_index_paths function."""
-
-    def test_updates_matching_files(self, tmp_path):
-        """Should update sessions-index.json files containing old path."""
-        projects_dir = tmp_path / "projects"
-        projects_dir.mkdir()
-
-        # Create two project folders with sessions-index.json
-        folder1 = projects_dir / "-home-user-old-project"
-        folder1.mkdir()
-        (folder1 / "sessions-index.json").write_text(json.dumps({
-            "originalPath": "/home/user/old-project",
-            "entries": []
-        }))
-
-        folder2 = projects_dir / "-home-user-old-project-sub"
-        folder2.mkdir()
-        (folder2 / "sessions-index.json").write_text(json.dumps({
-            "originalPath": "/home/user/old-project/sub",
-            "entries": []
-        }))
-
-        with mock.patch("project_manager.get_projects_dir") as mock_dir:
-            mock_dir.return_value = projects_dir
-
-            count = update_session_index_paths(
-                "/home/user/old-project", "/home/user/new-project"
-            )
-
-        assert count == 2
-
-        data1 = json.loads((folder1 / "sessions-index.json").read_text())
-        assert data1["originalPath"] == "/home/user/new-project"
-
-        data2 = json.loads((folder2 / "sessions-index.json").read_text())
-        assert data2["originalPath"] == "/home/user/new-project/sub"
-
-    def test_skips_non_matching_files(self, tmp_path):
-        """Should not modify files that don't contain old path."""
-        projects_dir = tmp_path / "projects"
-        projects_dir.mkdir()
-
-        folder = projects_dir / "-home-user-other"
-        folder.mkdir()
-        original = json.dumps({
-            "originalPath": "/home/user/other",
-            "entries": []
-        })
-        (folder / "sessions-index.json").write_text(original)
-
-        with mock.patch("project_manager.get_projects_dir") as mock_dir:
-            mock_dir.return_value = projects_dir
-
-            count = update_session_index_paths(
-                "/home/user/old-project", "/home/user/new-project"
-            )
-
-        assert count == 0
-        assert (folder / "sessions-index.json").read_text() == original
-
-    def test_skips_folders_without_sessions_index(self, tmp_path):
-        """Should skip folders that don't have sessions-index.json."""
-        projects_dir = tmp_path / "projects"
-        projects_dir.mkdir()
-
-        folder = projects_dir / "-home-user-old-project"
-        folder.mkdir()
-        # No sessions-index.json created
-
-        with mock.patch("project_manager.get_projects_dir") as mock_dir:
-            mock_dir.return_value = projects_dir
-
-            count = update_session_index_paths(
-                "/home/user/old-project", "/home/user/new-project"
-            )
-
-        assert count == 0
-
-    def test_returns_zero_for_missing_projects_dir(self):
-        """Should return 0 if projects directory doesn't exist."""
-        with mock.patch("project_manager.get_projects_dir") as mock_dir:
-            mock_dir.return_value = Path("/nonexistent/projects")
-
-            count = update_session_index_paths("/old", "/new")
-
-        assert count == 0
-
-
-# =============================================================================
 # Find Orphaned Folders Tests
 # =============================================================================
 
@@ -1220,6 +1020,28 @@ class TestFindOrphanedFolders:
 
         orphans = self._find_orphans(tmp_path, index)
         assert len(orphans) == 0
+
+    def test_untracked_folder_resolves_path_from_transcript_cwd(self, tmp_path):
+        """With no sessions-index.json, an untracked folder whose transcript cwd
+        points at a missing path is an orphan, and original_path is the cwd."""
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+
+        folder = projects_dir / "-home-user-gone-project"
+        folder.mkdir()
+        # No sessions-index.json — only a transcript carrying the cwd.
+        (folder / "sess.jsonl").write_text(json.dumps({
+            "cwd": "/home/user/gone-project",
+            "timestamp": "2026-01-01T10:00:00Z",
+        }) + "\n")
+
+        index = {"projects": {}}  # Not tracked
+
+        orphans = self._find_orphans(tmp_path, index)
+        assert len(orphans) == 1
+        assert orphans[0].folder_name == "-home-user-gone-project"
+        assert orphans[0].original_path == "/home/user/gone-project"
+        assert orphans[0].sessions_index_path is None
 
 
 if __name__ == "__main__":
