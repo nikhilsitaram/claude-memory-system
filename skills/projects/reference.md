@@ -12,12 +12,18 @@
 | `plan_move(old, new, mode)` | Show what move will do | `OperationPlan` |
 | `plan_merge_orphan(orphan, target)` | Show what merge will do | `OperationPlan` |
 | `plan_cleanup()` | Show what cleanup will do | `OperationPlan` |
-| `execute_move(...)` | Perform move (needs `confirmed=True`) | `dict` |
-| `execute_merge_orphan(...)` | Merge orphaned data (needs `confirmed=True`) | `dict` |
+| `execute_move(...)` | Perform move (needs `confirmed=True`); rewrites transcript `cwd` | `dict` |
+| `execute_merge_orphan(...)` | Merge orphaned data (needs `confirmed=True`); rewrites transcript `cwd` | `dict` |
 | `execute_cleanup(...)` | Remove stale entries (needs `confirmed=True`) | `dict` |
+| `rebuild_and_verify_index(path)` | Rebuild index from transcripts; confirm rename is durable | `dict` |
+| `rewrite_cwd_in_transcripts(folder, old, new)` | Rewrite `cwd` field in a folder's `.jsonl` transcripts | `dict` |
+| `refresh_synthesis_offsets(session_ids, folder)` | Reset synthesis byte-offsets after a `cwd` rewrite | `int` |
 | `restore_from_backup(path)` | Undo last operation | `dict` |
 | `list_backups()` | List available backups | `list[dict]` |
 | `get_memory_files_for_merge(src, dst)` | Get memory files for intelligent merge | `dict` |
+
+`execute_move` / `execute_merge_orphan` return an extra `cwd_files_rewritten` count.
+`rebuild_and_verify_index` returns `{"durable": bool, "entry": dict|None, "stale_paths": list[str], "message": str}` — check `durable` before declaring a move complete.
 
 ## Additional Workflow Examples
 
@@ -59,6 +65,13 @@ plan = plan_move(old, new, merge_mode="merge")
 print(plan.summary)
 
 result = execute_move(old, new, merge_mode="merge", confirmed=True)
+
+# Durability check — the index is rebuilt from transcript cwd hourly, so a
+# move that doesn't update cwd silently reverts. execute_move now rewrites cwd,
+# but always confirm:
+check = rebuild_and_verify_index(str(new))
+print(check["message"])
+assert check["durable"]
 ```
 
 ### Cleanup Stale Entries
@@ -86,7 +99,7 @@ result = restore_from_backup(backups[0]["path"])
 
 | Subdirectory | Contents |
 |--------------|----------|
-| `projects/{encoded}/` | Session folders, `sessions-index.json`, `.jsonl` files |
+| `projects/{encoded}/` | `.jsonl` session transcripts (each records `cwd` — the authoritative project path). `sessions-index.json` may be absent; current Claude Code no longer writes it |
 | `file-history/{encoded}/` | File edit history |
 | `todos/{encoded}/` | TODO items |
 | `shell-snapshots/{encoded}/` | Shell state |

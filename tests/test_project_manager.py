@@ -21,7 +21,10 @@ from project_manager import (  # noqa: I001
     plan_cleanup,
     plan_merge_orphan,
     plan_move,
+    rebuild_and_verify_index,
+    refresh_synthesis_offsets,
     restore_from_backup,
+    rewrite_cwd_in_transcripts,
     rewrite_paths_in_file,
     update_session_index_paths,
     validate_merge_orphan,
@@ -404,6 +407,144 @@ class TestRewritePathsInFile:
             "/new"
         )
         assert count == 0
+
+
+# =============================================================================
+# Transcript cwd Rewrite Tests (move durability)
+# =============================================================================
+
+
+class TestRewriteCwdInTranscripts:
+    """Tests for rewrite_cwd_in_transcripts — makes a move survive index rebuild."""
+
+    OLD = "/home/user/old-project"
+    NEW = "/home/user/new-project"
+
+    def _write_transcript(self, folder, session_id, cwd, extra_lines=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        f = folder / f"{session_id}.jsonl"
+        lines = [json.dumps({
+            "type": "user", "cwd": cwd, "timestamp": "2026-06-23T10:00:00.000Z",
+        })]
+        for entry in (extra_lines or []):
+            lines.append(json.dumps(entry))
+        f.write_text("\n".join(lines) + "\n")
+        return f
+
+    def test_rewrites_exact_cwd(self, tmp_path):
+        f = self._write_transcript(tmp_path / "folder", "sess1", self.OLD)
+        result = rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
+        assert result["files_modified"] == 1
+        assert result["session_ids"] == ["sess1"]
+        assert json.loads(f.read_text().splitlines()[0])["cwd"] == self.NEW
+
+    def test_rewrites_cwd_prefix_for_subdir_session(self, tmp_path):
+        """A session run in a subdirectory has cwd under the project root."""
+        f = self._write_transcript(tmp_path / "folder", "sess1", self.OLD + "/sub")
+        rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
+        assert json.loads(f.read_text().splitlines()[0])["cwd"] == self.NEW + "/sub"
+
+    def test_leaves_non_cwd_occurrences_untouched(self, tmp_path):
+        """The old path inside message content must NOT be rewritten."""
+        extra = {"type": "assistant", "content": f"see {self.OLD}/file.py"}
+        f = self._write_transcript(tmp_path / "folder", "sess1", self.OLD, [extra])
+        rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
+        lines = f.read_text().splitlines()
+        assert json.loads(lines[0])["cwd"] == self.NEW
+        assert f"{self.OLD}/file.py" in lines[1]  # content preserved verbatim
+
+    def test_no_match_returns_zero(self, tmp_path):
+        self._write_transcript(tmp_path / "folder", "sess1", "/home/user/other")
+        result = rewrite_cwd_in_transcripts(tmp_path / "folder", self.OLD, self.NEW)
+        assert result == {"files_modified": 0, "session_ids": []}
+
+    def test_missing_folder_returns_zero(self, tmp_path):
+        result = rewrite_cwd_in_transcripts(tmp_path / "nope", self.OLD, self.NEW)
+        assert result == {"files_modified": 0, "session_ids": []}
+
+    def test_indexer_reads_rewritten_cwd(self, tmp_path):
+        """Regression: the cwd build_projects_index reads must reflect the new path."""
+        from indexing import _extract_from_jsonl
+
+        folder = tmp_path / "folder"
+        self._write_transcript(folder, "sess1", self.OLD)
+        assert _extract_from_jsonl(folder)[0] == self.OLD
+        rewrite_cwd_in_transcripts(folder, self.OLD, self.NEW)
+        assert _extract_from_jsonl(folder)[0] == self.NEW
+
+
+class TestRefreshSynthesisOffsets:
+    """Tests for refresh_synthesis_offsets — keeps synthesis state consistent."""
+
+    def test_updates_offset_to_file_size_preserving_lines(self, tmp_path):
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        f = folder / "sess1.jsonl"
+        f.write_text("x" * 100)
+        state = {"sessions": {"sess1": {"offset": 40, "lines": 5, "last_synthesized": "old"}}}
+        with mock.patch("project_manager.load_synthesis_state", return_value=state), \
+             mock.patch("project_manager.save_synthesis_state") as save:
+            n = refresh_synthesis_offsets(["sess1"], folder)
+        assert n == 1
+        assert state["sessions"]["sess1"]["offset"] == 100
+        assert state["sessions"]["sess1"]["lines"] == 5  # line count unchanged
+        save.assert_called_once()
+
+    def test_skips_session_not_in_state(self, tmp_path):
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        (folder / "sess1.jsonl").write_text("data")
+        with mock.patch("project_manager.load_synthesis_state", return_value={"sessions": {}}), \
+             mock.patch("project_manager.save_synthesis_state") as save:
+            n = refresh_synthesis_offsets(["sess1"], folder)
+        assert n == 0
+        save.assert_not_called()
+
+    def test_skips_missing_transcript_file(self, tmp_path):
+        folder = tmp_path / "folder"
+        folder.mkdir()
+        state = {"sessions": {"sess1": {"offset": 1, "lines": 1}}}
+        with mock.patch("project_manager.load_synthesis_state", return_value=state), \
+             mock.patch("project_manager.save_synthesis_state") as save:
+            n = refresh_synthesis_offsets(["sess1"], folder)
+        assert n == 0
+        save.assert_not_called()
+
+
+class TestRebuildAndVerifyIndex:
+    """Tests for rebuild_and_verify_index — post-move durability check."""
+
+    def test_durable_when_entry_resolves(self, tmp_path):
+        import indexing
+
+        proj = tmp_path / "new-project"
+        proj.mkdir()
+        fake = {"projects": {str(proj).lower(): {"name": "new-project", "originalPath": str(proj)}}}
+        with mock.patch.object(indexing, "build_projects_index", return_value=fake):
+            result = rebuild_and_verify_index(str(proj))
+        assert result["durable"] is True
+        assert result["entry"]["name"] == "new-project"
+        assert result["stale_paths"] == []
+
+    def test_not_durable_when_entry_missing(self, tmp_path):
+        import indexing
+
+        proj = tmp_path / "new-project"
+        proj.mkdir()
+        with mock.patch.object(indexing, "build_projects_index", return_value={"projects": {}}):
+            result = rebuild_and_verify_index(str(proj))
+        assert result["durable"] is False
+        assert "NOT durable" in result["message"]
+
+    def test_not_durable_when_path_absent_on_disk(self, tmp_path):
+        import indexing
+
+        proj = tmp_path / "gone"  # never created
+        fake = {"projects": {str(proj).lower(): {"name": "gone", "originalPath": str(proj)}}}
+        with mock.patch.object(indexing, "build_projects_index", return_value=fake):
+            result = rebuild_and_verify_index(str(proj))
+        assert result["durable"] is False
+        assert str(proj) in result["stale_paths"]
 
 
 # =============================================================================
