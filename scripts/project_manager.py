@@ -17,6 +17,7 @@ Usage (from Claude Code):
 import dataclasses
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -39,8 +40,11 @@ from memory_utils import (
     get_sessions_original_path,
     load_json_file,
     load_sessions_index,
+    load_synthesis_state,
     project_name_to_filename,
+    resolve_session_path,
     save_json_file,
+    save_synthesis_state,
     to_iso_z,
 )
 
@@ -57,6 +61,7 @@ __all__ = [
     "encode_path",
     "decode_path_best_effort",
     "get_original_path_from_folder",
+    "get_folder_original_path",
     # Discovery
     "list_projects",
     "find_orphaned_folders",
@@ -80,8 +85,11 @@ __all__ = [
     "rebuild_sessions_index",
     "merge_sessions_index",
     "rewrite_paths_in_file",
+    "rewrite_cwd_in_transcripts",
+    "refresh_synthesis_offsets",
     "get_memory_files_for_merge",
     "update_session_index_paths",
+    "rebuild_and_verify_index",
 ]
 
 
@@ -204,6 +212,33 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
     return get_sessions_original_path(data) or None
 
 
+def get_folder_original_path(folder_path: Path) -> Optional[str]:
+    """
+    Resolve a project folder's original path, preferring whatever still exists.
+
+    Tries ``sessions-index.json`` first (legacy/authoritative when present), then
+    falls back to the ``cwd`` recorded in the folder's newest ``.jsonl``
+    transcript. Current Claude Code no longer writes ``sessions-index.json``, so
+    the transcript ``cwd`` is the real source of truth.
+
+    The fallback delegates to ``indexing._extract_from_jsonl`` rather than
+    re-scanning, so this resolver uses the exact same newest-mtime ordering, scan
+    limit, and ``cwd`` field as ``build_projects_index`` -- guaranteeing the path
+    we rewrite is the one the index will actually be rebuilt from.
+
+    Returns the path string, or None if neither source yields one.
+    """
+    path = get_original_path_from_folder(folder_path)
+    if path:
+        return path
+
+    # Local import: indexing depends only on memory_utils, so no import cycle.
+    from indexing import _extract_from_jsonl
+
+    cwd, _ = _extract_from_jsonl(Path(folder_path))
+    return cwd or None
+
+
 # =============================================================================
 # Discovery Functions
 # =============================================================================
@@ -288,8 +323,9 @@ def find_orphaned_folders() -> list[OrphanInfo]:
 
         folder_name = folder.name
 
-        # Get authoritative original path from sessions-index.json
-        original_path = get_original_path_from_folder(folder)
+        # Original path: sessions-index.json if present, else the transcript cwd
+        # (current Claude Code no longer writes sessions-index.json).
+        original_path = get_folder_original_path(folder)
 
         # Determine if this is an orphan
         # First check: if folder is tracked in our index, it's not an orphan
@@ -596,8 +632,10 @@ def plan_merge_orphan(orphan_name: str, target_path: Path) -> OperationPlan:
     if history_file.exists():
         backups.append(str(history_file))
 
-    # Check for orphan's memory file (need to detect project name)
-    original_path = get_original_path_from_folder(orphan_folder)
+    # Check for orphan's memory file (need to detect project name). Use the cwd
+    # fallback so plan and execute_merge_orphan resolve the orphan identically —
+    # otherwise plan omits the orphan memory file that execute then merges.
+    original_path = get_folder_original_path(orphan_folder)
     if original_path:
         orphan_project_name = Path(original_path).name
         orphan_memory_filename = project_name_to_filename(orphan_project_name)
@@ -1051,6 +1089,170 @@ def update_session_index_paths(old_path: str, new_path: str) -> int:
     return updated
 
 
+def rewrite_cwd_in_transcripts(folder: Path, old_path: str, new_path: str) -> dict:
+    """
+    Rewrite the ``cwd`` field (old_path -> new_path) inside every ``*.jsonl``
+    transcript in a Claude Code project folder.
+
+    Why this matters: indexing.build_projects_index rebuilds the entire
+    projects index from scratch and derives each project's path from the
+    newest transcript's ``cwd`` field (see indexing._extract_from_jsonl).
+    Current Claude Code no longer writes ``sessions-index.json``, so the JSONL
+    ``cwd`` is the authoritative path signal. After a move/rename the
+    transcripts still record the old cwd, so the next index rebuild silently
+    reverts the rename. Rewriting cwd here is what makes a move durable.
+
+    Only the ``cwd`` field is touched, and only when ``old_path`` is followed by
+    a path boundary -- the exact value (closing quote follows) or a deeper cwd
+    for a session run in a subdirectory ("/" follows). A sibling project that
+    merely shares a prefix (``/p/old`` vs ``/p/old-other``) is left untouched, as
+    is conversation text and tool I/O elsewhere in the transcript.
+
+    Returns ``{"files_modified": int, "session_ids": list[str]}`` (session_ids
+    are the stems of the modified ``*.jsonl`` files, for offset bookkeeping).
+    """
+    folder = Path(folder)
+    result: dict[str, Any] = {"files_modified": 0, "session_ids": []}
+    if not folder.is_dir():
+        return result
+
+    # Anchor on the cwd field so only the working-directory value is rewritten.
+    # Captures any JSON spacing around the colon; the trailing lookahead requires
+    # old_path to end at a path boundary ("/" for a subdir cwd, or the closing
+    # quote for an exact match) so a sibling project sharing a prefix is skipped.
+    pattern = re.compile(r'("cwd"\s*:\s*")' + re.escape(old_path) + r'(?=/|")')
+
+    def _repl(m: "re.Match") -> str:
+        return m.group(1) + new_path
+
+    for jsonl_file in sorted(folder.glob("*.jsonl")):
+        if _stream_regex_replace(jsonl_file, pattern, _repl) > 0:
+            result["files_modified"] += 1
+            result["session_ids"].append(jsonl_file.stem)
+
+    return result
+
+
+def _stream_regex_replace(filepath: Path, pattern: "re.Pattern", repl) -> int:
+    """
+    Apply a compiled-regex substitution to a file line-by-line (streaming).
+
+    Writes to a temp file and atomically replaces the original only if at least
+    one substitution was made. Returns the total number of substitutions.
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        return 0
+
+    temp_path = filepath.with_suffix(filepath.suffix + ".tmp")
+    total = 0
+    try:
+        with open(filepath, "r", encoding="utf-8") as infile, \
+             open(temp_path, "w", encoding="utf-8") as outfile:
+            for line in infile:
+                new_line, n = pattern.subn(repl, line)
+                total += n
+                outfile.write(new_line)
+        if total > 0:
+            temp_path.replace(filepath)
+        elif temp_path.exists():
+            temp_path.unlink()
+    except (IOError, UnicodeDecodeError):
+        if temp_path.exists():
+            temp_path.unlink()
+        return 0
+
+    return total
+
+
+def refresh_synthesis_offsets(session_ids: list[str], folder: Path) -> int:
+    """
+    Refresh stored synthesis byte-offsets for the given sessions to the current
+    file size.
+
+    Rewriting ``cwd`` inside a transcript changes its byte size but not its line
+    count. Synthesis tracks a per-session high-water mark as ``offset`` (bytes);
+    a grown file looks like it has new content, so the next synthesis run would
+    re-enter delta mode for it. Resetting ``offset`` to the new size (line count
+    is unchanged, so ``lines`` is left as-is) keeps those sessions marked as
+    fully processed. Best-effort: sessions absent from state are skipped.
+
+    Returns the number of sessions updated.
+    """
+    folder = Path(folder)
+    state = load_synthesis_state()
+    sessions = state.get("sessions")
+    if not isinstance(sessions, dict):
+        return 0
+
+    updated = 0
+    for sid in session_ids:
+        entry = sessions.get(sid)
+        if not isinstance(entry, dict):
+            continue
+        jsonl_file = folder / f"{sid}.jsonl"
+        if jsonl_file.exists():
+            entry["offset"] = jsonl_file.stat().st_size
+            updated += 1
+
+    if updated:
+        save_synthesis_state(state)
+
+    return updated
+
+
+def rebuild_and_verify_index(expected_original_path: str) -> dict:
+    """
+    Rebuild the projects index from transcripts and verify a move is durable.
+
+    Run this after execute_move / execute_merge_orphan. It calls
+    indexing.build_projects_index() -- the same full rebuild synthesis performs
+    hourly -- and confirms the project now resolves to ``expected_original_path``
+    on disk. If ``durable`` is False, the cwd rewrite was incomplete and the
+    rename would otherwise revert on the next synthesis pass.
+
+    Returns ``{"durable": bool, "entry": dict|None, "stale_paths": list[str],
+    "message": str}``.
+    """
+    # Local import: indexing depends on memory_utils only, so this avoids any
+    # import-order coupling with project_manager at module load time.
+    from indexing import build_projects_index
+
+    index = build_projects_index()
+    projects = index.get("projects", {})
+    # build_projects_index keys projects by resolve_session_path(cwd).lower()
+    # (collapsing git worktrees / subdirs to the repo root), so resolve the
+    # lookup key the same way — otherwise a worktree/subdir project would miss
+    # and falsely report NOT durable even though the move succeeded.
+    canonical = resolve_session_path(str(expected_original_path)).lower()
+    entry = projects.get(canonical)
+
+    stale_paths = [
+        data.get("originalPath", cp)
+        for cp, data in projects.items()
+        if data.get("originalPath") and not Path(data["originalPath"]).exists()
+    ]
+
+    durable = bool(entry) and Path(expected_original_path).exists()
+    if durable:
+        message = f"Durable: '{entry['name']}' resolves to {expected_original_path}"
+    elif entry is None:
+        message = (
+            f"NOT durable: no index entry for {expected_original_path} after "
+            "rebuild — cwd rewrite was likely incomplete and the rename will "
+            "revert on the next synthesis run"
+        )
+    else:
+        message = f"NOT durable: {expected_original_path} does not exist on disk"
+
+    return {
+        "durable": durable,
+        "entry": entry,
+        "stale_paths": stale_paths,
+        "message": message,
+    }
+
+
 # =============================================================================
 # Execution Functions
 # =============================================================================
@@ -1129,6 +1331,20 @@ def execute_move(
                 if source_path.exists():
                     shutil.move(str(source_path), str(dest_path))
 
+            # Rewrite cwd inside the destination transcripts so the rename
+            # survives the next index rebuild (build_projects_index derives a
+            # project's path from the transcript cwd, not from history.jsonl or
+            # sessions-index.json). Without this the move reverts on the next
+            # synthesis pass. Then refresh synthesis offsets, since the rewrite
+            # grows each file's byte size without adding lines.
+            new_encoded = encode_path(str(new_path))
+            new_project_folder = get_projects_dir() / new_encoded
+            cwd_rewrite = rewrite_cwd_in_transcripts(
+                new_project_folder, str(old_path), str(new_path)
+            )
+            if cwd_rewrite["session_ids"]:
+                refresh_synthesis_offsets(cwd_rewrite["session_ids"], new_project_folder)
+
             # Update projects-index.json
             index_file = get_projects_index_file()
             index = load_json_file(index_file, {"projects": {}})
@@ -1161,6 +1377,7 @@ def execute_move(
                 "success": True,
                 "message": f"Successfully moved project from {old_path} to {new_path}",
                 "backup_path": str(backup_path),
+                "cwd_files_rewritten": cwd_rewrite["files_modified"],
             }
 
     except TimeoutError:
@@ -1224,9 +1441,12 @@ def execute_merge_orphan(
             projects_dir = get_projects_dir()
             target_encoded = encode_path(str(target_path))
 
-            # Get original path from orphan for memory file lookup
+            # Get original path from orphan for memory file lookup and the cwd
+            # rewrite. Fall back to the transcript cwd when sessions-index.json
+            # is absent (current Claude Code no longer writes it) — otherwise the
+            # cwd rewrite below would be skipped and the merge would revert.
             orphan_folder = projects_dir / orphan_name
-            orphan_original_path = get_original_path_from_folder(orphan_folder)
+            orphan_original_path = get_folder_original_path(orphan_folder)
             orphan_project_name = Path(orphan_original_path).name if orphan_original_path else None
 
             # Execute merges
@@ -1312,6 +1532,18 @@ def execute_merge_orphan(
                     old_path_rename.rename(new_path_rename)
                     renamed_folders.append(str(new_path_rename))
 
+            # Rewrite cwd inside the target's transcripts (now including the
+            # merged-in orphan transcripts) so the merge survives the next index
+            # rebuild, then refresh synthesis offsets for the rewritten files.
+            cwd_rewrite: dict[str, Any] = {"files_modified": 0, "session_ids": []}
+            if orphan_original_path:
+                target_folder = projects_dir / target_encoded
+                cwd_rewrite = rewrite_cwd_in_transcripts(
+                    target_folder, orphan_original_path, str(target_path)
+                )
+                if cwd_rewrite["session_ids"]:
+                    refresh_synthesis_offsets(cwd_rewrite["session_ids"], target_folder)
+
             # Update projects-index.json
             index_file = get_projects_index_file()
             index = load_json_file(index_file, {"projects": {}})
@@ -1351,6 +1583,7 @@ def execute_merge_orphan(
                 "renamed_folders": renamed_folders,
                 "orphan_project_name": orphan_project_name,
                 "target_project_name": target_path.name,
+                "cwd_files_rewritten": cwd_rewrite["files_modified"],
             }
 
     except TimeoutError:
