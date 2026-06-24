@@ -349,6 +349,18 @@ class TestExtractSessionMetadata:
         assert summary == "real prompt"
         assert cwd == "/home/u/proj"
 
+    def test_tracks_earliest_timestamp_not_first(self, tmp_path):
+        """`created` is the minimum timestamp in the scan window, even if a
+        later record carries an earlier time than the first one."""
+        f = self._write(
+            tmp_path,
+            {"type": "file-history-snapshot", "timestamp": "2026-03-06T10:00:00Z"},
+            {"type": "user", "timestamp": "2026-03-06T09:00:00Z", "cwd": "/home/u/p",
+             "message": {"role": "user", "content": "go"}},
+        )
+        created, _summary, _cwd = _extract_session_metadata(f)
+        assert created == datetime(2026, 3, 6, 9, 0, tzinfo=timezone.utc)
+
     def test_null_message_does_not_raise(self, tmp_path):
         """A record with an explicit null `message` is tolerated (no AttributeError)."""
         f = self._write(

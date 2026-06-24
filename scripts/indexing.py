@@ -191,15 +191,18 @@ def _extract_session_metadata(
                 if not isinstance(data, dict):
                     continue
 
-                if created is None:
-                    ts = data.get("timestamp", "")
-                    if ts:
-                        # A malformed (non-string) timestamp raises TypeError/
-                        # AttributeError inside from_iso_z; treat like a bad date.
-                        try:
-                            created = from_iso_z(ts)
-                        except (ValueError, TypeError, AttributeError):
-                            pass
+                ts = data.get("timestamp", "")
+                if ts:
+                    # A malformed (non-string) timestamp raises TypeError/
+                    # AttributeError inside from_iso_z; treat like a bad date.
+                    try:
+                        parsed = from_iso_z(ts)
+                    except (ValueError, TypeError, AttributeError):
+                        parsed = None
+                    # Keep the earliest timestamp seen — records are usually
+                    # chronological, but don't assume the first one is the min.
+                    if parsed is not None and (created is None or parsed < created):
+                        created = parsed
 
                 if cwd is None:
                     folder = data.get("cwd")
@@ -219,10 +222,8 @@ def _extract_session_metadata(
                     if text and not text.startswith(_PROMPT_SKIP_PREFIXES):
                         first_prompt = text[:150]
 
-                # ai-title is the preferred summary; stop early once we have it
-                # alongside the created date.
-                if created is not None and ai_title is not None:
-                    break
+            # Scan the full window (no early break): `created` must be the
+            # earliest timestamp, so we cannot stop as soon as ai-title appears.
     except IOError:
         pass
 
@@ -359,9 +360,11 @@ def list_recent_sessions(
     """
     List recent sessions eligible for synthesis.
 
-    Uses the transcript-derived created date (real session start) when
-    available, falls back to file mtime. This handles migrated sessions whose
-    mtime changed on copy.
+    A session counts as recent if EITHER its transcript-derived created date
+    OR its file mtime falls within the window. The created date keeps migrated
+    sessions whose mtime jumped on copy; the mtime keeps long-lived sessions
+    that started before the window but are still being appended to. (Day
+    bucketing in get_session_date still prefers created.)
 
     Args:
         max_age_days: Only include sessions created/modified within this many days
