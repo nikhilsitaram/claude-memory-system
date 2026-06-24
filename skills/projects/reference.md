@@ -44,7 +44,7 @@ for p in projects:
 
 if orphans:
     for o in orphans:
-        orig = o.original_path_from_index or "(unknown original path)"
+        orig = o.original_path or "(unknown original path)"
         print(f"  {o.folder_name} — Was: {orig}")
 ```
 

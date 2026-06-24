@@ -82,13 +82,10 @@ __all__ = [
     "restore_from_backup",
     "list_backups",
     # Index operations
-    "rebuild_sessions_index",
-    "merge_sessions_index",
     "rewrite_paths_in_file",
     "rewrite_cwd_in_transcripts",
     "refresh_synthesis_offsets",
     "get_memory_files_for_merge",
-    "update_session_index_paths",
     "rebuild_and_verify_index",
 ]
 
@@ -119,7 +116,7 @@ class OrphanInfo:
     folder_path: str
     decoded_path: Optional[str]  # Best-effort decode (may be lossy)
     sessions_index_path: Optional[str]  # If sessions-index.json exists
-    original_path_from_index: Optional[str]  # Authoritative path from sessions-index
+    original_path: Optional[str]  # Resolved path (transcript cwd, or legacy index when present)
     subdirs: list[str]  # Which CLAUDE_SUBDIRS exist
     file_count: int
     total_size_bytes: int
@@ -159,7 +156,8 @@ def encode_path(path: str) -> str:
     Example: /home/user/my-project -> -home-user-my-project
 
     Note: This encoding is LOSSY - you cannot reliably decode back to the
-    original path. Always use sessions-index.json for authoritative paths.
+    original path. Use get_folder_original_path() (transcript cwd) for the
+    authoritative path.
     """
     # Match Claude Code's encoding exactly
     return path.replace("/", "-").replace(".", "-")
@@ -171,11 +169,11 @@ def decode_path_best_effort(encoded: str) -> str:
 
     .. deprecated::
         This function is LOSSY and should NOT be used for path reconstruction.
-        Use get_original_path_from_folder() to read sessions-index.json instead.
-        This function exists only for display/debugging when no index is available.
+        Use get_folder_original_path() (transcript cwd) instead. This function
+        exists only for display/debugging when no transcript cwd is available.
 
     WARNING: This is LOSSY and should only be used for display purposes.
-    For authoritative paths, always read from sessions-index.json.
+    For authoritative paths, use get_folder_original_path() (transcript cwd).
 
     The encoding replaces both / and . with -, so we cannot distinguish:
     - /home/user/.config -> -home-user--config
@@ -200,13 +198,15 @@ def decode_path_best_effort(encoded: str) -> str:
 
 def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
     """
-    Get the authoritative original path from a Claude Code project folder.
+    Read the original path from a folder's sessions-index.json, if one exists.
 
     Checks sessions-index.json for:
     1. Root-level 'originalPath' (legacy/manual format)
     2. entries[0].projectPath (Claude Code's actual format)
 
-    This is the only reliable way to get the original path since encoding is lossy.
+    Current Claude Code rarely writes this file, so this is the legacy
+    read-when-present path; prefer get_folder_original_path(), which falls back
+    to the transcript cwd. Returns None when no index is present.
     """
     data = load_sessions_index(folder_path)
     return get_sessions_original_path(data) or None
@@ -214,29 +214,29 @@ def get_original_path_from_folder(folder_path: Path) -> Optional[str]:
 
 def get_folder_original_path(folder_path: Path) -> Optional[str]:
     """
-    Resolve a project folder's original path, preferring whatever still exists.
+    Resolve a project folder's original path the same way the index does.
 
-    Tries ``sessions-index.json`` first (legacy/authoritative when present), then
-    falls back to the ``cwd`` recorded in the folder's newest ``.jsonl``
-    transcript. Current Claude Code no longer writes ``sessions-index.json``, so
-    the transcript ``cwd`` is the real source of truth.
+    Prefers the ``cwd`` recorded in the folder's newest ``.jsonl`` transcript,
+    falling back to ``sessions-index.json`` only when no transcript cwd exists.
+    Current Claude Code no longer writes ``sessions-index.json``, so the
+    transcript ``cwd`` is the real source of truth.
 
-    The fallback delegates to ``indexing._extract_from_jsonl`` rather than
+    The cwd lookup delegates to ``indexing._extract_from_jsonl`` rather than
     re-scanning, so this resolver uses the exact same newest-mtime ordering, scan
     limit, and ``cwd`` field as ``build_projects_index`` -- guaranteeing the path
-    we rewrite is the one the index will actually be rebuilt from.
+    we rewrite is the one the index will actually be rebuilt from, even when a
+    legacy ``sessions-index.json`` lingers with a stale, divergent path.
 
     Returns the path string, or None if neither source yields one.
     """
-    path = get_original_path_from_folder(folder_path)
-    if path:
-        return path
-
     # Local import: indexing depends only on memory_utils, so no import cycle.
     from indexing import _extract_from_jsonl
 
     cwd, _ = _extract_from_jsonl(Path(folder_path))
-    return cwd or None
+    if cwd:
+        return cwd
+
+    return get_original_path_from_folder(folder_path)
 
 
 # =============================================================================
@@ -297,8 +297,9 @@ def find_orphaned_folders() -> list[OrphanInfo]:
     Find Claude Code folders that don't match any valid project in the index.
 
     An "orphan" is a folder in ~/.claude/projects/ where:
-    1. The originalPath in sessions-index.json doesn't exist on disk, OR
-    2. The folder is not tracked in our projects-index.json
+    1. The folder is not tracked in our projects-index.json, AND
+    2. Its resolved path (transcript cwd, or legacy sessions-index.json when
+       present) is missing or doesn't exist on disk.
 
     Returns information about each orphan for the skill to present to the user.
     """
@@ -335,11 +336,12 @@ def find_orphaned_folders() -> list[OrphanInfo]:
 
         is_orphan = False
         if original_path:
-            # Has sessions-index.json - check if path exists on disk
+            # Resolved a path (transcript cwd or legacy index) — orphan only if
+            # that path no longer exists on disk.
             if not Path(original_path).exists():
                 is_orphan = True
         else:
-            # No sessions-index.json and not tracked - orphan
+            # No resolvable path and not tracked - orphan
             is_orphan = True
 
         if not is_orphan:
@@ -370,7 +372,7 @@ def find_orphaned_folders() -> list[OrphanInfo]:
             folder_path=str(folder),
             decoded_path=decode_path_best_effort(folder_name) if not original_path else None,
             sessions_index_path=str(sessions_index_path) if sessions_index_path.exists() else None,
-            original_path_from_index=original_path,
+            original_path=original_path,
             subdirs=subdirs,
             file_count=file_count,
             total_size_bytes=total_size,
@@ -838,131 +840,6 @@ def restore_from_backup(backup_dir: Path) -> dict:
     }
 
 
-def rebuild_sessions_index(folder: Path, project_path: str) -> dict:
-    """
-    Rebuild sessions-index.json from .jsonl files in a folder.
-
-    Scans all .jsonl files and creates entries with basic metadata.
-    Returns the rebuilt index data.
-    """
-    entries = []
-
-    for jsonl_file in sorted(folder.glob("*.jsonl")):
-        session_id = jsonl_file.stem
-        try:
-            stat = jsonl_file.stat()
-        except OSError:
-            continue
-
-        mtime_ms = int(stat.st_mtime * 1000)
-        created_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-
-        # Try to extract first prompt for context
-        first_prompt = "(recovered session)"
-        try:
-            with open(jsonl_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        msg = json.loads(line)
-                        if msg.get("type") == "human":
-                            content = msg.get("message", {}).get("content", "")
-                            first_prompt = content[:150] if content else "(no prompt)"
-                            break
-                    except json.JSONDecodeError:
-                        continue
-        except IOError:
-            pass
-
-        entries.append({
-            "sessionId": session_id,
-            "fullPath": str(jsonl_file),
-            "fileMtime": mtime_ms,
-            "firstPrompt": first_prompt,
-            "summary": "(recovered session)",
-            "messageCount": 0,
-            "created": to_iso_z(created_dt),
-            "modified": to_iso_z(created_dt),
-            "gitBranch": "",
-            "projectPath": project_path,
-            "isSidechain": False,
-        })
-
-    # Sort by created date
-    entries.sort(key=lambda e: e["created"])
-
-    return {
-        "version": 1,
-        "entries": entries,
-        "originalPath": project_path,
-    }
-
-
-def merge_sessions_index(source: Path, dest: Path, project_path: Optional[str] = None) -> int:
-    """
-    Merge sessions-index.json files.
-
-    Combines entries, dedupes by session ID, keeps newest for conflicts.
-    If source has no entries, scans source folder for .jsonl files.
-    Returns number of entries merged from source.
-    """
-    source_data = load_json_file(source, {})
-    dest_data = load_json_file(dest, {})
-
-    # If source has no entries, try to rebuild from .jsonl files
-    source_entries = source_data.get("entries", [])
-    if not source_entries and source.parent.is_dir():
-        rebuilt = rebuild_sessions_index(
-            source.parent,
-            project_path or dest_data.get("originalPath", "")
-        )
-        source_entries = rebuilt.get("entries", [])
-
-    if not source_entries:
-        return 0
-
-    # Build lookup of existing entries by session ID
-    # Note: Claude Code uses "sessionId", not "id"
-    dest_entries = {
-        e.get("sessionId", e.get("id")): e
-        for e in dest_data.get("entries", [])
-        if e.get("sessionId") or e.get("id")
-    }
-
-    merged_count = 0
-
-    for entry in source_entries:
-        session_id = entry.get("sessionId", entry.get("id"))
-        if not session_id:
-            continue
-
-        if session_id in dest_entries:
-            # Keep newer entry
-            existing = dest_entries[session_id]
-            existing_time = existing.get("modified", existing.get("lastActive", existing.get("created", "")))
-            new_time = entry.get("modified", entry.get("lastActive", entry.get("created", "")))
-            if new_time > existing_time:
-                dest_entries[session_id] = entry
-                merged_count += 1
-        else:
-            dest_entries[session_id] = entry
-            merged_count += 1
-
-    # Rebuild entries list sorted by modified/created (newest first)
-    dest_data["entries"] = sorted(
-        dest_entries.values(),
-        key=lambda e: e.get("modified", e.get("lastActive", e.get("created", ""))),
-        reverse=True,
-    )
-
-    # Ensure version is set
-    dest_data["version"] = 1
-
-    # Keep the dest's originalPath as it's the valid one
-
-    save_json_file(dest, dest_data)
-    return merged_count
-
-
 def rewrite_paths_in_file(filepath: Path, old_path: str, new_path: str) -> int:
     """
     Replace old_path with new_path in a file (streaming for large files).
@@ -1050,43 +927,6 @@ def get_memory_files_for_merge(source_name: str, dest_name: str) -> dict:
         "source_exists": source_file.exists(),
         "dest_exists": dest_file.exists(),
     }
-
-
-def update_session_index_paths(old_path: str, new_path: str) -> int:
-    """
-    Update originalPath in sessions-index.json files across all affected project folders.
-
-    When a project directory is renamed (e.g., ~/claude-code -> ~/swyfft),
-    the sessions-index.json files inside ~/.claude/projects/ still reference
-    the old path. This function updates them so find_orphaned_folders() doesn't
-    flag them as orphans.
-
-    Also updates sub-project folders (e.g., ~/claude-code/projects/foo).
-
-    Returns the number of files updated.
-    """
-    projects_dir = get_projects_dir()
-    if not projects_dir.exists():
-        return 0
-
-    updated = 0
-    for folder in projects_dir.iterdir():
-        if not folder.is_dir():
-            continue
-        sessions_file = folder / "sessions-index.json"
-        if not sessions_file.exists():
-            continue
-        try:
-            content = sessions_file.read_text(encoding="utf-8")
-            if old_path in content:
-                sessions_file.write_text(
-                    content.replace(old_path, new_path), encoding="utf-8"
-                )
-                updated += 1
-        except (IOError, UnicodeDecodeError):
-            continue
-
-    return updated
 
 
 def rewrite_cwd_in_transcripts(folder: Path, old_path: str, new_path: str) -> dict:
@@ -1298,21 +1138,15 @@ def execute_move(
             # Create backup
             backup_path = backup_files([Path(f) for f in plan.backups])
 
-            # Execute merges
+            # Execute merges. Transcripts are the source of truth; any legacy
+            # sessions-index.json is copied as an ordinary file (we never write
+            # or merge it — current Claude Code ignores it).
             for source, dest in plan.merges:
                 source_path = Path(source)
                 dest_path = Path(dest)
 
-                # Merge sessions-index.json if both exist
-                source_sessions = source_path / "sessions-index.json"
-                dest_sessions = dest_path / "sessions-index.json"
-                if source_sessions.exists() and dest_sessions.exists():
-                    merge_sessions_index(source_sessions, dest_sessions)
-
-                # Copy all other files from source to dest
+                # Copy all files from source to dest
                 for item in source_path.iterdir():
-                    if item.name == "sessions-index.json":
-                        continue  # Already merged
                     dest_item = dest_path / item.name
                     if item.is_file():
                         shutil.copy2(item, dest_item)
@@ -1365,9 +1199,6 @@ def execute_move(
             history_file = get_claude_dir() / "history.jsonl"
             if history_file.exists():
                 rewrite_paths_in_file(history_file, str(old_path), str(new_path))
-
-            # Update sessions-index.json files in all affected project folders
-            update_session_index_paths(str(old_path), str(new_path))
 
             # Move the actual project directory
             if old_path.exists() and not new_path.exists():
@@ -1449,53 +1280,20 @@ def execute_merge_orphan(
             orphan_original_path = get_folder_original_path(orphan_folder)
             orphan_project_name = Path(orphan_original_path).name if orphan_original_path else None
 
-            # Execute merges
+            # Execute merges. Copy transcripts (and any subdirs) into the target
+            # folder; a legacy sessions-index.json is copied as an ordinary file.
+            # We never rebuild or merge the index — the transcript cwd (rewritten
+            # below) is the only path signal the index rebuild reads.
             for source, dest in plan.merges:
                 source_path = Path(source)
                 dest_path = Path(dest)
 
-                # Copy .jsonl files and subdirs first
                 for item in source_path.iterdir():
-                    if item.name == "sessions-index.json":
-                        continue
                     dest_item = dest_path / item.name
                     if item.is_file() and not dest_item.exists():
                         shutil.copy2(item, dest_item)
                     elif item.is_dir() and not dest_item.exists():
                         shutil.copytree(item, dest_item)
-
-                # Now merge sessions-index.json (will scan .jsonl files if entries missing)
-                source_sessions = source_path / "sessions-index.json"
-                dest_sessions = dest_path / "sessions-index.json"
-                if source_sessions.exists():
-                    if dest_sessions.exists():
-                        merge_sessions_index(source_sessions, dest_sessions, str(target_path))
-                    else:
-                        # Copy sessions-index but update originalPath
-                        data = load_json_file(source_sessions, {})
-                        data["originalPath"] = str(target_path)
-                        save_json_file(dest_sessions, data)
-
-            # After all merges, rebuild the target's sessions-index to ensure all .jsonl files are indexed
-            target_folder = projects_dir / target_encoded
-            if target_folder.exists():
-                rebuilt = rebuild_sessions_index(target_folder, str(target_path))
-                target_sessions = target_folder / "sessions-index.json"
-                # Merge rebuilt entries with any existing entries
-                if target_sessions.exists():
-                    existing = load_json_file(target_sessions, {})
-                    existing_ids = {e.get("sessionId") for e in existing.get("entries", [])}
-                    for entry in rebuilt.get("entries", []):
-                        if entry.get("sessionId") not in existing_ids:
-                            existing.setdefault("entries", []).append(entry)
-                    existing["entries"].sort(
-                        key=lambda e: e.get("modified", e.get("created", "")),
-                        reverse=True
-                    )
-                    existing["originalPath"] = str(target_path)
-                    save_json_file(target_sessions, existing)
-                else:
-                    save_json_file(target_sessions, rebuilt)
 
             # Execute moves
             for source, dest in plan.moves:
@@ -1504,25 +1302,6 @@ def execute_merge_orphan(
                 if source_path.exists():
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(source_path), str(dest_path))
-
-                    # Rebuild sessions-index.json with correct path and all .jsonl entries
-                    dest_sessions = dest_path / "sessions-index.json"
-                    rebuilt = rebuild_sessions_index(dest_path, str(target_path))
-                    if dest_sessions.exists():
-                        # Merge with existing entries
-                        existing = load_json_file(dest_sessions, {})
-                        existing_ids = {e.get("sessionId") for e in existing.get("entries", [])}
-                        for entry in rebuilt.get("entries", []):
-                            if entry.get("sessionId") not in existing_ids:
-                                existing.setdefault("entries", []).append(entry)
-                        existing["entries"].sort(
-                            key=lambda e: e.get("modified", e.get("created", "")),
-                            reverse=True
-                        )
-                        existing["originalPath"] = str(target_path)
-                        save_json_file(dest_sessions, existing)
-                    else:
-                        save_json_file(dest_sessions, rebuilt)
 
             # Execute safety renames
             for old_name, new_name in plan.renames:
@@ -1749,7 +1528,7 @@ if __name__ == "__main__":
             print(f"Orphaned folders ({len(orphans)}):")
             for o in orphans:
                 size_kb = o.total_size_bytes / 1024
-                orig = o.original_path_from_index or o.decoded_path or "unknown"
+                orig = o.original_path or o.decoded_path or "unknown"
                 print(f"  {o.folder_name}")
                 print(f"    Original: {orig}")
                 print(f"    Files: {o.file_count}, Size: {size_kb:.1f} KB")

@@ -14,6 +14,8 @@ Manage Claude Code project data (sessions, file history, memory) when projects a
 
 Consequence: a rename only sticks if the transcripts' `cwd` is updated. Change the index but leave the old `cwd` in the transcripts, and the next synthesis rebuild silently reverts your change. `execute_move` / `execute_merge_orphan` now rewrite `cwd` in the destination transcripts automatically — but **always confirm durability** with `rebuild_and_verify_index()` after executing.
 
+> Upstream: if Claude Code ships native session relocation (anthropics/claude-code#27967 — "Allow relocating active sessions to a new working directory"), parts of this move flow could defer to it. Until then, the `cwd` rewrite is the durable mechanism.
+
 ## Running
 
 Use a **3.10+ interpreter**. The system `python3` on macOS is 3.9 and crashes on this library's `X | None` type hints. Run snippets with `uv run --no-project python - <<'PY' … PY` (or an explicit `python3.12` / `python3.13`), never bare `python3`.
@@ -121,4 +123,4 @@ See `reference.md` for full function reference, additional workflow examples, an
 Claude Code encodes paths by replacing `/` and `.` with `-`:
 - `/home/user/my-project` → `-home-user-my-project`
 
-**Important**: This encoding is LOSSY (you cannot reliably decode it back). The authoritative original path is the `cwd` field inside the folder's `.jsonl` transcripts (`get_original_path_from_folder()` reads `sessions-index.json` when present, but current Claude Code no longer writes it, so `cwd` is the real source of truth).
+**Important**: This encoding is LOSSY (you cannot reliably decode it back). The authoritative original path is the `cwd` field inside the folder's `.jsonl` transcripts. Use `get_folder_original_path()` — it prefers the transcript `cwd` (the same signal `build_projects_index` keys on) and only falls back to `sessions-index.json` when no transcript cwd exists. (`get_original_path_from_folder()` is the legacy index-only reader.)
