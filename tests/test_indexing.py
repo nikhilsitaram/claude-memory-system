@@ -15,10 +15,12 @@ from helpers import make_jsonl_line, make_session_info  # noqa: I001
 from indexing import (
     DEFAULT_RECENCY_WINDOW_DAYS,
     MIN_SESSION_SIZE_BYTES,
+    _extract_session_metadata,
     _suggest_path_correction,
     build_projects_index,
     get_session_date,
     has_assistant_message,
+    list_all_sessions,
     list_recent_sessions,
 )
 from transcript_ops import (
@@ -271,6 +273,126 @@ class TestGetSessionDate:
         # mtime is set to now in the helper; get_session_date converts to local tz
         today = datetime.now().strftime("%Y-%m-%d")
         assert get_session_date(session) == today
+
+
+# =============================================================================
+# _extract_session_metadata Tests
+# =============================================================================
+
+
+class TestExtractSessionMetadata:
+    """Recover (created, summary) from a transcript without sessions-index.json."""
+
+    def _write(self, tmp_path, *records):
+        f = tmp_path / "sess.jsonl"
+        f.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+        return f
+
+    def test_ai_title_preferred_as_summary(self, tmp_path):
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": "2026-03-01T09:00:00Z",
+             "message": {"role": "user", "content": "first prompt text"}},
+            {"type": "ai-title", "aiTitle": "Refactor the indexer"},
+        )
+        created, summary = _extract_session_metadata(f)
+        assert created == datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+        assert summary == "Refactor the indexer"
+
+    def test_falls_back_to_first_user_prompt(self, tmp_path):
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": "2026-03-02T08:30:00Z",
+             "message": {"role": "user", "content": "investigate gh issue 146"}},
+        )
+        created, summary = _extract_session_metadata(f)
+        assert created == datetime(2026, 3, 2, 8, 30, tzinfo=timezone.utc)
+        assert summary == "investigate gh issue 146"
+
+    def test_skips_meta_and_wrapper_prompts(self, tmp_path):
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": "2026-03-03T08:00:00Z", "isMeta": True,
+             "message": {"role": "user", "content": "meta noise"}},
+            {"type": "user",
+             "message": {"role": "user", "content": "<command-name>/plugin</command-name>"}},
+            {"type": "user",
+             "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}},
+            {"type": "user",
+             "message": {"role": "user", "content": "the real question"}},
+        )
+        _created, summary = _extract_session_metadata(f)
+        assert summary == "the real question"
+
+    def test_list_content_blocks_flattened(self, tmp_path):
+        f = self._write(
+            tmp_path,
+            {"type": "user", "timestamp": "2026-03-04T08:00:00Z",
+             "message": {"role": "user",
+                         "content": [{"type": "text", "text": "block one"},
+                                     {"type": "text", "text": "block two"}]}},
+        )
+        _created, summary = _extract_session_metadata(f)
+        assert summary == "block one block two"
+
+    def test_empty_file_returns_none(self, tmp_path):
+        f = tmp_path / "sess.jsonl"
+        f.write_text("", encoding="utf-8")
+        assert _extract_session_metadata(f) == (None, None)
+
+
+# =============================================================================
+# list_all_sessions Tests
+# =============================================================================
+
+
+class TestListAllSessions:
+    """list_all_sessions recovers created/summary from transcripts (no index)."""
+
+    def test_recovers_created_and_summary_without_index(self, tmp_path):
+        projects_dir = tmp_path / "projects"
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        (folder / "abc.jsonl").write_text(
+            json.dumps({"type": "user", "timestamp": "2026-04-01T12:00:00Z",
+                        "cwd": "/home/user/proj",
+                        "message": {"role": "user", "content": "do the thing"}}) + "\n"
+            + json.dumps({"type": "ai-title", "aiTitle": "Do the thing"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s.session_id == "abc"
+        assert s.created == datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+        assert s.summary == "Do the thing"
+
+    def test_index_overrides_transcript_when_present(self, tmp_path):
+        projects_dir = tmp_path / "projects"
+        folder = projects_dir / "-home-user-proj"
+        folder.mkdir(parents=True)
+        (folder / "abc.jsonl").write_text(
+            json.dumps({"type": "user", "timestamp": "2026-04-01T12:00:00Z",
+                        "cwd": "/home/user/proj",
+                        "message": {"role": "user", "content": "transcript prompt"}}) + "\n",
+            encoding="utf-8",
+        )
+        (folder / "sessions-index.json").write_text(json.dumps({
+            "originalPath": "/home/user/proj",
+            "entries": [{"sessionId": "abc", "created": "2026-04-01T08:00:00Z",
+                         "summary": "Index summary"}],
+        }), encoding="utf-8")
+
+        with mock.patch("indexing.get_projects_dir", return_value=projects_dir):
+            sessions = list_all_sessions()
+
+        s = sessions[0]
+        assert s.created == datetime(2026, 4, 1, 8, 0, tzinfo=timezone.utc)
+        assert s.summary == "Index summary"
+        assert s.project_path == "/home/user/proj"
 
 
 # =============================================================================
@@ -645,6 +767,32 @@ class TestBuildProjectsIndex:
         assert "2026-02-01" in data["workDays"]  # from sessions-index
         assert "2026-02-05" in data["workDays"]  # from JSONL
         assert "2026-02-10" in data["workDays"]  # from JSONL
+
+    def test_transcript_cwd_wins_over_stale_index_path(self, env):
+        """When both exist, the path comes from the transcript cwd, not the
+        (possibly stale) sessions-index.json originalPath; index work days are
+        still unioned in."""
+        projects_dir, memory_dir, index_file = env
+
+        # sessions-index.json records a STALE original path + one work day.
+        self._setup_project(
+            projects_dir,
+            "-home-user-proj",
+            "/home/user/STALE-old-path",
+            [_make_session_entry("s1", "2026-02-01T10:00:00Z")],
+        )
+        # The transcript carries the real current cwd + a different work day.
+        folder = projects_dir / "-home-user-proj"
+        self._make_jsonl_file(folder, "s2", "/home/user/proj", "2026-02-05T10:00:00Z")
+
+        result = build_projects_index()
+
+        assert len(result["projects"]) == 1
+        data = list(result["projects"].values())[0]
+        assert data["originalPath"] == "/home/user/proj"  # cwd wins
+        assert data["name"] == "proj"
+        assert "2026-02-01" in data["workDays"]  # index day still unioned
+        assert "2026-02-05" in data["workDays"]  # transcript day
 
     def test_jsonl_fallback_skips_empty_files(self, env):
         """Empty or tiny JSONL files are skipped."""
@@ -1076,25 +1224,26 @@ class TestBuildProjectsIndexFixPaths:
         return jsonl_path
 
     def test_fix_paths_corrects_stale_entry(self, env):
-        """--fix-paths replaces stale path with suggested correction."""
+        """--fix-paths replaces a stale transcript cwd with a suggested correction.
+
+        Post-inversion, a path is stale only when the transcript cwd itself
+        points at a missing dir (e.g. cross-machine migration). The home-
+        substitution strategy maps the stale /home/<user>/… cwd onto $HOME.
+        """
         projects_dir, memory_dir, index_file = env
 
-        # Create a live directory to match
-        live_dir = env[0].parent / "myproject"
+        # Simulate migration: real project now lives under a (mocked) $HOME.
+        fake_home = env[0].parent / "home"
+        live_dir = fake_home / "myproject"
         live_dir.mkdir(parents=True, exist_ok=True)
 
-        # Project folder with stale sessions-index but correct JSONL cwd
         folder = projects_dir / "-enc-myproject"
         folder.mkdir(parents=True)
-        sessions_index = {
-            "originalPath": "/home/stale/myproject",
-            "entries": [{"created": "2026-01-15T10:00:00Z",
-                         "projectPath": "/home/stale/myproject"}],
-        }
-        (folder / "sessions-index.json").write_text(json.dumps(sessions_index))
-        self._make_jsonl_file(folder, "s1", str(live_dir), "2026-01-15T10:00:00Z")
+        # Transcript still records the old machine's path (doesn't exist here).
+        self._make_jsonl_file(folder, "s1", "/home/olduser/myproject", "2026-01-15T10:00:00Z")
 
-        result = build_projects_index(fix_paths=True)
+        with mock.patch("indexing.Path.home", return_value=fake_home):
+            result = build_projects_index(fix_paths=True)
 
         projects = result["projects"]
         assert len(projects) == 1
@@ -1103,28 +1252,20 @@ class TestBuildProjectsIndexFixPaths:
         assert data["name"] == "myproject"
 
     def test_no_fix_without_flag(self, env):
-        """Without --fix-paths, stale entries are preserved with warnings."""
+        """Without --fix-paths, a stale transcript cwd is preserved (with warnings)."""
         projects_dir, memory_dir, index_file = env
-
-        live_dir = env[0].parent / "myproject"
-        live_dir.mkdir(parents=True, exist_ok=True)
 
         folder = projects_dir / "-enc-myproject"
         folder.mkdir(parents=True)
-        sessions_index = {
-            "originalPath": "/home/stale/myproject",
-            "entries": [{"created": "2026-01-15T10:00:00Z",
-                         "projectPath": "/home/stale/myproject"}],
-        }
-        (folder / "sessions-index.json").write_text(json.dumps(sessions_index))
-        self._make_jsonl_file(folder, "s1", str(live_dir), "2026-01-15T10:00:00Z")
+        # Stale cwd, no live directory to resolve to.
+        self._make_jsonl_file(folder, "s1", "/home/olduser/myproject", "2026-01-15T10:00:00Z")
 
         result = build_projects_index(fix_paths=False)
 
         projects = result["projects"]
         data = list(projects.values())[0]
-        # Path should still be stale
-        assert data["originalPath"] == "/home/stale/myproject"
+        # Path should still be the (stale) transcript cwd.
+        assert data["originalPath"] == "/home/olduser/myproject"
 
 
 if __name__ == "__main__":

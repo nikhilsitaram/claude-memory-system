@@ -104,10 +104,10 @@ class SessionInfo:
     file_mtime: datetime  # File modification time
     file_size: int  # Bytes
 
-    # From index (optional, may be None):
+    # Recovered from the transcript (or sessions-index.json when present):
     project_path: Optional[str] = None  # Original path like /home/nsitaram/project
-    created: Optional[datetime] = None  # Session creation time from index
-    summary: Optional[str] = None  # AI-generated summary
+    created: Optional[datetime] = None  # Real session start (first record timestamp)
+    summary: Optional[str] = None  # ai-title / first prompt (or index summary)
 
 
 def _parse_index_datetime(date_str: str) -> Optional[datetime]:
@@ -119,6 +119,101 @@ def _parse_index_datetime(date_str: str) -> Optional[datetime]:
         return from_iso_z(date_str)
     except ValueError:
         return None
+
+
+# Max lines to head-scan a transcript when recovering created/summary metadata.
+# Higher than _JSONL_SCAN_LIMIT because the ``ai-title`` record (best summary
+# source) can land after the cwd/timestamp-bearing records.
+_METADATA_SCAN_LIMIT = 50
+
+# Substantive-prompt detection: skip harness wrapper text that isn't a real prompt.
+_PROMPT_SKIP_PREFIXES = (
+    "<local-command",
+    "<command-name",
+    "<command-message",
+    "<system-reminder",
+)
+
+
+def _content_to_text(content: object) -> str:
+    """Flatten a message ``content`` (str or list of blocks) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(p for p in parts if p)
+    return ""
+
+
+def _extract_session_metadata(
+    jsonl_file: Path,
+) -> tuple[Optional[datetime], Optional[str]]:
+    """
+    Recover a session's real created-date and a human-readable summary from its
+    transcript, head-scanning up to _METADATA_SCAN_LIMIT lines.
+
+    Current Claude Code no longer writes sessions-index.json, so this is how we
+    repopulate the metadata that used to come from the index:
+      - created: the earliest record ``timestamp`` (the real session start —
+        robust to file mtime changing on copy/migration).
+      - summary: the ``ai-title`` record's ``aiTitle`` when present, else the
+        first substantive ``user`` message (skipping ``isMeta`` records and
+        harness wrappers like ``<local-command…>`` / ``<command-name>`` /
+        ``<system-reminder>``), truncated to 150 chars.
+
+    Returns (created, summary); either element is None when unavailable.
+    """
+    created: Optional[datetime] = None
+    ai_title: Optional[str] = None
+    first_prompt: Optional[str] = None
+
+    try:
+        with open(jsonl_file, "r", encoding="utf-8") as f:
+            for _ in range(_METADATA_SCAN_LIMIT):
+                line = f.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+
+                if created is None:
+                    ts = data.get("timestamp", "")
+                    if ts:
+                        try:
+                            created = from_iso_z(ts)
+                        except ValueError:
+                            pass
+
+                rec_type = data.get("type")
+                if rec_type == "ai-title" and ai_title is None:
+                    title = (data.get("aiTitle") or "").strip()
+                    if title:
+                        ai_title = title
+                elif rec_type == "user" and first_prompt is None and not data.get("isMeta"):
+                    text = _content_to_text(data.get("message", {}).get("content")).strip()
+                    if text and not text.startswith(_PROMPT_SKIP_PREFIXES):
+                        first_prompt = text[:150]
+
+                # ai-title is the preferred summary; stop early once we have it
+                # alongside the created date.
+                if created is not None and ai_title is not None:
+                    break
+    except IOError:
+        pass
+
+    return created, ai_title or first_prompt
 
 
 def _load_sessions_index(project_folder: Path) -> dict:
@@ -149,8 +244,12 @@ def list_all_sessions() -> list[SessionInfo]:
     """
     List all sessions from Claude Code's projects directory.
 
-    Primary: Scans all .jsonl files in ~/.claude/projects/
-    Secondary: Enriches with sessions-index.json metadata when available
+    Primary: Scans all .jsonl files in ~/.claude/projects/ and recovers each
+    session's created-date + summary from the transcript itself
+    (_extract_session_metadata). Current Claude Code no longer writes
+    sessions-index.json, so the transcript is the source of truth.
+    Secondary: When a sessions-index.json is present (legacy), its created /
+    summary / projectPath override the transcript-derived values for that session.
 
     Returns list of SessionInfo sorted by file modification time (newest first).
     """
@@ -185,11 +284,21 @@ def list_all_sessions() -> list[SessionInfo]:
             except OSError:
                 continue
 
-            # Enrich with index metadata if available
-            entry = index.get(session_id, {})
-            created = _parse_index_datetime(entry.get("created", ""))
-            project_path = entry.get("projectPath")
-            summary = entry.get("summary")
+            # Recover created-date + summary from the transcript (source of
+            # truth now that sessions-index.json is rarely written).
+            created, summary = _extract_session_metadata(jsonl_file)
+            project_path = None
+
+            # Override with sessions-index.json metadata when present (legacy).
+            entry = index.get(session_id)
+            if entry:
+                index_created = _parse_index_datetime(entry.get("created", ""))
+                if index_created is not None:
+                    created = index_created
+                if entry.get("projectPath"):
+                    project_path = entry.get("projectPath")
+                if entry.get("summary"):
+                    summary = entry.get("summary")
 
             sessions.append(
                 SessionInfo(
@@ -237,8 +346,9 @@ def list_recent_sessions(
     """
     List recent sessions eligible for synthesis.
 
-    Uses index.created (real session date) when available, falls back to
-    file mtime. This handles migrated sessions whose mtime changed on copy.
+    Uses the transcript-derived created date (real session start) when
+    available, falls back to file mtime. This handles migrated sessions whose
+    mtime changed on copy.
 
     Args:
         max_age_days: Only include sessions created/modified within this many days
@@ -269,7 +379,7 @@ def get_session_date(session: SessionInfo) -> str:
     """
     Get date string (YYYY-MM-DD) for a session.
 
-    Prefers index.created if available, falls back to file_mtime.
+    Prefers the transcript-derived created date, falls back to file_mtime.
     """
     if session.created:
         return utc_to_local_datestr(session.created)
@@ -418,10 +528,12 @@ def build_projects_index(fix_paths: bool = False) -> dict:
     """
     Build a project-to-work-days index from Claude Code's project data.
 
-    Scans sessions-index.json files and JSONL transcripts in ~/.claude/projects/
-    to build a mapping of projects to the dates they have work sessions.
-    JSONL files supplement sessions-index.json with missing work days and
-    serve as fallback when sessions-index.json doesn't exist.
+    The JSONL transcript ``cwd`` is the authoritative source for each project's
+    path and work days (see _extract_from_jsonl): current Claude Code no longer
+    reliably writes sessions-index.json, so the transcript is the source of
+    truth. When a sessions-index.json *is* present (legacy), its session entries
+    are read only as enrichment — adding any extra work days — but the path
+    still comes from the transcript cwd.
 
     Returns the index dict and also saves it to projects-index.json.
     """
@@ -451,17 +563,22 @@ def build_projects_index(fix_paths: bool = False) -> dict:
         if not project_folder.is_dir():
             continue
 
-        # Try sessions-index.json first
+        # Primary: derive the path + work days from the transcript cwd.
         original_path = ""
         work_days: set[str] = set()
 
+        jsonl_path, jsonl_days = _extract_from_jsonl(project_folder)
+        if jsonl_path:
+            resolved_jsonl = resolve_session_path(jsonl_path)
+            jsonl_paths[project_folder.name] = resolved_jsonl
+            original_path = resolved_jsonl
+        work_days.update(jsonl_days)
+
+        # Enrichment: read sessions-index.json only when present (legacy). It
+        # contributes extra work days; the path stays cwd-derived. Falls back to
+        # its originalPath only if the transcripts yielded no cwd at all.
         data = load_sessions_index(project_folder)
         if data:
-            original_path = get_sessions_original_path(data)
-            if original_path:
-                original_path = resolve_session_path(original_path)
-
-            # Extract work days from session entries
             for entry in data.get("entries", []):
                 created = entry.get("created")
                 if created:
@@ -471,16 +588,10 @@ def build_projects_index(fix_paths: bool = False) -> dict:
                     except ValueError:
                         continue
 
-        # Supplement with JSONL transcripts (fallback for path, additional work days)
-        jsonl_path, jsonl_days = _extract_from_jsonl(project_folder)
-        if jsonl_path:
-            resolved_jsonl = resolve_session_path(jsonl_path)
-            jsonl_paths[project_folder.name] = resolved_jsonl
-        if not original_path:
-            original_path = jsonl_path
-            if original_path:
-                original_path = resolve_session_path(original_path)
-        work_days.update(jsonl_days)
+            if not original_path:
+                index_path = get_sessions_original_path(data)
+                if index_path:
+                    original_path = resolve_session_path(index_path)
 
         if not original_path or not work_days:
             continue
