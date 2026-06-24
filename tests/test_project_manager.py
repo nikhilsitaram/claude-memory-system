@@ -557,6 +557,24 @@ class TestRebuildAndVerifyIndex:
         assert result["durable"] is False
         assert str(proj) in result["stale_paths"]
 
+    def test_lookup_key_resolved_like_build_projects_index(self, tmp_path):
+        """The lookup must apply resolve_session_path (worktree/subdir collapse),
+        matching how build_projects_index keys entries — else a worktree/subdir
+        project falsely reports NOT durable."""
+        import indexing
+
+        proj = tmp_path / "worktree-checkout"
+        proj.mkdir()
+        resolved = tmp_path / "main-repo"
+        resolved.mkdir()
+        # build_projects_index would key under the *resolved* path
+        fake = {"projects": {str(resolved).lower(): {"name": "main-repo", "originalPath": str(resolved)}}}
+        with mock.patch("project_manager.resolve_session_path", side_effect=lambda p: str(resolved)), \
+             mock.patch.object(indexing, "build_projects_index", return_value=fake):
+            result = rebuild_and_verify_index(str(proj))
+        assert result["durable"] is True
+        assert result["entry"]["name"] == "main-repo"
+
 
 class TestGetFolderOriginalPath:
     """Tests for get_folder_original_path — cwd fallback when no sessions-index."""
@@ -698,6 +716,34 @@ class TestExecuteMergeOrphanEndToEnd:
         merged = projects_dir / target_enc / "osess.jsonl"
         assert merged.exists()
         assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
+
+
+class TestPlanMergeOrphanCwdFallback:
+    """plan_merge_orphan must resolve the orphan via cwd fallback too, so its
+    backup set covers the memory file execute_merge_orphan will merge."""
+
+    def test_plan_backs_up_orphan_memory_without_sessions_index(self, tmp_path):
+        from memory_utils import project_name_to_filename
+
+        claude, projects_dir, _index_file, patches = _fake_claude_env(tmp_path)
+        proj_mem = claude / "memory" / "project-memory"
+
+        orphan_path = tmp_path / "work" / "orphan-proj"   # gone from disk
+        target = tmp_path / "work" / "target-proj"
+        target.mkdir(parents=True)
+        orphan_enc = encode_path(str(orphan_path))
+        # Orphan folder has only a transcript (no sessions-index.json)
+        _write_cwd_transcript(projects_dir / orphan_enc, "osess", str(orphan_path))
+        # Orphan's project-memory file exists and must be backed up
+        orphan_mem = proj_mem / project_name_to_filename("orphan-proj")
+        orphan_mem.write_text("# orphan memory\n")
+
+        with patches:
+            plan = plan_merge_orphan(orphan_enc, target)
+
+        assert any(str(orphan_mem) == b for b in plan.backups), (
+            f"orphan memory file not in backup set: {plan.backups}"
+        )
 
 
 # =============================================================================

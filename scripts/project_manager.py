@@ -42,6 +42,7 @@ from memory_utils import (
     load_sessions_index,
     load_synthesis_state,
     project_name_to_filename,
+    resolve_session_path,
     save_json_file,
     save_synthesis_state,
     to_iso_z,
@@ -218,8 +219,12 @@ def get_folder_original_path(folder_path: Path) -> Optional[str]:
     Tries ``sessions-index.json`` first (legacy/authoritative when present), then
     falls back to the ``cwd`` recorded in the folder's newest ``.jsonl``
     transcript. Current Claude Code no longer writes ``sessions-index.json``, so
-    the transcript ``cwd`` is the real source of truth -- mirrors how
-    ``indexing._extract_from_jsonl`` resolves the path (newest mtime wins).
+    the transcript ``cwd`` is the real source of truth.
+
+    The fallback delegates to ``indexing._extract_from_jsonl`` rather than
+    re-scanning, so this resolver uses the exact same newest-mtime ordering, scan
+    limit, and ``cwd`` field as ``build_projects_index`` -- guaranteeing the path
+    we rewrite is the one the index will actually be rebuilt from.
 
     Returns the path string, or None if neither source yields one.
     """
@@ -227,33 +232,11 @@ def get_folder_original_path(folder_path: Path) -> Optional[str]:
     if path:
         return path
 
-    folder_path = Path(folder_path)
-    if not folder_path.is_dir():
-        return None
+    # Local import: indexing depends only on memory_utils, so no import cycle.
+    from indexing import _extract_from_jsonl
 
-    # Newest transcript wins (matches indexing._extract_from_jsonl ordering).
-    transcripts = sorted(
-        folder_path.glob("*.jsonl"),
-        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
-        reverse=True,
-    )
-    for jsonl_file in transcripts:
-        try:
-            with open(jsonl_file, "r", encoding="utf-8") as f:
-                for _ in range(50):  # cwd may trail prepended bookkeeping records
-                    line = f.readline()
-                    if not line:
-                        break
-                    try:
-                        cwd = json.loads(line).get("cwd")
-                    except (json.JSONDecodeError, AttributeError, TypeError):
-                        continue
-                    if cwd:
-                        return cwd
-        except (IOError, UnicodeDecodeError):
-            continue
-
-    return None
+    cwd, _ = _extract_from_jsonl(Path(folder_path))
+    return cwd or None
 
 
 # =============================================================================
@@ -340,8 +323,9 @@ def find_orphaned_folders() -> list[OrphanInfo]:
 
         folder_name = folder.name
 
-        # Get authoritative original path from sessions-index.json
-        original_path = get_original_path_from_folder(folder)
+        # Original path: sessions-index.json if present, else the transcript cwd
+        # (current Claude Code no longer writes sessions-index.json).
+        original_path = get_folder_original_path(folder)
 
         # Determine if this is an orphan
         # First check: if folder is tracked in our index, it's not an orphan
@@ -648,8 +632,10 @@ def plan_merge_orphan(orphan_name: str, target_path: Path) -> OperationPlan:
     if history_file.exists():
         backups.append(str(history_file))
 
-    # Check for orphan's memory file (need to detect project name)
-    original_path = get_original_path_from_folder(orphan_folder)
+    # Check for orphan's memory file (need to detect project name). Use the cwd
+    # fallback so plan and execute_merge_orphan resolve the orphan identically —
+    # otherwise plan omits the orphan memory file that execute then merges.
+    original_path = get_folder_original_path(orphan_folder)
     if original_path:
         orphan_project_name = Path(original_path).name
         orphan_memory_filename = project_name_to_filename(orphan_project_name)
@@ -1234,7 +1220,11 @@ def rebuild_and_verify_index(expected_original_path: str) -> dict:
 
     index = build_projects_index()
     projects = index.get("projects", {})
-    canonical = str(expected_original_path).lower()
+    # build_projects_index keys projects by resolve_session_path(cwd).lower()
+    # (collapsing git worktrees / subdirs to the repo root), so resolve the
+    # lookup key the same way — otherwise a worktree/subdir project would miss
+    # and falsely report NOT durable even though the move succeeded.
+    canonical = resolve_session_path(str(expected_original_path)).lower()
     entry = projects.get(canonical)
 
     stale_paths = [
