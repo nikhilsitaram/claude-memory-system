@@ -718,6 +718,45 @@ class TestExecuteMergeOrphanEndToEnd:
         assert json.loads(merged.read_text().splitlines()[0])["cwd"] == str(target)
 
 
+class TestMoveDurabilityEndToEnd:
+    """The headline contract: a move survives a REAL build_projects_index rebuild."""
+
+    def test_execute_move_then_real_rebuild_reports_durable(self, tmp_path):
+        import indexing
+
+        _claude, projects_dir, index_file, patches = _fake_claude_env(tmp_path)
+        memory_dir = _claude / "memory"
+
+        old = tmp_path / "work" / "old-project"
+        new = tmp_path / "work" / "new-project"
+        old.mkdir(parents=True)
+        old_enc = encode_path(str(old))
+        _write_cwd_transcript(projects_dir / old_enc, "sess1", str(old))
+        index_file.write_text(json.dumps({"projects": {str(old).lower(): {
+            "name": "old-project", "originalPath": str(old),
+            "encodedPaths": [old_enc], "workDays": ["2026-06-23"],
+        }}}))
+
+        # Patch indexing's OWN path-helper bindings too, so the real
+        # build_projects_index (invoked by rebuild_and_verify_index) scans the
+        # fake projects dir instead of the real ~/.claude.
+        with patches, \
+             mock.patch.object(indexing, "get_projects_dir", return_value=projects_dir), \
+             mock.patch.object(indexing, "get_memory_dir", return_value=memory_dir), \
+             mock.patch.object(indexing, "get_projects_index_file", return_value=index_file):
+            move = execute_move(old, new, confirmed=True)
+            assert move["success"] is True
+            # No mock of build_projects_index — this runs the real hourly rebuild.
+            verify = rebuild_and_verify_index(str(new))
+
+        assert verify["durable"] is True, verify["message"]
+        assert verify["entry"]["originalPath"] == str(new)
+        # The rebuilt-from-transcripts index agrees: old path is gone.
+        rebuilt = json.loads(index_file.read_text())["projects"]
+        assert str(new).lower() in rebuilt
+        assert str(old).lower() not in rebuilt
+
+
 class TestPlanMergeOrphanCwdFallback:
     """plan_merge_orphan must resolve the orphan via cwd fallback too, so its
     backup set covers the memory file execute_merge_orphan will merge."""
