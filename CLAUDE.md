@@ -97,7 +97,7 @@ uv run --no-project ~/.claude/scripts/decay.py --dry-run           # Test decay
 
 ### Key Pipelines
 
-**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles full memory to stdout for SessionStart hook injection. Output order: read instruction → timestamp → recall → global LTM → project LTM → project STM → global STM. When output exceeds ~10K chars, Claude Code saves it to a session-specific file and shows the path + 2KB preview; the read instruction in the first 2KB prompts Claude to read the full file.
+**Loading** (`load_memory.py`): Reads LTM files + filters daily files by scope tags → assembles full memory and emits it via `_emit_session_start()` as a SessionStart `hookSpecificOutput.additionalContext` JSON envelope (the documented injection channel, not raw stdout). Output order: read instruction → timestamp → recall → global LTM → project LTM → project STM → global STM. When the payload exceeds ~10K chars, Claude Code saves it to a session-specific `*-additionalContext.txt` file and shows the path + 2KB preview; the read instruction in the first 2KB prompts Claude to read the full file. (`--project-memory` and `--synthesis-prompt` remain plain stdout — their skills consume the text directly.)
 
 **Mode**: `mode: "full"` (default) emits all sections. `mode: "light"` emits only recall + global LTM, skipping project LTM/STM and global STM — for users who rely on Claude Code's native project-scoped memory and only want this system for cross-project memory plus last-session continuity.
 
