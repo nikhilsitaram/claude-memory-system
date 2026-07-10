@@ -1628,10 +1628,10 @@ _DEFAULT_PROJECT = object()  # sentinel: use {"name": "testproject"} as the defa
 class TestMainOutputOrder:
     """Verify main() outputs sections in the correct order with read instruction first."""
 
-    def _run_main(self, monkeypatch, *, global_ltm="", project_ltm="",
-                  global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT,
-                  mode=None):
-        """Run main() with mocked memory sources, return captured stdout.
+    def _run_main_raw(self, monkeypatch, *, global_ltm="", project_ltm="",
+                      global_stm=None, project_stm=None, recall="", current_project=_DEFAULT_PROJECT,
+                      mode=None):
+        """Run main() with mocked memory sources, return raw captured stdout.
 
         Pass current_project=None to simulate no project found (find_current_project returns None).
         Omit current_project to use the default {"name": "testproject"} mock.
@@ -1671,6 +1671,30 @@ class TestMainOutputOrder:
         monkeypatch.setattr("sys.stdout", captured)
         main()
         return captured.getvalue()
+
+    def _run_main(self, monkeypatch, **kwargs):
+        """Run main() and return the decoded memory payload.
+
+        main() emits a SessionStart hookSpecificOutput.additionalContext envelope;
+        this helper unwraps it (asserting the envelope shape) and returns the inner
+        payload so order/substring assertions operate on the memory text itself.
+        """
+        envelope = json.loads(self._run_main_raw(monkeypatch, **kwargs))
+        hook_out = envelope["hookSpecificOutput"]
+        assert hook_out["hookEventName"] == "SessionStart"
+        return hook_out["additionalContext"]
+
+    def test_emits_additionalcontext_envelope(self, monkeypatch):
+        """main() emits exactly one JSON SessionStart additionalContext envelope."""
+        raw = self._run_main_raw(monkeypatch, global_ltm="## Long-Term Memory\n- item")
+        # Must be a single, well-formed JSON object (stray stdout would break parsing).
+        envelope = json.loads(raw)
+        assert set(envelope) == {"hookSpecificOutput"}
+        hook_out = envelope["hookSpecificOutput"]
+        assert hook_out["hookEventName"] == "SessionStart"
+        payload = hook_out["additionalContext"]
+        assert payload.startswith("<memory>")
+        assert payload.rstrip().endswith("</memory>")
 
     def test_read_instruction_present(self, monkeypatch):
         """Read instruction appears in output so Claude can find the full file when truncated."""

@@ -16,7 +16,8 @@ Output sections (in order):
 In `mode: light`, only sections 1-4 are emitted; project LTM/STM and global STM
 are skipped (rely on Claude Code's native project-scoped memory).
 
-Output is printed to stdout and injected into Claude Code's context.
+The payload is emitted as a SessionStart hookSpecificOutput.additionalContext
+JSON envelope (the documented channel) and injected into Claude Code's context.
 
 Requirements: Python 3.9+
 """
@@ -70,9 +71,11 @@ SYNTHESIS_PROMPT_DIR = "/tmp"
 # Key Interfaces
 # =============================================================================
 # Entry points:
-#   main()                  SessionStart hook — outputs all memory sections to
-#                           stdout; read instruction in first 2KB prompts Claude
-#                           to read the full output file when Claude Code truncates
+#   main()                  SessionStart hook — assembles all memory sections and
+#                           emits them via _emit_session_start as an
+#                           additionalContext envelope; read instruction in first
+#                           2KB prompts Claude to read the full output file when
+#                           Claude Code persists large output to disk
 # Memory loading:
 #   load_global_memory() -> (str, int)
 #   load_project_memory(name) -> (str, int)
@@ -866,11 +869,30 @@ def emit_project_memory(project_name_arg: str | None = None) -> int:
     return 0
 
 
+def _emit_session_start(payload: str) -> None:
+    """Emit the memory payload as a SessionStart hook additionalContext envelope.
+
+    additionalContext is the documented channel for a SessionStart hook to add
+    context (vs. relying on raw stdout being injected). Claude Code applies the
+    same large-output handling to it — over ~10K chars it persists the field to a
+    file and shows a path + 2KB preview — so the read instruction inside `payload`
+    still recovers the full content. An empty payload emits nothing.
+    """
+    if not payload:
+        return
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": payload,
+        }
+    }))
+
+
 def main() -> None:
-    """Main entry point - outputs memory context to stdout.
+    """Main entry point - emits memory context as SessionStart additionalContext.
 
     Output order (most important first so the 2KB preview is maximally useful):
-    1. Read instruction (for when Claude Code truncates large output to a file)
+    1. Read instruction (for when Claude Code persists large output to a file)
     2. Timestamp + synthesis errors
     3. Previous session recall (highest-value context)
     4. Global LTM
@@ -878,9 +900,11 @@ def main() -> None:
     6. Project STM
     7. Global STM
 
-    When output exceeds ~10K chars, Claude Code saves the full content to a
-    session-specific file and shows the path + first 2KB as a preview. The read
-    instruction in the first 2KB prompts Claude to read the full file.
+    The assembled payload is handed to _emit_session_start(), which wraps it in the
+    hookSpecificOutput.additionalContext envelope. When the payload exceeds ~10K
+    chars, Claude Code saves the full content to a session-specific file and shows
+    the path + first 2KB as a preview; the read instruction in the first 2KB
+    prompts Claude to read the full file.
     """
     check_python_version()
 
@@ -921,41 +945,48 @@ def main() -> None:
     )
     total_bytes += recall_bytes
 
-    # Start output
-    print("<memory>")
+    # Build the payload as a list of lines, then emit once as the SessionStart
+    # hook's additionalContext (see _emit_session_start below). Using append
+    # instead of print keeps the whole payload on the documented injection
+    # channel rather than relying on stdout-as-context.
+    parts: list[str] = []
 
-    # Read instruction: when output is large, Claude Code saves it to a file and
-    # shows a path + 2KB preview. This instruction prompts Claude to read the full file.
-    print("If you see \"Full output saved to: ...\" above this text, read that file now for complete memory context.")
-    print()
+    parts.append("<memory>")
+
+    # Read instruction: when the payload is large, Claude Code saves it to a file
+    # and shows a path + 2KB preview. This instruction prompts Claude to read the
+    # full file. additionalContext gets the same persist-to-file treatment as
+    # stdout once it exceeds the inline threshold, so the instruction still applies.
+    parts.append("If you see \"Full output saved to: ...\" above this text, read that file now for complete memory context.")
+    parts.append("")
 
     # Include current local time for context
     now = datetime.now(timezone.utc).astimezone()
     offset = now.utcoffset() or timedelta(0)
     utc_offset_hours = offset.total_seconds() / 3600
     offset_sign = "+" if utc_offset_hours >= 0 else ""
-    print(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
-    print()
+    parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M')} (UTC{offset_sign}{utc_offset_hours:.0f})")
+    parts.append("")
 
     # Surface synthesis errors from deferred runs
     error_alert = check_synthesis_errors()
     if error_alert:
-        print(error_alert)
-        print()
+        parts.append(error_alert)
+        parts.append("")
 
     # Previous session recall (most valuable: what you were just working on)
     if recall_section:
-        print(recall_section)
-        print()
+        parts.append(recall_section)
+        parts.append("")
 
     # Load global long-term memory
     global_content, global_bytes = load_global_memory()
     total_bytes += global_bytes
 
     if global_content:
-        print("## Long-Term Memory")
-        print(global_content)
-        print()
+        parts.append("## Long-Term Memory")
+        parts.append(global_content)
+        parts.append("")
 
     # In light mode, stop after global LTM — skip project LTM, project STM, global STM.
     # Native Claude Code memory handles project-scoped context; global LTM is the unique
@@ -969,9 +1000,9 @@ def main() -> None:
             total_bytes += project_bytes
 
             if project_content:
-                print(f"## Project Long-Term Memory: {project_name}")
-                print(project_content)
-                print()
+                parts.append(f"## Project Long-Term Memory: {project_name}")
+                parts.append(project_content)
+                parts.append("")
 
         # Load project short-term memory (project history, filtered to [project/*] tags)
         if current_project:
@@ -979,31 +1010,33 @@ def main() -> None:
             total_bytes += history_bytes
 
             if project_history:
-                print(f"## Project Short-Term Memory: {project_name}")
-                print()
+                parts.append(f"## Project Short-Term Memory: {project_name}")
+                parts.append("")
                 for date, content in project_history:
-                    print(f"### {date}")
-                    print(content)
-                    print()
+                    parts.append(f"### {date}")
+                    parts.append(content)
+                    parts.append("")
 
         # Load global short-term memory (recent daily summaries, filtered to [global/*] tags)
         global_summaries, global_daily_bytes = load_daily_summaries(short_term_days, scope="global")
         total_bytes += global_daily_bytes
 
         if global_summaries:
-            print("## Global Short-Term Memory")
+            parts.append("## Global Short-Term Memory")
             for date, content in global_summaries:
-                print(f"### {date}")
-                print(content)
-                print()
+                parts.append(f"### {date}")
+                parts.append(content)
+                parts.append("")
 
-    print("</memory>")
+    parts.append("</memory>")
 
     # Token estimation (informational)
     estimated_tokens = total_bytes // 4
     if estimated_tokens > total_budget:
-        print(f"<!-- Memory usage: ~{estimated_tokens} tokens (budget: {total_budget}) -->")
-        print("<!-- Consider running /synthesize to consolidate older sessions -->")
+        parts.append(f"<!-- Memory usage: ~{estimated_tokens} tokens (budget: {total_budget}) -->")
+        parts.append("<!-- Consider running /synthesize to consolidate older sessions -->")
+
+    _emit_session_start("\n".join(parts))
 
 
 if __name__ == "__main__":
