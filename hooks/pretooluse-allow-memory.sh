@@ -11,8 +11,8 @@ tool_name=$(echo "$input" | grep -o '"tool_name":"[^"]*"' | sed 's/"tool_name":"
 # Check for memory-related operations
 should_allow=false
 
-# 1. Direct memory path in input
-if echo "$input" | grep -q '\.claude/memory'; then
+# 1. Direct memory path in input (any config dir: .claude, .claude-personal, ...)
+if echo "$input" | grep -qE '\.claude[^"/]*/memory'; then
     should_allow=true
     reason="memory path detected"
 fi
@@ -34,7 +34,7 @@ if [ "$tool_name" = "Task" ]; then
 fi
 
 # 4. Memory system scripts (indexing.py, token_usage.py, etc.)
-if echo "$input" | grep -q '\.claude/scripts'; then
+if echo "$input" | grep -qE '\.claude[^"/]*/scripts'; then
     should_allow=true
     reason="memory system script"
 fi

@@ -166,8 +166,15 @@ def check_python_version() -> None:
 
 
 def get_claude_dir() -> Path:
-    """Get the Claude configuration directory (~/.claude)."""
-    return Path.home() / ".claude"
+    """Get the Claude configuration directory.
+
+    Honors ``CLAUDE_CONFIG_DIR`` (the same variable Claude Code itself uses to
+    relocate its config) so that a non-default config dir — e.g. a per-account
+    ``~/.claude-personal`` — gets its own isolated memory tree. Falls back to
+    ``~/.claude`` when the variable is unset.
+    """
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(config_dir).expanduser() if config_dir else Path.home() / ".claude"
 
 
 def get_memory_dir() -> Path:

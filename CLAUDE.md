@@ -135,6 +135,16 @@ Only matters for Read permissions; Edit/Write bypass via PreToolUse hook.
 - Directory-based locking (`mkdir` is atomic everywhere)
 - Hook commands use absolute paths generated at install time
 
+### Config-Dir Awareness
+`get_claude_dir()` honors the `CLAUDE_CONFIG_DIR` environment variable (the same
+variable Claude Code uses to relocate its config), falling back to `~/.claude`
+when unset. Every path helper derives from it, so a non-default config dir — e.g.
+a per-account `~/.claude-personal` selected by a shell wrapper — gets a fully
+isolated memory tree. The `PreToolUse` hook's path match is likewise generalized
+to any `.claude*/memory` and `.claude*/scripts` path. (Automated synthesis runs
+from a launchd/systemd timer without this env var and still targets the default
+config dir; per-account synthesis would need its own timer with the var set.)
+
 ## Settings Defaults
 
 Source of truth: `DEFAULT_SETTINGS` in `scripts/memory_utils.py`.

@@ -22,6 +22,7 @@ from memory_utils import (
     filter_daily_content,
     find_current_project,
     from_iso_z,
+    get_claude_dir,
     get_memory_dir,
     get_pending_recall_dir,
     get_sessions_original_path,
@@ -1439,6 +1440,33 @@ class TestParseMarkdownSections:
         assert sections[0][1] == ["Just plain text", "with no headers"]
 
 
+
+
+class TestGetClaudeDir:
+    """Tests for get_claude_dir() CLAUDE_CONFIG_DIR awareness."""
+
+    def test_defaults_to_home_claude_when_unset(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        assert get_claude_dir() == Path.home() / ".claude"
+
+    def test_honors_claude_config_dir(self, monkeypatch, tmp_path):
+        alt = tmp_path / ".claude-personal"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(alt))
+        assert get_claude_dir() == alt
+
+    def test_expands_user_in_config_dir(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+        assert get_claude_dir() == Path.home() / ".claude-personal"
+
+    def test_empty_config_dir_falls_back_to_default(self, monkeypatch):
+        # An empty value is treated as unset, not as the current directory.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
+        assert get_claude_dir() == Path.home() / ".claude"
+
+    def test_memory_dir_tracks_config_dir(self, monkeypatch, tmp_path):
+        alt = tmp_path / ".claude-personal"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(alt))
+        assert get_memory_dir() == alt / "memory"
 
 
 class TestGetPendingRecallDir:
